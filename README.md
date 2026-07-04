@@ -11,6 +11,10 @@ agent-remote login --server-url https://agent-remote.example.com --username alic
 agent-remote status
 agent-remote doctor --fix
 agent-remote deps status
+agent-remote wireguard config
+agent-remote wireguard check
+agent-remote ssh check --session-id <session-id>
+agent-remote attach --session-id <session-id> --print-only
 agent-remote logout
 ```
 
@@ -43,6 +47,14 @@ Managed external dependencies are expected under:
 ```
 
 The current implementation records and checks the manifest for Mutagen and WireGuard helpers. Release packaging will place the actual platform binaries there.
+
+## WireGuard and SSH
+
+`agent-remote wireguard config` fetches the current device WireGuard peer configuration from the control plane and writes `wireguard/agent-remote.conf` under the local agent-remote home.
+
+`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper. The helper delegates to `wg-quick` when available and supports `--dry-run` for diagnostics.
+
+`agent-remote attach --session-id <id>` asks the control plane for a session-specific SSH authorization, schedules SSH key synchronization on the node, and then uses local `ssh` to run the node-side forced command.
 
 ## Development
 

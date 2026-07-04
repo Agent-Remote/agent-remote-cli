@@ -87,6 +87,27 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    pub async fn get_wireguard_config(&self, token: &str) -> Result<WireGuardConfigData, ApiError> {
+        let response: Envelope<WireGuardConfigData> = self
+            .get("/api/v1/network/wireguard/config", Some(token))
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn attach_session(
+        &self,
+        token: &str,
+        session_id: &str,
+    ) -> Result<AttachSessionData, ApiError> {
+        let response: Envelope<AttachSessionData> = self
+            .post_empty(
+                &format!("/api/v1/sessions/{session_id}/attach"),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
+    }
+
     async fn get<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -201,6 +222,41 @@ pub struct DeviceData {
     pub status: String,
     pub last_seen_at: Option<String>,
     pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct WireGuardConfigData {
+    pub device_id: String,
+    pub interface_address: String,
+    pub private_key_ref: String,
+    pub dns: Vec<String>,
+    pub peers: Vec<WireGuardNodePeerData>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct WireGuardNodePeerData {
+    pub node_id: String,
+    pub name: String,
+    pub region_code: String,
+    pub public_key: String,
+    pub endpoint: String,
+    pub allowed_ips: Vec<String>,
+    pub persistent_keepalive_seconds: u16,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AttachSessionData {
+    pub session_id: String,
+    pub node_id: String,
+    pub node_wireguard_ip: String,
+    pub ssh_host: String,
+    pub ssh_port: u16,
+    pub ssh_user: String,
+    pub tmux_session_name: String,
+    pub command_args: Vec<String>,
+    pub ssh_command: String,
+    pub authorization_task_id: String,
+    pub expires_in: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]

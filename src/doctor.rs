@@ -46,6 +46,11 @@ impl Doctor {
             self.paths.dependencies_dir().exists(),
             self.paths.dependencies_dir().display(),
         );
+        status_line(
+            "wireguard",
+            self.paths.wireguard_dir().exists(),
+            self.paths.wireguard_dir().display(),
+        );
     }
 
     fn check_config(&self, config: &Config) {

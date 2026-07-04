@@ -6,6 +6,8 @@ mod doctor;
 mod local_state;
 mod platform;
 mod secrets;
+mod ssh;
+mod wireguard;
 
 use std::time::{Duration, Instant};
 
@@ -14,7 +16,7 @@ use clap::Parser;
 use tokio::time::sleep;
 
 use crate::api::{ApiClient, AuthToken, RegisterDeviceRequest};
-use crate::cli::{Cli, Command, DepsCommand, LoginMethod};
+use crate::cli::{Cli, Command, DepsCommand, LoginMethod, SshCommand, WireGuardCommand};
 use crate::config::{AppPaths, Config};
 use crate::dependencies::DependencyManager;
 use crate::doctor::Doctor;
@@ -35,6 +37,12 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Status(args) => status(paths, args.online).await,
         Command::Doctor(args) => Doctor::new(paths).run(args.fix).await,
         Command::Deps(DepsCommand::Status(args)) => deps_status(paths, args.fix),
+        Command::Wireguard(WireGuardCommand::Config(args)) => wireguard_config(paths, args).await,
+        Command::Wireguard(WireGuardCommand::Check(args)) => wireguard_action(paths, "check", args),
+        Command::Wireguard(WireGuardCommand::Up(args)) => wireguard_action(paths, "up", args),
+        Command::Wireguard(WireGuardCommand::Down(args)) => wireguard_action(paths, "down", args),
+        Command::Ssh(SshCommand::Check(args)) => ssh_check(paths, args).await,
+        Command::Attach(args) => attach(paths, args).await,
     }
 }
 
@@ -248,6 +256,79 @@ async fn status(paths: AppPaths, online: bool) -> Result<()> {
     Ok(())
 }
 
+async fn wireguard_config(paths: AppPaths, args: crate::cli::WireGuardConfigArgs) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let client = ApiClient::new(server_url)?;
+    let config = client.get_wireguard_config(&token).await?;
+    let output = args
+        .output
+        .unwrap_or_else(|| wireguard::default_config_path(&paths));
+    wireguard::write_config(&output, &config)?;
+    println!("wrote WireGuard config to {}", output.display());
+    println!("device: {}", config.device_id);
+    println!("peers: {}", config.peers.len());
+    Ok(())
+}
+
+fn wireguard_action(
+    paths: AppPaths,
+    action: &str,
+    args: crate::cli::WireGuardActionArgs,
+) -> Result<()> {
+    let config = args
+        .config
+        .unwrap_or_else(|| wireguard::default_config_path(&paths));
+    wireguard::run_helper(&paths, action, &config, args.dry_run)?;
+    println!("wireguard {action} ok using {}", config.display());
+    Ok(())
+}
+
+async fn ssh_check(paths: AppPaths, args: crate::cli::SshCheckArgs) -> Result<()> {
+    let version = ssh::check_ssh_available()?;
+    println!("ssh: {version}");
+    if let Some(session_id) = args.session_id {
+        let (server_url, _device_id, token) = load_device_token(&paths)?;
+        let attach = ApiClient::new(server_url)?
+            .attach_session(&token, &session_id)
+            .await?;
+        println!("session: {}", attach.session_id);
+        println!("node: {} {}", attach.node_id, attach.node_wireguard_ip);
+        println!("tmux: {}", attach.tmux_session_name);
+        println!("command: {}", attach.ssh_command);
+        println!("authorization task: {}", attach.authorization_task_id);
+        println!("expires in: {} seconds", attach.expires_in);
+    }
+    Ok(())
+}
+
+async fn attach(paths: AppPaths, args: crate::cli::AttachArgs) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let attach = ApiClient::new(server_url)?
+        .attach_session(&token, &args.session_id)
+        .await?;
+    println!("{}", attach.ssh_command);
+    println!("tmux: {}", attach.tmux_session_name);
+    println!("authorization expires in {} seconds", attach.expires_in);
+    if args.print_only {
+        return Ok(());
+    }
+    ssh::execute_attach(&attach)
+}
+
+fn load_device_token(paths: &AppPaths) -> Result<(String, String, String)> {
+    let config = Config::load(paths)?;
+    let server_url = config
+        .server_url
+        .context("not logged in: server URL is missing")?;
+    let device_id = config
+        .active_device_id
+        .context("not logged in with a registered device")?;
+    let store = SecretStore::new(paths.clone());
+    let token = store
+        .get_secret(&device_token_key(&server_url, &device_id))?
+        .context("device token is missing; run agent-remote login")?;
+    Ok((server_url, device_id, token))
+}
 fn deps_status(paths: AppPaths, fix: bool) -> Result<()> {
     let manager = DependencyManager::new(paths);
     if fix {

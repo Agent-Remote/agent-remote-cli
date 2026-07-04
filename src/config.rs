@@ -43,6 +43,14 @@ impl AppPaths {
         self.home.join("bin")
     }
 
+    pub fn wireguard_dir(&self) -> PathBuf {
+        self.home.join("wireguard")
+    }
+
+    pub fn wireguard_config_path(&self) -> PathBuf {
+        self.wireguard_dir().join("agent-remote.conf")
+    }
+
     pub fn dependencies_dir(&self) -> PathBuf {
         self.home.join("dependencies")
     }
@@ -61,6 +69,7 @@ impl AppPaths {
         fs::create_dir_all(self.bin_dir())?;
         fs::create_dir_all(self.dependencies_dir())?;
         fs::create_dir_all(self.secrets_dir())?;
+        fs::create_dir_all(self.wireguard_dir())?;
         Ok(())
     }
 }

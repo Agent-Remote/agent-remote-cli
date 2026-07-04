@@ -24,6 +24,11 @@ pub enum Command {
     Doctor(DoctorArgs),
     #[command(subcommand)]
     Deps(DepsCommand),
+    #[command(subcommand)]
+    Wireguard(WireGuardCommand),
+    #[command(subcommand)]
+    Ssh(SshCommand),
+    Attach(AttachArgs),
 }
 
 #[derive(Debug, Args)]
@@ -89,4 +94,47 @@ pub enum DepsCommand {
 pub struct DepsStatusArgs {
     #[arg(long)]
     pub fix: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WireGuardCommand {
+    Config(WireGuardConfigArgs),
+    Check(WireGuardActionArgs),
+    Up(WireGuardActionArgs),
+    Down(WireGuardActionArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WireGuardConfigArgs {
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct WireGuardActionArgs {
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SshCommand {
+    Check(SshCheckArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SshCheckArgs {
+    #[arg(long)]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AttachArgs {
+    #[arg(long)]
+    pub session_id: String,
+
+    #[arg(long)]
+    pub print_only: bool,
 }
