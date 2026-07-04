@@ -30,6 +30,8 @@ pub enum Command {
     Ssh(SshCommand),
     #[command(subcommand)]
     Sync(SyncCommand),
+    #[command(subcommand)]
+    Account(AccountCommand),
     Attach(AttachArgs),
 }
 
@@ -179,4 +181,40 @@ pub struct SyncActionArgs {
 
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountCommand {
+    List,
+    Create(AccountCreateArgs),
+    Bind(AccountIdArgs),
+    Verify(AccountIdArgs),
+    Status(AccountIdArgs),
+    Disable(AccountIdArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AccountCreateArgs {
+    #[arg(long, default_value = "claude")]
+    pub tool: String,
+
+    #[arg(long)]
+    pub name: String,
+
+    #[arg(long)]
+    pub region: String,
+
+    #[arg(long)]
+    pub timezone: String,
+
+    #[arg(long, default_value = "en_US.UTF-8")]
+    pub locale: String,
+
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct AccountIdArgs {
+    pub account_id: String,
 }

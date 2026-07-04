@@ -15,6 +15,11 @@ agent-remote wireguard config
 agent-remote wireguard check
 agent-remote sync ensure
 agent-remote sync status
+agent-remote account create --tool claude --name "Claude US" --region US --timezone America/Los_Angeles --tag us
+agent-remote account list
+agent-remote account bind <account-id>
+agent-remote account verify <account-id>
+agent-remote account status <account-id>
 agent-remote ssh check --session-id <session-id>
 agent-remote attach --session-id <session-id> --print-only
 agent-remote logout
@@ -74,6 +79,10 @@ agent-remote sync reset
 ```
 
 The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. Default excludes include `.git`, `node_modules`, `target`, `dist`, `.venv`, and `__pycache__`.
+
+## Tool Accounts
+
+`agent-remote account create` creates a remote tool-account record with region, timezone, locale, and preferred node tags. `agent-remote account bind` asks the control plane to create a temporary remote tmux login session on the selected node, and `agent-remote account verify` schedules the verifier task after login is complete. The CLI only stores the agent-remote device token; tool login state remains on the remote node account archive.
 
 ## Development
 

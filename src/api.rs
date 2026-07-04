@@ -180,6 +180,90 @@ impl ApiClient {
             .await
     }
 
+    pub async fn list_tool_accounts(&self, token: &str) -> Result<Vec<ToolAccountData>, ApiError> {
+        let response: Envelope<ToolAccountListData> =
+            self.get("/api/v1/tool-accounts", Some(token)).await?;
+        Ok(response.data.items)
+    }
+
+    pub async fn create_tool_account(
+        &self,
+        token: &str,
+        request: &CreateToolAccountRequest,
+    ) -> Result<ToolAccountData, ApiError> {
+        let response: Envelope<ToolAccountData> = self
+            .post("/api/v1/tool-accounts", Some(token), request)
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn get_tool_account(
+        &self,
+        token: &str,
+        account_id: &str,
+    ) -> Result<ToolAccountData, ApiError> {
+        let response: Envelope<ToolAccountData> = self
+            .get(&format!("/api/v1/tool-accounts/{account_id}"), Some(token))
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn start_tool_account_binding(
+        &self,
+        token: &str,
+        account_id: &str,
+    ) -> Result<BindingStatusData, ApiError> {
+        let response: Envelope<BindingStatusData> = self
+            .post_empty(
+                &format!("/api/v1/tool-accounts/{account_id}/bind/start"),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn get_tool_account_binding_status(
+        &self,
+        token: &str,
+        account_id: &str,
+    ) -> Result<BindingStatusData, ApiError> {
+        let response: Envelope<BindingStatusData> = self
+            .get(
+                &format!("/api/v1/tool-accounts/{account_id}/bind/status"),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn verify_tool_account_binding(
+        &self,
+        token: &str,
+        account_id: &str,
+    ) -> Result<BindingStatusData, ApiError> {
+        let response: Envelope<BindingStatusData> = self
+            .post_empty(
+                &format!("/api/v1/tool-accounts/{account_id}/bind/verify"),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn disable_tool_account(
+        &self,
+        token: &str,
+        account_id: &str,
+    ) -> Result<ToolAccountData, ApiError> {
+        let response: Envelope<ToolAccountData> = self
+            .post_empty(
+                &format!("/api/v1/tool-accounts/{account_id}/disable"),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
+    }
+
     async fn sync_session_action(
         &self,
         token: &str,
@@ -399,6 +483,53 @@ pub struct SyncSessionData {
     pub prepare_task_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CreateToolAccountRequest {
+    pub tool_type: String,
+    pub display_name: String,
+    pub region_code: String,
+    pub timezone: String,
+    pub locale: String,
+    pub preferred_node_tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ToolAccountListData {
+    items: Vec<ToolAccountData>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ToolAccountData {
+    pub id: String,
+    pub user_id: String,
+    pub tool_type: String,
+    pub display_name: String,
+    pub status: String,
+    pub region_code: String,
+    pub timezone: String,
+    pub locale: String,
+    pub preferred_node_tags: Vec<String>,
+    pub affinity_node_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct BindingStatusData {
+    pub tool_account_id: String,
+    pub status: String,
+    pub node_id: Option<String>,
+    pub binding_session_id: Option<String>,
+    pub tmux_session_name: Option<String>,
+    pub account_remote_path: Option<String>,
+    pub connect_command: Option<String>,
+    pub task_id: Option<String>,
+    pub verifier: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

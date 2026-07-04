@@ -18,11 +18,12 @@ use clap::Parser;
 use tokio::time::sleep;
 
 use crate::api::{
-    ApiClient, AuthToken, CreateSyncSessionRequest, CreateWorkspaceRequest, RegisterDeviceRequest,
-    SyncSessionData, WorkspaceData,
+    ApiClient, AuthToken, BindingStatusData, CreateSyncSessionRequest, CreateToolAccountRequest,
+    CreateWorkspaceRequest, RegisterDeviceRequest, SyncSessionData, ToolAccountData, WorkspaceData,
 };
 use crate::cli::{
-    Cli, Command, DepsCommand, LoginMethod, SshCommand, SyncCommand, WireGuardCommand,
+    AccountCommand, Cli, Command, DepsCommand, LoginMethod, SshCommand, SyncCommand,
+    WireGuardCommand,
 };
 use crate::config::{AppPaths, Config};
 use crate::dependencies::DependencyManager;
@@ -55,6 +56,12 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Sync(SyncCommand::Resume(args)) => sync_action(paths, "resume", args).await,
         Command::Sync(SyncCommand::Resolve(args)) => sync_action(paths, "resolve", args).await,
         Command::Sync(SyncCommand::Reset(args)) => sync_action(paths, "reset", args).await,
+        Command::Account(AccountCommand::List) => account_list(paths).await,
+        Command::Account(AccountCommand::Create(args)) => account_create(paths, args).await,
+        Command::Account(AccountCommand::Bind(args)) => account_bind(paths, args).await,
+        Command::Account(AccountCommand::Verify(args)) => account_verify(paths, args).await,
+        Command::Account(AccountCommand::Status(args)) => account_status(paths, args).await,
+        Command::Account(AccountCommand::Disable(args)) => account_disable(paths, args).await,
         Command::Attach(args) => attach(paths, args).await,
     }
 }
@@ -326,6 +333,130 @@ async fn attach(paths: AppPaths, args: crate::cli::AttachArgs) -> Result<()> {
         return Ok(());
     }
     ssh::execute_attach(&attach)
+}
+
+async fn account_list(paths: AppPaths) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let accounts = ApiClient::new(server_url)?
+        .list_tool_accounts(&token)
+        .await?;
+    if accounts.is_empty() {
+        println!("tool accounts: none");
+        return Ok(());
+    }
+    for account in accounts {
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            account.id,
+            account.tool_type,
+            account.display_name,
+            account.status,
+            account.region_code
+        );
+    }
+    Ok(())
+}
+
+async fn account_create(paths: AppPaths, args: crate::cli::AccountCreateArgs) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let account = ApiClient::new(server_url)?
+        .create_tool_account(
+            &token,
+            &CreateToolAccountRequest {
+                tool_type: args.tool,
+                display_name: args.name,
+                region_code: args.region,
+                timezone: args.timezone,
+                locale: args.locale,
+                preferred_node_tags: args.tags,
+            },
+        )
+        .await?;
+    print_tool_account(&account);
+    Ok(())
+}
+
+async fn account_bind(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let binding = ApiClient::new(server_url)?
+        .start_tool_account_binding(&token, &args.account_id)
+        .await?;
+    print_binding_status(&binding);
+    Ok(())
+}
+
+async fn account_verify(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let binding = ApiClient::new(server_url)?
+        .verify_tool_account_binding(&token, &args.account_id)
+        .await?;
+    print_binding_status(&binding);
+    Ok(())
+}
+
+async fn account_status(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let client = ApiClient::new(server_url)?;
+    let account = client.get_tool_account(&token, &args.account_id).await?;
+    print_tool_account(&account);
+    let binding = client
+        .get_tool_account_binding_status(&token, &args.account_id)
+        .await?;
+    print_binding_status(&binding);
+    Ok(())
+}
+
+async fn account_disable(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let account = ApiClient::new(server_url)?
+        .disable_tool_account(&token, &args.account_id)
+        .await?;
+    print_tool_account(&account);
+    Ok(())
+}
+
+fn print_tool_account(account: &ToolAccountData) {
+    println!("account: {}", account.id);
+    println!("tool: {}", account.tool_type);
+    println!("name: {}", account.display_name);
+    println!("status: {}", account.status);
+    println!("region: {}", account.region_code);
+    println!("timezone: {}", account.timezone);
+    println!("locale: {}", account.locale);
+    if let Some(node_id) = &account.affinity_node_id {
+        println!("affinity node: {node_id}");
+    }
+    if !account.preferred_node_tags.is_empty() {
+        println!("tags: {}", account.preferred_node_tags.join(","));
+    }
+}
+
+fn print_binding_status(status: &BindingStatusData) {
+    println!("binding status: {}", status.status);
+    if let Some(node_id) = &status.node_id {
+        println!("node: {node_id}");
+    }
+    if let Some(task_id) = &status.task_id {
+        println!("task: {task_id}");
+    }
+    if let Some(binding_session_id) = &status.binding_session_id {
+        println!("binding session: {binding_session_id}");
+    }
+    if let Some(tmux_session_name) = &status.tmux_session_name {
+        println!("tmux: {tmux_session_name}");
+    }
+    if let Some(path) = &status.account_remote_path {
+        println!("remote account path: {path}");
+    }
+    if let Some(command) = &status.connect_command {
+        println!("command: {command}");
+    }
+    if let Some(verifier) = &status.verifier {
+        println!("verifier: {verifier}");
+    }
+    if let Some(error) = &status.error {
+        println!("error: {error}");
+    }
 }
 
 async fn sync_ensure(paths: AppPaths, args: crate::cli::SyncEnsureArgs) -> Result<()> {
