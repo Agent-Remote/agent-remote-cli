@@ -39,6 +39,8 @@ pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
     let mut args = vec![
         "sync".to_string(),
         "create".to_string(),
+        "--sync-mode".to_string(),
+        "two-way-safe".to_string(),
         "--name".to_string(),
         name.to_string(),
     ];
@@ -183,7 +185,7 @@ mod tests {
             sync_mode: "two_way".to_string(),
             mutagen_session_id: Some("agent-remote-sync".to_string()),
             remote_endpoint: Some(
-                "ssh://agent-remote@10.42.0.10:22/var/lib/agent-remote/users/u/workspaces/w/files"
+                "agent-remote@10.42.0.10:22:/var/lib/agent-remote/users/u/workspaces/w/files"
                     .to_string(),
             ),
             prepare_task_id: Some("prepare_workspace:sync_1".to_string()),

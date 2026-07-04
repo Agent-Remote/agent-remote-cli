@@ -40,7 +40,11 @@ fn main() -> Result<()> {
 }
 
 fn run_wg_quick(action: &str, config: &PathBuf, dry_run: bool) -> Result<()> {
-    let wg_quick = find_wg_quick().context("wg-quick is missing from this release or PATH")?;
+    let wg_quick = if dry_run {
+        find_wg_quick().unwrap_or_else(|| PathBuf::from("wg-quick"))
+    } else {
+        find_wg_quick().context("wg-quick is missing from this release or PATH")?
+    };
     if dry_run {
         println!("{} {} {}", wg_quick.display(), action, config.display());
         return Ok(());
@@ -61,6 +65,14 @@ fn find_wg_quick() -> Option<PathBuf> {
         let path = PathBuf::from(path);
         if path.exists() {
             return Some(path);
+        }
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let candidate = parent.join("wg-quick");
+            if candidate.exists() {
+                return Some(candidate);
+            }
         }
     }
     let path_value = env::var_os("PATH")?;
