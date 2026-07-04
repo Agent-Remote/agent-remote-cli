@@ -28,6 +28,8 @@ pub enum Command {
     Wireguard(WireGuardCommand),
     #[command(subcommand)]
     Ssh(SshCommand),
+    #[command(subcommand)]
+    Sync(SyncCommand),
     Attach(AttachArgs),
 }
 
@@ -137,4 +139,44 @@ pub struct AttachArgs {
 
     #[arg(long)]
     pub print_only: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SyncCommand {
+    Ensure(SyncEnsureArgs),
+    Status(SyncStatusArgs),
+    Pause(SyncActionArgs),
+    Resume(SyncActionArgs),
+    Resolve(SyncActionArgs),
+    Reset(SyncActionArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SyncEnsureArgs {
+    #[arg(long)]
+    pub workspace: Option<PathBuf>,
+
+    #[arg(long)]
+    pub yes: bool,
+
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SyncStatusArgs {
+    #[arg(long)]
+    pub workspace: Option<PathBuf>,
+
+    #[arg(long)]
+    pub fail_on_conflict: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct SyncActionArgs {
+    #[arg(long)]
+    pub workspace: Option<PathBuf>,
+
+    #[arg(long)]
+    pub dry_run: bool,
 }

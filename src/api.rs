@@ -108,6 +108,94 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    pub async fn create_workspace(
+        &self,
+        token: &str,
+        request: &CreateWorkspaceRequest,
+    ) -> Result<WorkspaceData, ApiError> {
+        let response: Envelope<WorkspaceData> = self
+            .post("/api/v1/workspaces", Some(token), request)
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn create_sync_session(
+        &self,
+        token: &str,
+        request: &CreateSyncSessionRequest,
+    ) -> Result<SyncSessionData, ApiError> {
+        let response: Envelope<SyncSessionData> = self
+            .post("/api/v1/sync-sessions", Some(token), request)
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn get_sync_session(
+        &self,
+        token: &str,
+        sync_session_id: &str,
+    ) -> Result<SyncSessionData, ApiError> {
+        let response: Envelope<SyncSessionData> = self
+            .get(
+                &format!("/api/v1/sync-sessions/{sync_session_id}"),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn pause_sync_session(
+        &self,
+        token: &str,
+        sync_session_id: &str,
+    ) -> Result<SyncSessionData, ApiError> {
+        self.sync_session_action(token, sync_session_id, "pause")
+            .await
+    }
+
+    pub async fn resume_sync_session(
+        &self,
+        token: &str,
+        sync_session_id: &str,
+    ) -> Result<SyncSessionData, ApiError> {
+        self.sync_session_action(token, sync_session_id, "resume")
+            .await
+    }
+
+    pub async fn resolve_sync_session(
+        &self,
+        token: &str,
+        sync_session_id: &str,
+    ) -> Result<SyncSessionData, ApiError> {
+        self.sync_session_action(token, sync_session_id, "resolve")
+            .await
+    }
+
+    pub async fn reset_sync_session(
+        &self,
+        token: &str,
+        sync_session_id: &str,
+    ) -> Result<SyncSessionData, ApiError> {
+        self.sync_session_action(token, sync_session_id, "reset")
+            .await
+    }
+
+    async fn sync_session_action(
+        &self,
+        token: &str,
+        sync_session_id: &str,
+        action: &str,
+    ) -> Result<SyncSessionData, ApiError> {
+        let response: Envelope<SyncSessionData> = self
+            .post(
+                &format!("/api/v1/sync-sessions/{sync_session_id}/{action}"),
+                Some(token),
+                &SyncSessionActionRequest { note: None },
+            )
+            .await?;
+        Ok(response.data)
+    }
+
     async fn get<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -257,6 +345,60 @@ pub struct AttachSessionData {
     pub ssh_command: String,
     pub authorization_task_id: String,
     pub expires_in: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CreateWorkspaceRequest {
+    pub device_id: String,
+    pub project_key: String,
+    pub local_start_path: String,
+    pub display_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct WorkspaceData {
+    pub id: String,
+    pub user_id: String,
+    pub device_id: String,
+    pub project_key: String,
+    pub local_start_path: String,
+    pub display_name: String,
+    pub remote_path: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CreateSyncSessionRequest {
+    pub workspace_id: String,
+    pub node_id: Option<String>,
+    pub local_path: Option<String>,
+    pub sync_mode: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct SyncSessionActionRequest {
+    note: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct SyncSessionData {
+    pub id: String,
+    pub user_id: String,
+    pub workspace_id: String,
+    pub node_id: Option<String>,
+    pub local_path: String,
+    pub remote_path: String,
+    pub status: String,
+    pub conflict_status: String,
+    pub sync_mode: String,
+    pub mutagen_session_id: Option<String>,
+    pub remote_endpoint: Option<String>,
+    pub prepare_task_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

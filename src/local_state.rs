@@ -20,6 +20,28 @@ pub struct LocalDevice {
     pub last_seen_at: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalWorkspace {
+    pub id: String,
+    pub server_url: String,
+    pub project_key: String,
+    pub local_path: String,
+    pub display_name: String,
+    pub remote_path: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalSyncSession {
+    pub id: String,
+    pub server_url: String,
+    pub workspace_id: String,
+    pub node_id: Option<String>,
+    pub status: String,
+    pub conflict_status: String,
+    pub mutagen_session_id: Option<String>,
+    pub remote_endpoint: Option<String>,
+}
+
 impl LocalState {
     pub fn open(paths: &AppPaths) -> Result<Self> {
         paths.ensure_base_dirs()?;
@@ -48,9 +70,33 @@ impl LocalState {
                  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
              );
              CREATE INDEX IF NOT EXISTS devices_server_status_idx
-                 ON devices (server_url, status);",
+                 ON devices (server_url, status);
+             CREATE TABLE IF NOT EXISTS workspaces (
+                 id TEXT PRIMARY KEY,
+                 server_url TEXT NOT NULL,
+                 project_key TEXT NOT NULL,
+                 local_path TEXT NOT NULL,
+                 display_name TEXT NOT NULL,
+                 remote_path TEXT,
+                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+             );
+             CREATE UNIQUE INDEX IF NOT EXISTS workspaces_server_project_idx
+                 ON workspaces (server_url, project_key);
+             CREATE TABLE IF NOT EXISTS sync_sessions (
+                 id TEXT PRIMARY KEY,
+                 server_url TEXT NOT NULL,
+                 workspace_id TEXT NOT NULL,
+                 node_id TEXT,
+                 status TEXT NOT NULL,
+                 conflict_status TEXT NOT NULL,
+                 mutagen_session_id TEXT,
+                 remote_endpoint TEXT,
+                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+             );
+             CREATE INDEX IF NOT EXISTS sync_sessions_workspace_idx
+                 ON sync_sessions (workspace_id);",
         )?;
-        self.connection.pragma_update(None, "user_version", 1)?;
+        self.connection.pragma_update(None, "user_version", 2)?;
         Ok(())
     }
 
@@ -133,6 +179,114 @@ impl LocalState {
         Ok(device)
     }
 
+    pub fn upsert_workspace(&self, workspace: &LocalWorkspace) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO workspaces (
+                id, server_url, project_key, local_path, display_name, remote_path, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+             ON CONFLICT(id) DO UPDATE SET
+                server_url = excluded.server_url,
+                project_key = excluded.project_key,
+                local_path = excluded.local_path,
+                display_name = excluded.display_name,
+                remote_path = excluded.remote_path,
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                workspace.id,
+                workspace.server_url,
+                workspace.project_key,
+                workspace.local_path,
+                workspace.display_name,
+                workspace.remote_path,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_workspace_by_project_key(
+        &self,
+        server_url: &str,
+        project_key: &str,
+    ) -> Result<Option<LocalWorkspace>> {
+        let workspace = self
+            .connection
+            .query_row(
+                "SELECT id, server_url, project_key, local_path, display_name, remote_path
+                 FROM workspaces WHERE server_url = ?1 AND project_key = ?2",
+                params![server_url, project_key],
+                |row| {
+                    Ok(LocalWorkspace {
+                        id: row.get(0)?,
+                        server_url: row.get(1)?,
+                        project_key: row.get(2)?,
+                        local_path: row.get(3)?,
+                        display_name: row.get(4)?,
+                        remote_path: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(workspace)
+    }
+
+    pub fn upsert_sync_session(&self, sync_session: &LocalSyncSession) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO sync_sessions (
+                id, server_url, workspace_id, node_id, status, conflict_status,
+                mutagen_session_id, remote_endpoint, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
+             ON CONFLICT(id) DO UPDATE SET
+                server_url = excluded.server_url,
+                workspace_id = excluded.workspace_id,
+                node_id = excluded.node_id,
+                status = excluded.status,
+                conflict_status = excluded.conflict_status,
+                mutagen_session_id = excluded.mutagen_session_id,
+                remote_endpoint = excluded.remote_endpoint,
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                sync_session.id,
+                sync_session.server_url,
+                sync_session.workspace_id,
+                sync_session.node_id,
+                sync_session.status,
+                sync_session.conflict_status,
+                sync_session.mutagen_session_id,
+                sync_session.remote_endpoint,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_sync_session_for_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<LocalSyncSession>> {
+        let sync_session = self
+            .connection
+            .query_row(
+                "SELECT id, server_url, workspace_id, node_id, status, conflict_status,
+                        mutagen_session_id, remote_endpoint
+                 FROM sync_sessions WHERE workspace_id = ?1
+                 ORDER BY updated_at DESC LIMIT 1",
+                params![workspace_id],
+                |row| {
+                    Ok(LocalSyncSession {
+                        id: row.get(0)?,
+                        server_url: row.get(1)?,
+                        workspace_id: row.get(2)?,
+                        node_id: row.get(3)?,
+                        status: row.get(4)?,
+                        conflict_status: row.get(5)?,
+                        mutagen_session_id: row.get(6)?,
+                        remote_endpoint: row.get(7)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(sync_session)
+    }
+
     #[cfg(test)]
     pub fn table_columns(&self, table: &str) -> Result<Vec<String>> {
         let mut statement = self
@@ -153,7 +307,7 @@ mod tests {
 
     use crate::config::AppPaths;
 
-    use super::{LocalDevice, LocalState};
+    use super::{LocalDevice, LocalState, LocalSyncSession, LocalWorkspace};
 
     #[test]
     fn stores_device_metadata_without_token_columns() {
@@ -194,5 +348,47 @@ mod tests {
             state.get_kv("last_login_mode").unwrap().as_deref(),
             Some("device_token")
         );
+    }
+
+    #[test]
+    fn stores_workspace_and_sync_metadata() {
+        let dir = tempdir().unwrap();
+        let paths = AppPaths::from_home(dir.path().join("agent-remote"));
+        let state = LocalState::open(&paths).unwrap();
+        state.init_schema().unwrap();
+
+        state
+            .upsert_workspace(&LocalWorkspace {
+                id: "workspace_1".to_string(),
+                server_url: "https://example.test".to_string(),
+                project_key: "sha256:test".to_string(),
+                local_path: "/tmp/project".to_string(),
+                display_name: "project".to_string(),
+                remote_path: Some("/var/lib/agent-remote/users/u/workspaces/w/files".to_string()),
+            })
+            .unwrap();
+        state
+            .upsert_sync_session(&LocalSyncSession {
+                id: "sync_1".to_string(),
+                server_url: "https://example.test".to_string(),
+                workspace_id: "workspace_1".to_string(),
+                node_id: Some("node_1".to_string()),
+                status: "starting".to_string(),
+                conflict_status: "none".to_string(),
+                mutagen_session_id: Some("agent-remote-sync".to_string()),
+                remote_endpoint: Some("ssh://agent@example.test/project".to_string()),
+            })
+            .unwrap();
+
+        let workspace = state
+            .get_workspace_by_project_key("https://example.test", "sha256:test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(workspace.id, "workspace_1");
+        let sync = state
+            .get_sync_session_for_workspace("workspace_1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(sync.id, "sync_1");
     }
 }

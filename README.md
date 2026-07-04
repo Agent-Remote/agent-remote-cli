@@ -13,6 +13,8 @@ agent-remote doctor --fix
 agent-remote deps status
 agent-remote wireguard config
 agent-remote wireguard check
+agent-remote sync ensure
+agent-remote sync status
 agent-remote ssh check --session-id <session-id>
 agent-remote attach --session-id <session-id> --print-only
 agent-remote logout
@@ -55,6 +57,23 @@ The current implementation records and checks the manifest for Mutagen and WireG
 `agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper. The helper delegates to `wg-quick` when available and supports `--dry-run` for diagnostics.
 
 `agent-remote attach --session-id <id>` asks the control plane for a session-specific SSH authorization, schedules SSH key synchronization on the node, and then uses local `ssh` to run the node-side forced command.
+
+## Workspace Sync
+
+`agent-remote sync ensure` identifies the current directory, asks before creating a new remote sync relationship, registers the workspace with the control plane, creates a sync session, and starts the managed Mutagen session.
+
+Useful commands:
+
+```sh
+agent-remote sync ensure --yes
+agent-remote sync status --fail-on-conflict
+agent-remote sync pause
+agent-remote sync resume
+agent-remote sync resolve
+agent-remote sync reset
+```
+
+The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. Default excludes include `.git`, `node_modules`, `target`, `dist`, `.venv`, and `__pycache__`.
 
 ## Development
 

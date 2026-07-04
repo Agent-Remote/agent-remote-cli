@@ -4,10 +4,12 @@ mod config;
 mod dependencies;
 mod doctor;
 mod local_state;
+mod mutagen;
 mod platform;
 mod secrets;
 mod ssh;
 mod wireguard;
+mod workspace;
 
 use std::time::{Duration, Instant};
 
@@ -15,12 +17,17 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use tokio::time::sleep;
 
-use crate::api::{ApiClient, AuthToken, RegisterDeviceRequest};
-use crate::cli::{Cli, Command, DepsCommand, LoginMethod, SshCommand, WireGuardCommand};
+use crate::api::{
+    ApiClient, AuthToken, CreateSyncSessionRequest, CreateWorkspaceRequest, RegisterDeviceRequest,
+    SyncSessionData, WorkspaceData,
+};
+use crate::cli::{
+    Cli, Command, DepsCommand, LoginMethod, SshCommand, SyncCommand, WireGuardCommand,
+};
 use crate::config::{AppPaths, Config};
 use crate::dependencies::DependencyManager;
 use crate::doctor::Doctor;
-use crate::local_state::{LocalDevice, LocalState};
+use crate::local_state::{LocalDevice, LocalState, LocalSyncSession, LocalWorkspace};
 use crate::secrets::{device_token_key, user_token_key, SecretStore};
 
 #[tokio::main]
@@ -42,6 +49,12 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Wireguard(WireGuardCommand::Up(args)) => wireguard_action(paths, "up", args),
         Command::Wireguard(WireGuardCommand::Down(args)) => wireguard_action(paths, "down", args),
         Command::Ssh(SshCommand::Check(args)) => ssh_check(paths, args).await,
+        Command::Sync(SyncCommand::Ensure(args)) => sync_ensure(paths, args).await,
+        Command::Sync(SyncCommand::Status(args)) => sync_status(paths, args).await,
+        Command::Sync(SyncCommand::Pause(args)) => sync_action(paths, "pause", args).await,
+        Command::Sync(SyncCommand::Resume(args)) => sync_action(paths, "resume", args).await,
+        Command::Sync(SyncCommand::Resolve(args)) => sync_action(paths, "resolve", args).await,
+        Command::Sync(SyncCommand::Reset(args)) => sync_action(paths, "reset", args).await,
         Command::Attach(args) => attach(paths, args).await,
     }
 }
@@ -315,6 +328,217 @@ async fn attach(paths: AppPaths, args: crate::cli::AttachArgs) -> Result<()> {
     ssh::execute_attach(&attach)
 }
 
+async fn sync_ensure(paths: AppPaths, args: crate::cli::SyncEnsureArgs) -> Result<()> {
+    let sync =
+        ensure_workspace_sync(&paths, args.workspace.as_deref(), args.yes, args.dry_run).await?;
+    println!("workspace: {}", sync.workspace_id);
+    println!("sync session: {} ({})", sync.id, sync.status);
+    println!("remote: {}", sync.remote_path);
+    if let Some(endpoint) = sync.remote_endpoint {
+        println!("endpoint: {endpoint}");
+    }
+    Ok(())
+}
+
+async fn sync_status(paths: AppPaths, args: crate::cli::SyncStatusArgs) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let identity = workspace::identify_workspace(args.workspace.as_deref())?;
+    let state = LocalState::open(&paths)?;
+    state.init_schema()?;
+    let Some(local_workspace) =
+        state.get_workspace_by_project_key(&server_url, &identity.project_key)?
+    else {
+        println!("workspace: not registered");
+        println!("path: {}", identity.local_path.display());
+        return Ok(());
+    };
+    let Some(local_sync) = state.get_sync_session_for_workspace(&local_workspace.id)? else {
+        println!("workspace: {}", local_workspace.id);
+        println!("sync session: missing");
+        return Ok(());
+    };
+    let client = ApiClient::new(server_url.clone())?;
+    let sync = client.get_sync_session(&token, &local_sync.id).await?;
+    persist_sync_session(&state, &server_url, &sync)?;
+    let mutagen_status = mutagen::status(&paths, &sync)?;
+    println!("workspace: {}", local_workspace.id);
+    println!("path: {}", local_workspace.local_path);
+    println!("sync session: {} ({})", sync.id, sync.status);
+    println!("conflicts: {}", sync.conflict_status);
+    println!(
+        "mutagen: {}",
+        if mutagen_status.installed {
+            "present"
+        } else {
+            "missing"
+        }
+    );
+    if !mutagen_status.output.is_empty() {
+        println!("{}", mutagen_status.output);
+    }
+    if sync.conflict_status != "none" || mutagen_status.has_conflicts {
+        if args.fail_on_conflict {
+            bail!("workspace sync has unresolved conflicts");
+        }
+        println!("sync has unresolved conflicts");
+    }
+    Ok(())
+}
+
+async fn sync_action(
+    paths: AppPaths,
+    action: &str,
+    args: crate::cli::SyncActionArgs,
+) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let identity = workspace::identify_workspace(args.workspace.as_deref())?;
+    let state = LocalState::open(&paths)?;
+    state.init_schema()?;
+    let local_workspace = state
+        .get_workspace_by_project_key(&server_url, &identity.project_key)?
+        .context("workspace is not registered; run agent-remote sync ensure")?;
+    let local_sync = state
+        .get_sync_session_for_workspace(&local_workspace.id)?
+        .context("sync session is missing; run agent-remote sync ensure")?;
+    let client = ApiClient::new(server_url.clone())?;
+    let current = client.get_sync_session(&token, &local_sync.id).await?;
+    match action {
+        "pause" => {
+            mutagen::pause(&paths, &current, args.dry_run)?;
+            let sync = client.pause_sync_session(&token, &current.id).await?;
+            persist_sync_session(&state, &server_url, &sync)?;
+            println!("sync paused: {}", sync.id);
+        }
+        "resume" => {
+            let sync = client.resume_sync_session(&token, &current.id).await?;
+            mutagen::resume(&paths, &sync, args.dry_run)?;
+            persist_sync_session(&state, &server_url, &sync)?;
+            println!("sync resumed: {}", sync.id);
+        }
+        "resolve" => {
+            mutagen::resolve(&paths, &current, args.dry_run)?;
+            let sync = client.resolve_sync_session(&token, &current.id).await?;
+            persist_sync_session(&state, &server_url, &sync)?;
+            println!("sync resolved: {}", sync.id);
+        }
+        "reset" => {
+            let sync = client.reset_sync_session(&token, &current.id).await?;
+            mutagen::reset(&paths, &sync, args.dry_run)?;
+            persist_sync_session(&state, &server_url, &sync)?;
+            println!("sync reset: {}", sync.id);
+        }
+        _ => bail!("unsupported sync action: {action}"),
+    }
+    Ok(())
+}
+
+async fn ensure_workspace_sync(
+    paths: &AppPaths,
+    workspace_path: Option<&std::path::Path>,
+    assume_yes: bool,
+    dry_run: bool,
+) -> Result<SyncSessionData> {
+    let (server_url, device_id, token) = load_device_token(paths)?;
+    let identity = workspace::identify_workspace(workspace_path)?;
+    let state = LocalState::open(paths)?;
+    state.init_schema()?;
+    let client = ApiClient::new(server_url.clone())?;
+
+    let workspace = match state.get_workspace_by_project_key(&server_url, &identity.project_key)? {
+        Some(local) => WorkspaceData {
+            id: local.id,
+            user_id: String::new(),
+            device_id: device_id.clone(),
+            project_key: local.project_key,
+            local_start_path: local.local_path,
+            display_name: local.display_name,
+            remote_path: local.remote_path,
+            created_at: String::new(),
+            updated_at: String::new(),
+        },
+        None => {
+            if !assume_yes {
+                println!("workspace: {}", identity.local_path.display());
+                println!(
+                    "agent-remote needs to create a remote sync relationship for this directory."
+                );
+                if !prompt_yes_no("Create workspace sync now? [y/N] ")? {
+                    bail!("workspace sync not confirmed; remote session will not be started");
+                }
+            }
+            let remote = client
+                .create_workspace(
+                    &token,
+                    &CreateWorkspaceRequest {
+                        device_id: device_id.clone(),
+                        project_key: identity.project_key.clone(),
+                        local_start_path: identity.local_path.to_string_lossy().to_string(),
+                        display_name: identity.display_name.clone(),
+                    },
+                )
+                .await?;
+            persist_workspace(&state, &server_url, &remote)?;
+            remote
+        }
+    };
+
+    let mut should_create_mutagen = false;
+    let sync = match state.get_sync_session_for_workspace(&workspace.id)? {
+        Some(local) => client.get_sync_session(&token, &local.id).await?,
+        None => {
+            should_create_mutagen = true;
+            client
+                .create_sync_session(
+                    &token,
+                    &CreateSyncSessionRequest {
+                        workspace_id: workspace.id.clone(),
+                        node_id: None,
+                        local_path: Some(identity.local_path.to_string_lossy().to_string()),
+                        sync_mode: "two_way".to_string(),
+                    },
+                )
+                .await?
+        }
+    };
+    persist_sync_session(&state, &server_url, &sync)?;
+    if should_create_mutagen {
+        mutagen::create(paths, &sync, dry_run)?;
+    }
+    Ok(sync)
+}
+
+fn persist_workspace(
+    state: &LocalState,
+    server_url: &str,
+    workspace: &WorkspaceData,
+) -> Result<()> {
+    state.upsert_workspace(&LocalWorkspace {
+        id: workspace.id.clone(),
+        server_url: server_url.to_string(),
+        project_key: workspace.project_key.clone(),
+        local_path: workspace.local_start_path.clone(),
+        display_name: workspace.display_name.clone(),
+        remote_path: workspace.remote_path.clone(),
+    })
+}
+
+fn persist_sync_session(
+    state: &LocalState,
+    server_url: &str,
+    sync: &SyncSessionData,
+) -> Result<()> {
+    state.upsert_sync_session(&LocalSyncSession {
+        id: sync.id.clone(),
+        server_url: server_url.to_string(),
+        workspace_id: sync.workspace_id.clone(),
+        node_id: sync.node_id.clone(),
+        status: sync.status.clone(),
+        conflict_status: sync.conflict_status.clone(),
+        mutagen_session_id: sync.mutagen_session_id.clone(),
+        remote_endpoint: sync.remote_endpoint.clone(),
+    })
+}
+
 fn load_device_token(paths: &AppPaths) -> Result<(String, String, String)> {
     let config = Config::load(paths)?;
     let server_url = config
@@ -367,6 +591,17 @@ fn prompt_line(prompt: &str) -> Result<String> {
         bail!("empty value is not allowed")
     }
     Ok(value)
+}
+
+fn prompt_yes_no(prompt: &str) -> Result<bool> {
+    use std::io::{self, Write};
+
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut value = String::new();
+    io::stdin().read_line(&mut value)?;
+    let normalized = value.trim().to_ascii_lowercase();
+    Ok(matches!(normalized.as_str(), "y" | "yes"))
 }
 
 fn resolve_ssh_public_key(explicit: Option<&std::path::Path>) -> Result<String> {
