@@ -108,6 +108,71 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    #[allow(dead_code)]
+    pub async fn list_sessions(
+        &self,
+        token: &str,
+        tool_type: Option<&str>,
+    ) -> Result<Vec<SessionData>, ApiError> {
+        let path = match tool_type {
+            Some(tool_type) => format!("/api/v1/sessions?tool_type={}", url_encode(tool_type)),
+            None => "/api/v1/sessions".to_string(),
+        };
+        let response: Envelope<SessionListData> = self.get(&path, Some(token)).await?;
+        Ok(response.data.items)
+    }
+
+    #[allow(dead_code)]
+    pub async fn create_tool_session(
+        &self,
+        token: &str,
+        request: &CreateSessionRequest,
+    ) -> Result<SessionData, ApiError> {
+        let response: Envelope<SessionData> =
+            self.post("/api/v1/sessions", Some(token), request).await?;
+        Ok(response.data)
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_tool_session(
+        &self,
+        token: &str,
+        session_id: &str,
+    ) -> Result<SessionData, ApiError> {
+        let response: Envelope<SessionData> = self
+            .get(&format!("/api/v1/sessions/{session_id}"), Some(token))
+            .await?;
+        Ok(response.data)
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_current_project_session(
+        &self,
+        token: &str,
+        tool_type: &str,
+        project_key: &str,
+    ) -> Result<SessionData, ApiError> {
+        let path = format!(
+            "/api/v1/sessions/current-project?tool_type={}&project_key={}",
+            url_encode(tool_type),
+            url_encode(project_key)
+        );
+        let response: Envelope<SessionData> = self.get(&path, Some(token)).await?;
+        Ok(response.data)
+    }
+
+    #[allow(dead_code)]
+    pub async fn stop_tool_session(
+        &self,
+        token: &str,
+        session_id: &str,
+    ) -> Result<SessionData, ApiError> {
+        let response: Envelope<SessionData> = self
+            .post_empty(&format!("/api/v1/sessions/{session_id}/stop"), Some(token))
+            .await?;
+        Ok(response.data)
+    }
+
     pub async fn create_workspace(
         &self,
         token: &str,
@@ -432,6 +497,41 @@ pub struct AttachSessionData {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[allow(dead_code)]
+pub struct CreateSessionRequest {
+    pub tool_type: String,
+    pub tool_account_id: String,
+    pub workspace_id: String,
+    pub project_key: String,
+    pub argv: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+struct SessionListData {
+    items: Vec<SessionData>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct SessionData {
+    pub id: String,
+    pub tool_type: String,
+    pub user_id: String,
+    pub tool_account_id: String,
+    pub workspace_id: String,
+    pub node_id: String,
+    pub project_key: String,
+    pub status: String,
+    pub tmux_session_name: Option<String>,
+    pub container_id: Option<String>,
+    pub create_task_id: Option<String>,
+    pub stop_task_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct CreateWorkspaceRequest {
     pub device_id: String,
     pub project_key: String,
@@ -545,6 +645,11 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    #[allow(dead_code)]
+    pub fn is_not_found(&self) -> bool {
+        self.status == Some(StatusCode::NOT_FOUND)
+    }
+
     pub fn is_pending_cli_login(&self) -> bool {
         self.status == Some(StatusCode::BAD_REQUEST)
             && self.code.as_deref() == Some("COMMON_BAD_REQUEST")
@@ -581,6 +686,20 @@ impl ApiError {
             },
         }
     }
+}
+
+#[allow(dead_code)]
+fn url_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 impl fmt::Display for ApiError {

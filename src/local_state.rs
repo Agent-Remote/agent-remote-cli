@@ -122,6 +122,12 @@ impl LocalState {
         Ok(value)
     }
 
+    pub fn delete_kv(&self, key: &str) -> Result<()> {
+        self.connection
+            .execute("DELETE FROM kv WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
     pub fn upsert_device(&self, device: &LocalDevice) -> Result<()> {
         self.connection.execute(
             "INSERT INTO devices (

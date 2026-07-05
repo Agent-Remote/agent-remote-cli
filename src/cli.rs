@@ -191,6 +191,15 @@ pub enum AccountCommand {
     Verify(AccountIdArgs),
     Status(AccountIdArgs),
     Disable(AccountIdArgs),
+    #[command(subcommand)]
+    Default(AccountDefaultCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AccountDefaultCommand {
+    Set(AccountDefaultSetArgs),
+    Get(AccountDefaultGetArgs),
+    Clear(AccountDefaultGetArgs),
 }
 
 #[derive(Debug, Args)]
@@ -217,4 +226,19 @@ pub struct AccountCreateArgs {
 #[derive(Debug, Args)]
 pub struct AccountIdArgs {
     pub account_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AccountDefaultSetArgs {
+    #[arg(long, default_value = "claude")]
+    pub tool: String,
+
+    #[arg(long)]
+    pub account_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AccountDefaultGetArgs {
+    #[arg(long, default_value = "claude")]
+    pub tool: String,
 }

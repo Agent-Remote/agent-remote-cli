@@ -22,8 +22,8 @@ use crate::api::{
     CreateWorkspaceRequest, RegisterDeviceRequest, SyncSessionData, ToolAccountData, WorkspaceData,
 };
 use crate::cli::{
-    AccountCommand, Cli, Command, DepsCommand, LoginMethod, SshCommand, SyncCommand,
-    WireGuardCommand,
+    AccountCommand, AccountDefaultCommand, Cli, Command, DepsCommand, LoginMethod, SshCommand,
+    SyncCommand, WireGuardCommand,
 };
 use crate::config::{AppPaths, Config};
 use crate::dependencies::DependencyManager;
@@ -62,6 +62,15 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Account(AccountCommand::Verify(args)) => account_verify(paths, args).await,
         Command::Account(AccountCommand::Status(args)) => account_status(paths, args).await,
         Command::Account(AccountCommand::Disable(args)) => account_disable(paths, args).await,
+        Command::Account(AccountCommand::Default(AccountDefaultCommand::Set(args))) => {
+            account_default_set(paths, args).await
+        }
+        Command::Account(AccountCommand::Default(AccountDefaultCommand::Get(args))) => {
+            account_default_get(paths, args)
+        }
+        Command::Account(AccountCommand::Default(AccountDefaultCommand::Clear(args))) => {
+            account_default_clear(paths, args)
+        }
         Command::Attach(args) => attach(paths, args).await,
     }
 }
@@ -415,6 +424,47 @@ async fn account_disable(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Re
     Ok(())
 }
 
+async fn account_default_set(
+    paths: AppPaths,
+    args: crate::cli::AccountDefaultSetArgs,
+) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let account = ApiClient::new(server_url.clone())?
+        .get_tool_account(&token, &args.account_id)
+        .await?;
+    if account.tool_type != args.tool {
+        bail!(
+            "account {} is {}, not {}",
+            account.id,
+            account.tool_type,
+            args.tool
+        );
+    }
+    let state = LocalState::open(&paths)?;
+    state.init_schema()?;
+    state.set_kv(&default_account_key(&args.tool), &account.id)?;
+    println!("default {} account: {}", args.tool, account.id);
+    Ok(())
+}
+
+fn account_default_get(paths: AppPaths, args: crate::cli::AccountDefaultGetArgs) -> Result<()> {
+    let state = LocalState::open(&paths)?;
+    state.init_schema()?;
+    match state.get_kv(&default_account_key(&args.tool))? {
+        Some(account_id) => println!("default {} account: {}", args.tool, account_id),
+        None => println!("default {} account: not set", args.tool),
+    }
+    Ok(())
+}
+
+fn account_default_clear(paths: AppPaths, args: crate::cli::AccountDefaultGetArgs) -> Result<()> {
+    let state = LocalState::open(&paths)?;
+    state.init_schema()?;
+    state.delete_kv(&default_account_key(&args.tool))?;
+    println!("default {} account cleared", args.tool);
+    Ok(())
+}
+
 fn print_tool_account(account: &ToolAccountData) {
     println!("account: {}", account.id);
     println!("tool: {}", account.tool_type);
@@ -683,6 +733,10 @@ fn load_device_token(paths: &AppPaths) -> Result<(String, String, String)> {
         .get_secret(&device_token_key(&server_url, &device_id))?
         .context("device token is missing; run agent-remote login")?;
     Ok((server_url, device_id, token))
+}
+
+fn default_account_key(tool: &str) -> String {
+    format!("default_tool_account:{tool}")
 }
 fn deps_status(paths: AppPaths, fix: bool) -> Result<()> {
     let manager = DependencyManager::new(paths);
