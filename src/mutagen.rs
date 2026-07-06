@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::api::SyncSessionData;
 use crate::config::AppPaths;
-use crate::workspace::DEFAULT_EXCLUDES;
+use crate::workspace::{ensure_git_ready, DEFAULT_EXCLUDES};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MutagenStatus {
@@ -31,6 +31,9 @@ pub fn binary_path(paths: &AppPaths) -> PathBuf {
 }
 
 pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<()> {
+    if sync.sync_git {
+        ensure_git_ready(Path::new(&sync.local_path))?;
+    }
     let remote = sync
         .remote_endpoint
         .as_deref()
@@ -183,6 +186,8 @@ mod tests {
             status: "starting".to_string(),
             conflict_status: "none".to_string(),
             sync_mode: "two_way".to_string(),
+            sync_git: true,
+            exclude: Vec::new(),
             mutagen_session_id: Some("agent-remote-sync".to_string()),
             remote_endpoint: Some(
                 "agent-remote@10.42.0.10:22:/var/lib/agent-remote/users/u/workspaces/w/files"

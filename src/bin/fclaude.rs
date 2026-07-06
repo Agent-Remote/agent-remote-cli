@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use agent_remote_cli::api::{
-    ApiClient, CreateSessionRequest, CreateSyncSessionRequest, CreateWorkspaceRequest, SessionData,
-    SyncSessionData, ToolAccountData, WorkspaceData,
+    ApiClient, CreateSessionRequest, CreateSyncSessionRequest, CreateWorkspaceRequest,
+    GitSyncPolicy, SessionData, SyncSessionData, ToolAccountData, WorkspaceData,
 };
 use agent_remote_cli::config::{AppPaths, Config};
 use agent_remote_cli::local_state::{LocalState, LocalSyncSession, LocalWorkspace};
@@ -255,6 +255,8 @@ async fn ensure_workspace_sync(
             local_start_path: local.local_path,
             display_name: local.display_name,
             remote_path: local.remote_path,
+            sync_git: true,
+            git_sync_policy: GitSyncPolicy::default(),
             created_at: String::new(),
             updated_at: String::new(),
         },
@@ -276,6 +278,8 @@ async fn ensure_workspace_sync(
                         project_key: identity.project_key.clone(),
                         local_start_path: identity.local_path.to_string_lossy().to_string(),
                         display_name: identity.display_name.clone(),
+                        sync_git: true,
+                        git_sync_policy: GitSyncPolicy::default(),
                     },
                 )
                 .await?;
@@ -297,6 +301,11 @@ async fn ensure_workspace_sync(
                         node_id: None,
                         local_path: Some(identity.local_path.to_string_lossy().to_string()),
                         sync_mode: "two_way".to_string(),
+                        sync_git: true,
+                        exclude: workspace::DEFAULT_EXCLUDES
+                            .iter()
+                            .map(|value| (*value).to_string())
+                            .collect(),
                     },
                 )
                 .await?
@@ -310,6 +319,9 @@ async fn ensure_workspace_sync(
 }
 
 fn ensure_sync_ready(paths: &AppPaths, sync: &SyncSessionData) -> Result<()> {
+    if sync.sync_git {
+        workspace::ensure_git_ready(Path::new(&sync.local_path))?;
+    }
     if sync.conflict_status != "none" || sync.status == "conflicted" || sync.status == "failed" {
         bail!("workspace sync has unresolved conflicts or failed state");
     }

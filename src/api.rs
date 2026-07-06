@@ -329,6 +329,77 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    pub async fn create_tool_account_config_import(
+        &self,
+        token: &str,
+        account_id: &str,
+        request: &ToolAccountConfigImportRequest,
+    ) -> Result<ToolAccountConfigImportData, ApiError> {
+        let response: Envelope<ToolAccountConfigImportData> = self
+            .post(
+                &format!("/api/v1/tool-accounts/{account_id}/config-imports"),
+                Some(token),
+                request,
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn list_developer_credential_profiles(
+        &self,
+        token: &str,
+    ) -> Result<Vec<DeveloperCredentialProfileData>, ApiError> {
+        let response: Envelope<DeveloperCredentialProfileListData> = self
+            .get("/api/v1/developer-credential-profiles", Some(token))
+            .await?;
+        Ok(response.data.items)
+    }
+
+    pub async fn create_developer_credential_profile(
+        &self,
+        token: &str,
+        request: &CreateDeveloperCredentialProfileRequest,
+    ) -> Result<DeveloperCredentialProfileData, ApiError> {
+        let response: Envelope<DeveloperCredentialProfileData> = self
+            .post(
+                "/api/v1/developer-credential-profiles",
+                Some(token),
+                request,
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn bind_developer_credential_profile(
+        &self,
+        token: &str,
+        account_id: &str,
+        profile_id: &str,
+    ) -> Result<DeveloperCredentialProfileData, ApiError> {
+        let response: Envelope<DeveloperCredentialProfileData> = self
+            .post(
+                &format!("/api/v1/tool-accounts/{account_id}/developer-credential-profile"),
+                Some(token),
+                &BindDeveloperCredentialProfileRequest {
+                    profile_id: profile_id.to_string(),
+                },
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn unbind_developer_credential_profile(
+        &self,
+        token: &str,
+        account_id: &str,
+    ) -> Result<(), ApiError> {
+        self.delete_empty(
+            &format!("/api/v1/tool-accounts/{account_id}/developer-credential-profile"),
+            Some(token),
+        )
+        .await
+    }
+
     async fn sync_session_action(
         &self,
         token: &str,
@@ -371,6 +442,22 @@ impl ApiClient {
     ) -> Result<T, ApiError> {
         let request = self.client.post(self.endpoint(path)).json(body);
         self.send(request, token).await
+    }
+
+    async fn delete_empty(&self, path: &str, token: Option<&str>) -> Result<(), ApiError> {
+        let request = self.client.delete(self.endpoint(path));
+        let request = match token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        };
+        let response = request.send().await.map_err(ApiError::transport)?;
+        let status = response.status();
+        let body = response.text().await.map_err(ApiError::transport)?;
+        if status.is_success() {
+            Ok(())
+        } else {
+            Err(ApiError::from_error_response(status, body))
+        }
     }
 
     async fn send<T: DeserializeOwned>(
@@ -537,6 +624,8 @@ pub struct CreateWorkspaceRequest {
     pub project_key: String,
     pub local_start_path: String,
     pub display_name: String,
+    pub sync_git: bool,
+    pub git_sync_policy: GitSyncPolicy,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -549,6 +638,10 @@ pub struct WorkspaceData {
     pub local_start_path: String,
     pub display_name: String,
     pub remote_path: Option<String>,
+    #[serde(default = "default_sync_git")]
+    pub sync_git: bool,
+    #[serde(default)]
+    pub git_sync_policy: GitSyncPolicy,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -559,6 +652,31 @@ pub struct CreateSyncSessionRequest {
     pub node_id: Option<String>,
     pub local_path: Option<String>,
     pub sync_mode: String,
+    pub sync_git: bool,
+    pub exclude: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GitSyncPolicy {
+    pub exclude_hooks: bool,
+    pub exclude_locks: bool,
+    pub require_clean_git_lock: bool,
+    pub warn_concurrent_git: bool,
+}
+
+impl Default for GitSyncPolicy {
+    fn default() -> Self {
+        Self {
+            exclude_hooks: true,
+            exclude_locks: true,
+            require_clean_git_lock: true,
+            warn_concurrent_git: true,
+        }
+    }
+}
+
+fn default_sync_git() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -578,6 +696,10 @@ pub struct SyncSessionData {
     pub status: String,
     pub conflict_status: String,
     pub sync_mode: String,
+    #[serde(default = "default_sync_git")]
+    pub sync_git: bool,
+    #[serde(default)]
+    pub exclude: Vec<String>,
     pub mutagen_session_id: Option<String>,
     pub remote_endpoint: Option<String>,
     pub prepare_task_id: Option<String>,
@@ -593,6 +715,85 @@ pub struct CreateToolAccountRequest {
     pub timezone: String,
     pub locale: String,
     pub preferred_node_tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolAccountConfigImportRequest {
+    pub tool_type: String,
+    pub source: String,
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<ToolAccountConfigImportFile>,
+    pub include_resume_history: bool,
+    pub dry_run: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolAccountConfigImportFile {
+    pub path: String,
+    pub content_base64: String,
+    pub mode: u32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ToolAccountConfigImportData {
+    pub tool_account_id: String,
+    pub accepted: Vec<String>,
+    pub rejected: Vec<String>,
+    pub warnings: Vec<String>,
+    pub task_id: Option<String>,
+    pub account_remote_path: Option<String>,
+    pub imported_file_count: Option<u32>,
+    pub dry_run: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CreateDeveloperCredentialProfileRequest {
+    pub display_name: String,
+    pub git_identity: DeveloperCredentialGitIdentity,
+    pub github_cli: DeveloperCredentialGitHubCli,
+    pub ssh: DeveloperCredentialSsh,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DeveloperCredentialGitIdentity {
+    pub user_name: Option<String>,
+    pub user_email: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DeveloperCredentialGitHubCli {
+    pub mode: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DeveloperCredentialSsh {
+    pub mode: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BindDeveloperCredentialProfileRequest {
+    pub profile_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DeveloperCredentialProfileListData {
+    items: Vec<DeveloperCredentialProfileData>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct DeveloperCredentialProfileData {
+    pub id: String,
+    pub user_id: String,
+    pub display_name: String,
+    pub status: String,
+    pub git_identity: serde_json::Value,
+    pub github_cli_mode: String,
+    pub ssh_mode: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

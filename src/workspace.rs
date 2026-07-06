@@ -1,10 +1,13 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 
 pub const DEFAULT_EXCLUDES: &[&str] = &[
-    ".git",
+    ".git/**/*.lock",
+    ".git/hooks",
+    ".git/worktrees",
     "node_modules",
     "target",
     "dist",
@@ -17,6 +20,12 @@ pub struct WorkspaceIdentity {
     pub local_path: PathBuf,
     pub project_key: String,
     pub display_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitLockStatus {
+    pub git_dir: PathBuf,
+    pub lock_paths: Vec<PathBuf>,
 }
 
 pub fn identify_workspace(path: Option<&Path>) -> Result<WorkspaceIdentity> {
@@ -45,6 +54,59 @@ pub fn identify_workspace(path: Option<&Path>) -> Result<WorkspaceIdentity> {
         project_key,
         display_name,
     })
+}
+
+pub fn check_git_locks(workspace_path: &Path) -> Result<Option<GitLockStatus>> {
+    let git_dir = workspace_path.join(".git");
+    if !git_dir.is_dir() {
+        return Ok(None);
+    }
+
+    let mut lock_paths = Vec::new();
+    collect_git_locks(&git_dir, &git_dir, &mut lock_paths)?;
+    Ok(Some(GitLockStatus {
+        git_dir,
+        lock_paths,
+    }))
+}
+
+pub fn ensure_git_ready(workspace_path: &Path) -> Result<()> {
+    let Some(status) = check_git_locks(workspace_path)? else {
+        return Ok(());
+    };
+    if status.lock_paths.is_empty() {
+        return Ok(());
+    }
+    let paths = status
+        .lock_paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    bail!(
+        "workspace Git metadata has active lock files; finish or abort the local Git operation before starting a remote session:\n{}",
+        paths
+    );
+}
+
+fn collect_git_locks(root: &Path, current: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(current)
+        .with_context(|| format!("failed to read Git directory {}", current.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            if path == root.join("hooks") || path == root.join("worktrees") {
+                continue;
+            }
+            collect_git_locks(root, &path, output)?;
+        } else if path.extension().and_then(|value| value.to_str()) == Some("lock") {
+            output.push(path);
+        }
+    }
+    output.sort();
+    Ok(())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

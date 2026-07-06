@@ -11,25 +11,33 @@ mod ssh;
 mod wireguard;
 mod workspace;
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use clap::Parser;
 use tokio::time::sleep;
 
 use crate::api::{
-    ApiClient, AuthToken, BindingStatusData, CreateSyncSessionRequest, CreateToolAccountRequest,
-    CreateWorkspaceRequest, RegisterDeviceRequest, SyncSessionData, ToolAccountData, WorkspaceData,
+    ApiClient, AuthToken, BindingStatusData, CreateDeveloperCredentialProfileRequest,
+    CreateSyncSessionRequest, CreateToolAccountRequest, CreateWorkspaceRequest,
+    DeveloperCredentialGitHubCli, DeveloperCredentialGitIdentity, DeveloperCredentialProfileData,
+    DeveloperCredentialSsh, GitSyncPolicy, RegisterDeviceRequest, SyncSessionData,
+    ToolAccountConfigImportFile, ToolAccountConfigImportRequest, ToolAccountData, WorkspaceData,
 };
 use crate::cli::{
-    AccountCommand, AccountDefaultCommand, Cli, Command, DepsCommand, LoginMethod, SshCommand,
-    SyncCommand, WireGuardCommand,
+    AccountCommand, AccountDefaultCommand, Cli, Command, CredentialsCommand, DepsCommand,
+    LoginMethod, SshCommand, SyncCommand, WireGuardCommand,
 };
 use crate::config::{AppPaths, Config};
 use crate::dependencies::DependencyManager;
 use crate::doctor::Doctor;
 use crate::local_state::{LocalDevice, LocalState, LocalSyncSession, LocalWorkspace};
 use crate::secrets::{device_token_key, user_token_key, SecretStore};
+
+const CONFIG_IMPORT_MAX_FILE_BYTES: u64 = 1024 * 1024;
+const CONFIG_IMPORT_MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -59,6 +67,12 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Account(AccountCommand::List) => account_list(paths).await,
         Command::Account(AccountCommand::Create(args)) => account_create(paths, args).await,
         Command::Account(AccountCommand::Bind(args)) => account_bind(paths, args).await,
+        Command::Account(AccountCommand::ImportConfig(args)) => {
+            account_import_config(paths, args).await
+        }
+        Command::Account(AccountCommand::ExportConfig(_args)) => {
+            bail!("account config export is not implemented yet")
+        }
         Command::Account(AccountCommand::Verify(args)) => account_verify(paths, args).await,
         Command::Account(AccountCommand::Status(args)) => account_status(paths, args).await,
         Command::Account(AccountCommand::Disable(args)) => account_disable(paths, args).await,
@@ -70,6 +84,14 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Command::Account(AccountCommand::Default(AccountDefaultCommand::Clear(args))) => {
             account_default_clear(paths, args)
+        }
+        Command::Credentials(CredentialsCommand::List) => credentials_list(paths).await,
+        Command::Credentials(CredentialsCommand::Create(args)) => {
+            credentials_create(paths, args).await
+        }
+        Command::Credentials(CredentialsCommand::Bind(args)) => credentials_bind(paths, args).await,
+        Command::Credentials(CredentialsCommand::Unbind(args)) => {
+            credentials_unbind(paths, args).await
         }
         Command::Attach(args) => attach(paths, args).await,
     }
@@ -394,12 +416,149 @@ async fn account_bind(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Resul
     Ok(())
 }
 
+async fn account_import_config(
+    paths: AppPaths,
+    args: crate::cli::AccountImportConfigArgs,
+) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let include = discover_claude_config_paths(args.include_resume_history)?;
+    if include.is_empty() {
+        println!("no local Claude config paths found");
+        return Ok(());
+    }
+    println!("candidate paths:");
+    for path in &include {
+        println!("  {path}");
+    }
+    if args.include_resume_history {
+        println!("resume history may include private prompts, transcripts, and local paths.");
+    }
+    if !args.yes
+        && !args.dry_run
+        && !prompt_yes_no("Import these files to the remote account now? [y/N] ")?
+    {
+        bail!("config import not confirmed");
+    }
+    let files = if args.dry_run {
+        Vec::new()
+    } else {
+        collect_claude_config_files(&include)?
+    };
+    let result = ApiClient::new(server_url)?
+        .create_tool_account_config_import(
+            &token,
+            &args.account,
+            &ToolAccountConfigImportRequest {
+                tool_type: args.tool,
+                source: "local_cli".to_string(),
+                include,
+                exclude: vec![
+                    "~/.claude.json".to_string(),
+                    "~/.claude/cache".to_string(),
+                    "~/.claude/logs".to_string(),
+                    "~/.claude/transcripts".to_string(),
+                ],
+                files,
+                include_resume_history: args.include_resume_history,
+                dry_run: args.dry_run,
+            },
+        )
+        .await?;
+    println!("tool account: {}", result.tool_account_id);
+    println!("dry run: {}", result.dry_run);
+    println!("accepted:");
+    for path in result.accepted {
+        println!("  {path}");
+    }
+    println!("rejected:");
+    for path in result.rejected {
+        println!("  {path}");
+    }
+    for warning in result.warnings {
+        println!("warning: {warning}");
+    }
+    if let Some(task_id) = result.task_id {
+        println!("task: {task_id}");
+    }
+    if let Some(path) = result.account_remote_path {
+        println!("remote account path: {path}");
+    }
+    if let Some(count) = result.imported_file_count {
+        println!("files queued: {count}");
+    }
+    Ok(())
+}
+
 async fn account_verify(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths)?;
     let binding = ApiClient::new(server_url)?
         .verify_tool_account_binding(&token, &args.account_id)
         .await?;
     print_binding_status(&binding);
+    Ok(())
+}
+
+async fn credentials_list(paths: AppPaths) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let profiles = ApiClient::new(server_url)?
+        .list_developer_credential_profiles(&token)
+        .await?;
+    if profiles.is_empty() {
+        println!("developer credential profiles: none");
+        return Ok(());
+    }
+    for profile in profiles {
+        print_developer_credential_profile(&profile);
+    }
+    Ok(())
+}
+
+async fn credentials_create(
+    paths: AppPaths,
+    args: crate::cli::CredentialsCreateArgs,
+) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let profile = ApiClient::new(server_url)?
+        .create_developer_credential_profile(
+            &token,
+            &CreateDeveloperCredentialProfileRequest {
+                display_name: args.name,
+                git_identity: DeveloperCredentialGitIdentity {
+                    user_name: args.git_user_name,
+                    user_email: args.git_user_email,
+                },
+                github_cli: DeveloperCredentialGitHubCli { mode: args.gh_mode },
+                ssh: DeveloperCredentialSsh {
+                    mode: args.ssh_mode,
+                },
+            },
+        )
+        .await?;
+    print_developer_credential_profile(&profile);
+    Ok(())
+}
+
+async fn credentials_bind(paths: AppPaths, args: crate::cli::CredentialsBindArgs) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let profile = ApiClient::new(server_url)?
+        .bind_developer_credential_profile(&token, &args.account, &args.profile)
+        .await?;
+    print_developer_credential_profile(&profile);
+    Ok(())
+}
+
+async fn credentials_unbind(
+    paths: AppPaths,
+    args: crate::cli::CredentialsUnbindArgs,
+) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    ApiClient::new(server_url)?
+        .unbind_developer_credential_profile(&token, &args.account)
+        .await?;
+    println!(
+        "developer credential profile unbound from account {}",
+        args.account
+    );
     Ok(())
 }
 
@@ -479,6 +638,181 @@ fn print_tool_account(account: &ToolAccountData) {
     if !account.preferred_node_tags.is_empty() {
         println!("tags: {}", account.preferred_node_tags.join(","));
     }
+}
+
+fn print_developer_credential_profile(profile: &DeveloperCredentialProfileData) {
+    println!(
+        "{}\t{}\t{}\tgh={}\tssh={}",
+        profile.id, profile.display_name, profile.status, profile.github_cli_mode, profile.ssh_mode
+    );
+    if !profile.git_identity.is_null() {
+        println!("git: {}", profile.git_identity);
+    }
+}
+
+fn discover_claude_config_paths(include_resume_history: bool) -> Result<Vec<String>> {
+    let home = home_dir()?;
+    let claude = home.join(".claude");
+    let mut paths = Vec::new();
+    for relative in [
+        "settings.json",
+        "CLAUDE.md",
+        "agents",
+        "skills",
+        "plugins",
+        "hooks",
+        "rules",
+    ] {
+        push_if_exists(&claude, relative, &mut paths);
+    }
+    for entry in std::fs::read_dir(&claude)
+        .with_context(|| format!("failed to read {}", claude.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file()
+            && path.extension().and_then(|value| value.to_str()) == Some("md")
+            && path.file_name().and_then(|value| value.to_str()) != Some("CLAUDE.md")
+        {
+            if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
+                paths.push(format!("~/.claude/{name}"));
+            }
+        }
+    }
+    if include_resume_history {
+        for relative in [
+            "projects",
+            "sessions",
+            "history.jsonl",
+            "file-history",
+            "plans",
+            "tasks",
+            "session-env",
+        ] {
+            push_if_exists(&claude, relative, &mut paths);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn push_if_exists(root: &Path, relative: &str, output: &mut Vec<String>) {
+    if root.join(relative).exists() {
+        output.push(format!("~/.claude/{relative}"));
+    }
+}
+
+fn collect_claude_config_files(include: &[String]) -> Result<Vec<ToolAccountConfigImportFile>> {
+    let home = home_dir()?;
+    let mut files = Vec::new();
+    let mut total_bytes = 0_u64;
+    for path in include {
+        let local_path = expand_claude_config_path(&home, path)?;
+        if local_path.is_file() {
+            push_config_file(&home, &local_path, &mut files, &mut total_bytes)?;
+        } else if local_path.is_dir() {
+            collect_config_dir(&home, &local_path, &mut files, &mut total_bytes)?;
+        }
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    files.dedup_by(|left, right| left.path == right.path);
+    Ok(files)
+}
+
+fn collect_config_dir(
+    home: &Path,
+    dir: &Path,
+    files: &mut Vec<ToolAccountConfigImportFile>,
+    total_bytes: &mut u64,
+) -> Result<()> {
+    let mut entries = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read config directory {}", dir.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_config_dir(home, &path, files, total_bytes)?;
+        } else if file_type.is_file() {
+            push_config_file(home, &path, files, total_bytes)?;
+        }
+    }
+    Ok(())
+}
+
+fn push_config_file(
+    home: &Path,
+    path: &Path,
+    files: &mut Vec<ToolAccountConfigImportFile>,
+    total_bytes: &mut u64,
+) -> Result<()> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("failed to stat config file {}", path.display()))?;
+    if metadata.len() > CONFIG_IMPORT_MAX_FILE_BYTES {
+        bail!(
+            "config file {} is larger than {} bytes",
+            path.display(),
+            CONFIG_IMPORT_MAX_FILE_BYTES
+        );
+    }
+    *total_bytes += metadata.len();
+    if *total_bytes > CONFIG_IMPORT_MAX_TOTAL_BYTES {
+        bail!(
+            "config import exceeds {} bytes; use --include-resume-history only for small histories",
+            CONFIG_IMPORT_MAX_TOTAL_BYTES
+        );
+    }
+    let content = std::fs::read(path)
+        .with_context(|| format!("failed to read config file {}", path.display()))?;
+    files.push(ToolAccountConfigImportFile {
+        path: to_claude_import_path(home, path)?,
+        content_base64: BASE64_STANDARD.encode(content),
+        mode: 0o600,
+    });
+    Ok(())
+}
+
+fn expand_claude_config_path(home: &Path, path: &str) -> Result<PathBuf> {
+    let suffix = path
+        .strip_prefix("~/.claude/")
+        .or_else(|| path.strip_prefix("$HOME/.claude/"))
+        .context("only ~/.claude paths can be imported")?;
+    if suffix
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        bail!("unsafe config import path: {path}");
+    }
+    Ok(home.join(".claude").join(suffix))
+}
+
+fn to_claude_import_path(home: &Path, path: &Path) -> Result<String> {
+    let claude = home.join(".claude");
+    let relative = path
+        .strip_prefix(&claude)
+        .with_context(|| format!("{} is outside {}", path.display(), claude.display()))?;
+    let relative = relative
+        .to_str()
+        .context("Claude config path is not valid UTF-8")?
+        .replace('\\', "/");
+    if relative
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        bail!("unsafe config import path: {}", path.display());
+    }
+    Ok(format!("~/.claude/{relative}"))
+}
+
+fn home_dir() -> Result<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set")
 }
 
 fn print_binding_status(status: &BindingStatusData) {
@@ -634,6 +968,8 @@ async fn ensure_workspace_sync(
             local_start_path: local.local_path,
             display_name: local.display_name,
             remote_path: local.remote_path,
+            sync_git: true,
+            git_sync_policy: GitSyncPolicy::default(),
             created_at: String::new(),
             updated_at: String::new(),
         },
@@ -655,6 +991,8 @@ async fn ensure_workspace_sync(
                         project_key: identity.project_key.clone(),
                         local_start_path: identity.local_path.to_string_lossy().to_string(),
                         display_name: identity.display_name.clone(),
+                        sync_git: true,
+                        git_sync_policy: GitSyncPolicy::default(),
                     },
                 )
                 .await?;
@@ -676,6 +1014,11 @@ async fn ensure_workspace_sync(
                         node_id: None,
                         local_path: Some(identity.local_path.to_string_lossy().to_string()),
                         sync_mode: "two_way".to_string(),
+                        sync_git: true,
+                        exclude: workspace::DEFAULT_EXCLUDES
+                            .iter()
+                            .map(|value| (*value).to_string())
+                            .collect(),
                     },
                 )
                 .await?

@@ -32,6 +32,8 @@ pub enum Command {
     Sync(SyncCommand),
     #[command(subcommand)]
     Account(AccountCommand),
+    #[command(subcommand)]
+    Credentials(CredentialsCommand),
     Attach(AttachArgs),
 }
 
@@ -188,6 +190,8 @@ pub enum AccountCommand {
     List,
     Create(AccountCreateArgs),
     Bind(AccountIdArgs),
+    ImportConfig(AccountImportConfigArgs),
+    ExportConfig(AccountIdArgs),
     Verify(AccountIdArgs),
     Status(AccountIdArgs),
     Disable(AccountIdArgs),
@@ -226,6 +230,65 @@ pub struct AccountCreateArgs {
 #[derive(Debug, Args)]
 pub struct AccountIdArgs {
     pub account_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AccountImportConfigArgs {
+    #[arg(long, default_value = "claude")]
+    pub tool: String,
+
+    #[arg(long)]
+    pub account: String,
+
+    #[arg(long)]
+    pub include_resume_history: bool,
+
+    #[arg(long)]
+    pub dry_run: bool,
+
+    #[arg(long)]
+    pub yes: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CredentialsCommand {
+    List,
+    Create(CredentialsCreateArgs),
+    Bind(CredentialsBindArgs),
+    Unbind(CredentialsUnbindArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CredentialsCreateArgs {
+    #[arg(long)]
+    pub name: String,
+
+    #[arg(long)]
+    pub git_user_name: Option<String>,
+
+    #[arg(long)]
+    pub git_user_email: Option<String>,
+
+    #[arg(long, default_value = "remote_login")]
+    pub gh_mode: String,
+
+    #[arg(long, default_value = "agent_forwarding")]
+    pub ssh_mode: String,
+}
+
+#[derive(Debug, Args)]
+pub struct CredentialsBindArgs {
+    #[arg(long)]
+    pub account: String,
+
+    #[arg(long)]
+    pub profile: String,
+}
+
+#[derive(Debug, Args)]
+pub struct CredentialsUnbindArgs {
+    #[arg(long)]
+    pub account: String,
 }
 
 #[derive(Debug, Args)]
