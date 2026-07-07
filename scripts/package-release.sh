@@ -48,7 +48,7 @@ for target in $TARGETS; do
   install -m 0755 "target/$target/release/fclaude" "$work/bin/fclaude"
   install -m 0755 "target/$target/release/agent-remote-wireguard" "$work/bin/agent-remote-wireguard"
   download_mutagen "$target" "$work/bin/mutagen"
-  cp README.md LICENSE THIRD_PARTY_NOTICES.md "$work/"
+  cp README.md README.zh-CN.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "$work/"
   install -m 0755 scripts/install-cli.sh "$work/install.sh"
   cat > "$work/dependencies/manifest.json" <<EOF
 {

@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   echo "Usage: $0 <version>" >&2
-  echo "Example: $0 0.1.0" >&2
+  echo "Example: $0 0.0.2" >&2
 }
 
 if [[ $# -ne 1 ]]; then
@@ -40,8 +40,20 @@ if readme.exists():
         text,
     )
     readme.write_text(text)
+
+readme_cn = Path("README.zh-CN.md")
+if readme_cn.exists():
+    text = readme_cn.read_text()
+    text = re.sub(
+        r"VERSION=[0-9A-Za-z.+-]+ scripts/package-release\.sh",
+        f"VERSION={version} scripts/package-release.sh",
+        text,
+    )
+    readme_cn.write_text(text)
 PY
 
 cargo metadata --format-version=1 --no-deps >/dev/null
+
+scripts/update-changelog.sh "$VERSION"
 
 echo "Prepared agent-remote-cli v${VERSION}"

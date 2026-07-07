@@ -1,5 +1,7 @@
 # agent-remote-cli
 
+English | [中文](README.zh-CN.md)
+
 Rust CLI for agent-remote local device management.
 
 The package provides the `agent-remote` command. Tool-specific launchers such as `fclaude` are intentionally separate so regular `claude` usage remains untouched.
@@ -64,7 +66,7 @@ Managed external dependencies are expected under:
 ~/.config/agent-remote/dependencies/manifest.json
 ```
 
-The current implementation records and checks the manifest for Mutagen and WireGuard helpers. Release packaging will place the actual platform binaries there.
+The current implementation records and checks the manifest for Mutagen and WireGuard helpers. Release packages include the managed Mutagen binary and WireGuard helper for each supported platform.
 
 ## WireGuard and SSH
 

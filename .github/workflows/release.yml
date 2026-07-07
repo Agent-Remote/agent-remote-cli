@@ -31,7 +31,7 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -55,7 +55,7 @@ jobs:
           TARGETS: ${{ matrix.target }}
           VERSION: ${{ steps.version.outputs.value }}
         run: scripts/package-release.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: agent-remote-cli-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -74,11 +74,12 @@ jobs:
           version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
           version="${version#v}"
           echo "value=${version}" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.1
         with:
           path: dist
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3.0.1
         with:
           tag_name: v${{ steps.version.outputs.value }}
+          generate_release_notes: true
           files: dist/*.tar.gz

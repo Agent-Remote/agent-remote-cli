@@ -16,7 +16,7 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
@@ -46,7 +46,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
-            git add Cargo.toml Cargo.lock README.md
+            git add Cargo.toml Cargo.lock README.md README.zh-CN.md CHANGELOG.md
             git commit -m "chore: release v${version}"
           fi
           git tag "v${version}"
