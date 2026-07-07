@@ -24,7 +24,9 @@ download_mutagen() {
   local url="https://github.com/mutagen-io/mutagen/releases/download/v${MUTAGEN_VERSION}/${asset}"
   local tmp
   tmp="$(mktemp -d)"
-  curl -fsSL "$url" -o "$tmp/mutagen.tar.gz"
+  curl --fail --show-error --location \
+    --retry 5 --retry-all-errors --retry-delay 5 \
+    "$url" -o "$tmp/mutagen.tar.gz"
   tar -xzf "$tmp/mutagen.tar.gz" -C "$tmp"
   install -m 0755 "$tmp/mutagen" "$dest"
   rm -rf "$tmp"
@@ -70,4 +72,3 @@ EOF
 done
 
 echo "release artifacts written to $OUT_DIR"
-
