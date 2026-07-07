@@ -109,6 +109,26 @@ or:
 scripts/run-quality-checks.sh
 ```
 
+## Release Packaging
+
+Build macOS and Linux CLI archives:
+
+```sh
+VERSION=0.1.0 scripts/package-release.sh
+```
+
+The release archive includes:
+
+- `agent-remote`
+- `fclaude`
+- `agent-remote-wireguard`
+- managed `mutagen`
+- dependency manifest and third-party notices
+
+The packaged files should be installed into the agent-remote home or placed on `PATH` by the platform installer.
+
+GitHub Actions runs the same packaging flow for `v*` tags and uploads the archives to the GitHub Release.
+
 ## License
 
 agent-remote-cli is licensed under GPL-3.0-only. See `LICENSE`.
