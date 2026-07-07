@@ -18,6 +18,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    Init(InitArgs),
     Login(LoginArgs),
     Logout(LogoutArgs),
     Status(StatusArgs),
@@ -35,6 +36,36 @@ pub enum Command {
     #[command(subcommand)]
     Credentials(CredentialsCommand),
     Attach(AttachArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    #[arg(long, env = "AGENT_REMOTE_SERVER_URL")]
+    pub server_url: Option<String>,
+
+    #[arg(long, value_enum, default_value_t = LoginMethod::Password)]
+    pub method: LoginMethod,
+
+    #[arg(long, env = "AGENT_REMOTE_USERNAME")]
+    pub username: Option<String>,
+
+    #[arg(long)]
+    pub device_name: Option<String>,
+
+    #[arg(long)]
+    pub ssh_public_key: Option<PathBuf>,
+
+    #[arg(long)]
+    pub wireguard_public_key: Option<String>,
+
+    #[arg(long)]
+    pub skip_device_registration: bool,
+
+    #[arg(long)]
+    pub skip_wireguard_config: bool,
+
+    #[arg(long)]
+    pub yes: bool,
 }
 
 #[derive(Debug, Args)]

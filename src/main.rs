@@ -48,6 +48,7 @@ async fn main() -> Result<()> {
 async fn run(cli: Cli) -> Result<()> {
     let paths = AppPaths::new(cli.home)?;
     match cli.command {
+        Command::Init(args) => init(paths, args).await,
         Command::Login(args) => login(paths, args).await,
         Command::Logout(args) => logout(paths, args.revoke_remote).await,
         Command::Status(args) => status(paths, args.online).await,
@@ -97,6 +98,93 @@ async fn run(cli: Cli) -> Result<()> {
     }
 }
 
+struct DeviceRegistrationOptions {
+    device_name: Option<String>,
+    ssh_public_key: Option<PathBuf>,
+    wireguard_public_key: Option<String>,
+    skip_device_registration: bool,
+}
+
+async fn init(paths: AppPaths, args: crate::cli::InitArgs) -> Result<()> {
+    println!("agent-remote initialization");
+    paths.ensure_base_dirs()?;
+    let state = LocalState::open(&paths)?;
+    state.init_schema()?;
+
+    let manager = DependencyManager::new(paths.clone());
+    manager.ensure_manifest()?;
+    println!("checking managed dependencies...");
+    for status in manager.check_all()? {
+        println!(
+            "{} {} at {}",
+            if status.installed { "ok" } else { "warn" },
+            status.name,
+            status.binary_path.display()
+        );
+    }
+
+    let config = Config::load(&paths)?;
+    let server_url = match args.server_url.or(config.server_url) {
+        Some(value) => normalize_server_url(&value),
+        None if args.yes => "http://127.0.0.1:8765".to_string(),
+        None => normalize_server_url(&prompt_line_default("Server URL", "http://127.0.0.1:8765")?),
+    };
+    let client = ApiClient::new(server_url.clone())?;
+    match client.healthz().await {
+        Ok(health) => println!("server reachable: {}", health.status),
+        Err(error) => println!("warn server health check failed: {error}"),
+    }
+
+    println!("login with an existing agent-remote user account.");
+    let login_args = crate::cli::LoginArgs {
+        server_url: Some(server_url.clone()),
+        method: args.method,
+        username: args.username,
+        password: None,
+        totp_code: None,
+        device_name: args.device_name.clone(),
+        ssh_public_key: args.ssh_public_key.clone(),
+        wireguard_public_key: args.wireguard_public_key.clone(),
+        skip_device_registration: args.skip_device_registration,
+    };
+    let user_token = match login_args.method {
+        LoginMethod::Password => password_login(&client, &login_args).await?,
+        LoginMethod::DeviceCode => device_code_login(&client).await?,
+    };
+
+    let registered_device_id = finalize_login(
+        paths.clone(),
+        server_url.clone(),
+        user_token,
+        DeviceRegistrationOptions {
+            device_name: args.device_name,
+            ssh_public_key: init_ssh_public_key(
+                args.ssh_public_key,
+                args.skip_device_registration,
+            )?,
+            wireguard_public_key: args.wireguard_public_key,
+            skip_device_registration: args.skip_device_registration,
+        },
+    )
+    .await?;
+
+    if !args.skip_wireguard_config && registered_device_id.is_some() {
+        let should_write = args.yes
+            || prompt_yes_no_default("Fetch and write WireGuard config now? [Y/n] ", true)?;
+        if should_write {
+            match write_default_wireguard_config(paths.clone()).await {
+                Ok(()) => {}
+                Err(error) => println!("warn WireGuard config not written: {error}"),
+            }
+        }
+    }
+
+    println!("initialization complete");
+    println!("next: agent-remote status --online");
+    println!("next: fclaude");
+    Ok(())
+}
+
 async fn login(paths: AppPaths, args: crate::cli::LoginArgs) -> Result<()> {
     paths.ensure_base_dirs()?;
     let mut config = Config::load(&paths)?;
@@ -119,8 +207,37 @@ async fn login(paths: AppPaths, args: crate::cli::LoginArgs) -> Result<()> {
         LoginMethod::DeviceCode => device_code_login(&client).await?,
     };
 
+    finalize_login(
+        paths,
+        server_url,
+        user_token,
+        DeviceRegistrationOptions {
+            device_name: args.device_name,
+            ssh_public_key: args.ssh_public_key,
+            wireguard_public_key: args.wireguard_public_key,
+            skip_device_registration: args.skip_device_registration,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn finalize_login(
+    paths: AppPaths,
+    server_url: String,
+    user_token: AuthToken,
+    options: DeviceRegistrationOptions,
+) -> Result<Option<String>> {
+    paths.ensure_base_dirs()?;
+    let mut config = Config::load(&paths)?;
+    config.server_url = Some(server_url.clone());
+    config.save(&paths)?;
+
+    let state = LocalState::open(&paths)?;
+    state.init_schema()?;
+    DependencyManager::new(paths.clone()).ensure_manifest()?;
     let secret_store = SecretStore::new(paths.clone());
-    if args.skip_device_registration {
+    if options.skip_device_registration {
         let key = user_token_key(&server_url);
         let backend = secret_store.set_secret(&key, &user_token.access_token)?;
         state.set_kv("last_login_mode", "user_token")?;
@@ -128,11 +245,11 @@ async fn login(paths: AppPaths, args: crate::cli::LoginArgs) -> Result<()> {
         println!("stored user token in {backend}");
         println!("token expires in {} seconds", user_token.expires_in);
         println!("device registration skipped");
-        return Ok(());
+        return Ok(None);
     }
 
-    let ssh_public_key = resolve_ssh_public_key(args.ssh_public_key.as_deref())?;
-    let device_name = args
+    let ssh_public_key = resolve_ssh_public_key(options.ssh_public_key.as_deref())?;
+    let device_name = options
         .device_name
         .unwrap_or_else(platform::default_device_name);
     let platform = platform::current_platform()?;
@@ -140,9 +257,9 @@ async fn login(paths: AppPaths, args: crate::cli::LoginArgs) -> Result<()> {
         name: device_name.clone(),
         platform,
         ssh_public_key,
-        wireguard_public_key: args.wireguard_public_key,
+        wireguard_public_key: options.wireguard_public_key,
     };
-    let registration = client
+    let registration = ApiClient::new(server_url.clone())?
         .register_device(&user_token.access_token, &request)
         .await
         .context("failed to register local device")?;
@@ -173,7 +290,7 @@ async fn login(paths: AppPaths, args: crate::cli::LoginArgs) -> Result<()> {
         "stored device token in {backend}; expires in {} seconds",
         registration.data.device_token.expires_in
     );
-    Ok(())
+    Ok(Some(device.id))
 }
 
 async fn password_login(client: &ApiClient, args: &crate::cli::LoginArgs) -> Result<AuthToken> {
@@ -308,12 +425,18 @@ async fn status(paths: AppPaths, online: bool) -> Result<()> {
 }
 
 async fn wireguard_config(paths: AppPaths, args: crate::cli::WireGuardConfigArgs) -> Result<()> {
+    write_wireguard_config(paths, args.output).await
+}
+
+async fn write_default_wireguard_config(paths: AppPaths) -> Result<()> {
+    write_wireguard_config(paths, None).await
+}
+
+async fn write_wireguard_config(paths: AppPaths, output: Option<PathBuf>) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths)?;
     let client = ApiClient::new(server_url)?;
     let config = client.get_wireguard_config(&token).await?;
-    let output = args
-        .output
-        .unwrap_or_else(|| wireguard::default_config_path(&paths));
+    let output = output.unwrap_or_else(|| wireguard::default_config_path(&paths));
     wireguard::write_config(&output, &config)?;
     println!("wrote WireGuard config to {}", output.display());
     println!("device: {}", config.device_id);
@@ -1121,6 +1244,36 @@ fn prompt_line(prompt: &str) -> Result<String> {
     Ok(value)
 }
 
+fn prompt_line_default(prompt: &str, default: &str) -> Result<String> {
+    use std::io::{self, Write};
+
+    print!("{prompt} [{default}]: ");
+    io::stdout().flush()?;
+    let mut value = String::new();
+    io::stdin().read_line(&mut value)?;
+    let value = value.trim();
+    if value.is_empty() {
+        Ok(default.to_string())
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+fn prompt_optional_line(prompt: &str) -> Result<Option<String>> {
+    use std::io::{self, Write};
+
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut value = String::new();
+    io::stdin().read_line(&mut value)?;
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
+}
+
 fn prompt_yes_no(prompt: &str) -> Result<bool> {
     use std::io::{self, Write};
 
@@ -1130,6 +1283,38 @@ fn prompt_yes_no(prompt: &str) -> Result<bool> {
     io::stdin().read_line(&mut value)?;
     let normalized = value.trim().to_ascii_lowercase();
     Ok(matches!(normalized.as_str(), "y" | "yes"))
+}
+
+fn prompt_yes_no_default(prompt: &str, default: bool) -> Result<bool> {
+    use std::io::{self, Write};
+
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut value = String::new();
+    io::stdin().read_line(&mut value)?;
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(default);
+    }
+    Ok(matches!(normalized.as_str(), "y" | "yes"))
+}
+
+fn init_ssh_public_key(
+    explicit: Option<PathBuf>,
+    skip_device_registration: bool,
+) -> Result<Option<PathBuf>> {
+    if skip_device_registration {
+        return Ok(explicit);
+    }
+    if explicit.is_some() {
+        return Ok(explicit);
+    }
+    if let Some(default_path) = platform::default_ssh_public_key_path() {
+        println!("using SSH public key {}", default_path.display());
+        return Ok(Some(default_path));
+    }
+    let path = prompt_optional_line("SSH public key path: ")?;
+    Ok(path.map(PathBuf::from))
 }
 
 fn resolve_ssh_public_key(explicit: Option<&std::path::Path>) -> Result<String> {

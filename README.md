@@ -7,6 +7,7 @@ The package provides the `agent-remote` command. Tool-specific launchers such as
 ## Commands
 
 ```sh
+agent-remote init
 agent-remote login --server-url https://agent-remote.example.com --username alice
 agent-remote status
 agent-remote doctor --fix
@@ -24,6 +25,16 @@ agent-remote ssh check --session-id <session-id>
 agent-remote attach --session-id <session-id> --print-only
 agent-remote logout
 ```
+
+`agent-remote init` is the recommended first-run path. It guides the user through:
+
+- selecting the control-plane API URL
+- logging in with an existing agent-remote user account
+- registering the local device and SSH public key
+- checking managed external dependencies
+- fetching the default WireGuard configuration when available
+
+The CLI initialization flow does not create users. Administrators create regular users from the admin console after the server has been bootstrapped.
 
 `agent-remote login` stores tokens in the platform credential store when available:
 
@@ -78,7 +89,7 @@ agent-remote sync resolve
 agent-remote sync reset
 ```
 
-The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. Default excludes include `.git`, `node_modules`, `target`, `dist`, `.venv`, and `__pycache__`.
+The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. `.git` sync is enabled by default for project workspaces, while lock files, hooks, worktrees, and common build/cache directories are excluded.
 
 ## Tool Accounts
 
