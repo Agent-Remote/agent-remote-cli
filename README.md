@@ -114,7 +114,7 @@ scripts/run-quality-checks.sh
 Build macOS and Linux CLI archives:
 
 ```sh
-VERSION=0.1.0 scripts/package-release.sh
+VERSION=0.0.2 scripts/package-release.sh
 ```
 
 The release archive includes:
