@@ -116,7 +116,7 @@ scripts/run-quality-checks.sh
 构建 macOS 和 Linux CLI 归档：
 
 ```sh
-VERSION=0.0.2 scripts/package-release.sh
+VERSION=0.0.3 scripts/package-release.sh
 ```
 
 发布归档包含：

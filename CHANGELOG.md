@@ -2,6 +2,14 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.3 - 2026-07-07
+
+- fix: update release installer docs (aca526d)
+- feat: add one-click installer (696e9b7)
+- docs: sync Chinese README with English (fac0b5b)
+- chore: standardize release metadata (acd8c92)
+- ci: allow manual release dispatch (075ea00)
+
 ## v0.0.2 - 2026-07-07
 
 - ci: allow manual release dispatch (075ea00)
