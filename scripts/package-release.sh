@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.0}"
+default_version() {
+  sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1
+}
+
+VERSION="${VERSION:-$(default_version)}"
 OUT_DIR="${OUT_DIR:-dist}"
 TARGETS="${TARGETS:-x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin}"
 MUTAGEN_VERSION="${MUTAGEN_VERSION:-0.18.1}"
@@ -36,7 +40,7 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 for target in $TARGETS; do
-  cargo build --release --target "$target"
+  AGENT_REMOTE_VERSION="$VERSION" cargo build --release --target "$target"
   package="agent-remote-cli-${VERSION}-${target}"
   work="$OUT_DIR/$package"
   mkdir -p "$work/bin" "$work/dependencies"
@@ -45,6 +49,7 @@ for target in $TARGETS; do
   install -m 0755 "target/$target/release/agent-remote-wireguard" "$work/bin/agent-remote-wireguard"
   download_mutagen "$target" "$work/bin/mutagen"
   cp README.md LICENSE THIRD_PARTY_NOTICES.md "$work/"
+  install -m 0755 scripts/install-cli.sh "$work/install.sh"
   cat > "$work/dependencies/manifest.json" <<EOF
 {
   "schema_version": 1,

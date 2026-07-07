@@ -129,6 +129,14 @@ The packaged files should be installed into the agent-remote home or placed on `
 
 GitHub Actions runs the same packaging flow for `v*` tags and uploads the archives to the GitHub Release.
 
+Install a downloaded release archive:
+
+```sh
+./install.sh
+```
+
+The installer copies managed binaries into `AGENT_REMOTE_HOME/bin`, writes the dependency manifest, and links `agent-remote`, `fclaude`, and `agent-remote-wireguard` into `~/.local/bin` by default.
+
 ## License
 
 agent-remote-cli is licensed under GPL-3.0-only. See `LICENSE`.

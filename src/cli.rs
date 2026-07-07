@@ -2,10 +2,15 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+pub const VERSION: &str = match option_env!("AGENT_REMOTE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Debug, Parser)]
 #[command(
     name = "agent-remote",
-    version,
+    version = VERSION,
     about = "Manage local agent-remote state"
 )]
 pub struct Cli {
