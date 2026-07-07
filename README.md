@@ -140,7 +140,8 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
 Install a specific version or customize paths:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh |   bash -s -- --version 0.0.3 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
+  bash -s -- --version 0.0.3 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 Install a downloaded release archive:
