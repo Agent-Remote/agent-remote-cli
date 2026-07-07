@@ -131,13 +131,25 @@ The packaged files should be installed into the agent-remote home or placed on `
 
 GitHub Actions runs the same packaging flow for `v*` tags and uploads the archives to the GitHub Release.
 
+Install the latest release directly:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | bash
+```
+
+Install a specific version or customize paths:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh |   bash -s -- --version 0.0.3 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+```
+
 Install a downloaded release archive:
 
 ```sh
 ./install.sh
 ```
 
-The installer copies managed binaries into `AGENT_REMOTE_HOME/bin`, writes the dependency manifest, and links `agent-remote`, `fclaude`, and `agent-remote-wireguard` into `~/.local/bin` by default.
+The installer copies managed binaries into `AGENT_REMOTE_HOME/bin`, writes the dependency manifest, and links `agent-remote`, `fclaude`, and `agent-remote-wireguard` into `~/.local/bin` by default. It can also override the GitHub repository, version, target, OS, architecture, home directory, link directory, and symlink/copy behavior.
 
 ## License
 

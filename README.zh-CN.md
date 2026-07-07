@@ -131,13 +131,25 @@ VERSION=0.0.2 scripts/package-release.sh
 
 GitHub Actions 会在 `v*` tag 上运行相同打包流程，并把归档上传到 GitHub Release。
 
+直接安装最新 release：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | bash
+```
+
+安装指定版本或自定义路径：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh |   bash -s -- --version 0.0.3 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+```
+
 安装已下载的发布归档：
 
 ```sh
 ./install.sh
 ```
 
-安装器会把托管二进制复制到 `AGENT_REMOTE_HOME/bin`，写入 dependency manifest，并默认把 `agent-remote`、`fclaude` 和 `agent-remote-wireguard` 链接到 `~/.local/bin`。
+安装器会把托管二进制复制到 `AGENT_REMOTE_HOME/bin`，写入 dependency manifest，并默认把 `agent-remote`、`fclaude` 和 `agent-remote-wireguard` 链接到 `~/.local/bin`。它也可以覆盖 GitHub 仓库、版本、target、OS、架构、home 目录、链接目录，以及 symlink/copy 行为。
 
 ## 许可证
 
