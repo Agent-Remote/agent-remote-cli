@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   echo "Usage: $0 <version>" >&2
-  echo "Example: $0 0.0.2" >&2
+  echo "Example: $0 0.0.3" >&2
 }
 
 if [[ $# -ne 1 ]]; then
@@ -26,10 +26,26 @@ from pathlib import Path
 
 version = sys.argv[1]
 
+script = Path("scripts/prepare-release.sh")
+text = script.read_text()
+text = re.sub(r"Example: \$0 [0-9A-Za-z.+-]+", f"Example: $0 {version}", text)
+script.write_text(text)
+
 cargo = Path("Cargo.toml")
 text = cargo.read_text()
 text = re.sub(r'(?m)^version = "[^"]+"$', f'version = "{version}"', text, count=1)
 cargo.write_text(text)
+
+lock = Path("Cargo.lock")
+if lock.exists():
+    text = lock.read_text()
+    text = re.sub(
+        r'(?s)(\[\[package\]\]\nname = "agent-remote-cli"\nversion = ")[^"]+(")',
+        rf"\g<1>{version}\2",
+        text,
+        count=1,
+    )
+    lock.write_text(text)
 
 readme = Path("README.md")
 if readme.exists():
