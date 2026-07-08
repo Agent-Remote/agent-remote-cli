@@ -134,12 +134,16 @@ resolve_version() {
     return
   fi
   need_cmd curl
-  local tag
-  tag="$(curl --fail --show-error --silent --location "https://api.github.com/repos/${REPO}/releases/latest" \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-    | head -n 1)"
+  local effective tag
+  effective="$(curl --fail --show-error --silent --location --output /dev/null --write-out '%{url_effective}' "https://github.com/${REPO}/releases/latest" || true)"
+  tag="${effective##*/}"
+  if [ -z "$tag" ] || [ "$tag" = "latest" ] || [ "$tag" = "releases" ]; then
+    tag="$(curl --fail --show-error --silent --location "https://api.github.com/repos/${REPO}/releases/latest" \
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | head -n 1)"
+  fi
   if [ -z "$tag" ]; then
-    echo "failed to resolve latest release for $REPO" >&2
+    echo "failed to resolve latest release for $REPO; retry with --version 0.0.3" >&2
     exit 1
   fi
   VERSION="${tag#v}"
