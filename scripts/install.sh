@@ -12,7 +12,18 @@ TARGET_OVERRIDE="${AGENT_REMOTE_TARGET:-}"
 TMP_DIR="${TMPDIR:-/tmp}"
 KEEP_TEMP="${KEEP_TEMP:-0}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+resolve_script_dir() {
+  if [ -n "${BASH_SOURCE+x}" ] && [ "${#BASH_SOURCE[@]}" -gt 0 ]; then
+    local source="${BASH_SOURCE[0]:-}"
+    if [ -n "$source" ] && [ -e "$source" ]; then
+      cd "$(dirname "$source")" && pwd
+      return
+    fi
+  fi
+  printf ''
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
 
 usage() {
   cat <<'EOF'
@@ -216,9 +227,9 @@ download_and_install() {
   fi
 }
 
-if [ -d "$SCRIPT_DIR/bin" ] && [ -d "$SCRIPT_DIR/dependencies" ]; then
+if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/bin" ] && [ -d "$SCRIPT_DIR/dependencies" ]; then
   install_packaged "$SCRIPT_DIR"
-elif [ -d "$SCRIPT_DIR/../bin" ] && [ -d "$SCRIPT_DIR/../dependencies" ]; then
+elif [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/../bin" ] && [ -d "$SCRIPT_DIR/../dependencies" ]; then
   install_packaged "$(cd "$SCRIPT_DIR/.." && pwd)"
 else
   download_and_install
