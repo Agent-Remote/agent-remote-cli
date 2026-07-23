@@ -86,6 +86,7 @@ if [ "$TARGET_OS" = linux ]; then
     make -j2
     make install
   )
+  ln -sf libncursesw.a "$WORK/prefix/lib/libncurses.a"
   tmux_cppflags="$tmux_cppflags -I$WORK/prefix/include/ncursesw"
   tmux_libs="-levent -lncursesw"
 fi
