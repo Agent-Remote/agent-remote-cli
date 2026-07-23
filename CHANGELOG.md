@@ -2,6 +2,14 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.2 - 2026-07-23
+
+- fix static ncurses cross-linking (6f4a366)
+- fix managed tool cross-linking (d720bf9)
+- fix cross-platform managed tool builds (fba26dc)
+- fix linux dependency manifest build (d19563b)
+- fix token refresh and bundle managed tools (da05412)
+
 ## v0.0.4-fix.1 - 2026-07-23
 
 - fix: generate usable wireguard client config (8804ab5)
