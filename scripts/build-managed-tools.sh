@@ -16,6 +16,9 @@ WIREGUARD_GO_VERSION="${WIREGUARD_GO_VERSION:-0.0.20250522}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$DEST" "$SOURCE_DEST" "$LICENSE_DEST" "$WORK/prefix"
+DEST="$(cd "$DEST" && pwd)"
+SOURCE_DEST="$(cd "$SOURCE_DEST" && pwd)"
+LICENSE_DEST="$(cd "$LICENSE_DEST" && pwd)"
 
 download_source() {
   local name="$1" url="$2" archive
@@ -57,18 +60,15 @@ case "$TARGET" in
     ;;
 esac
 
-configure_host=()
-ncurses_cross=()
-if [ -n "$HOST" ]; then
-  configure_host=(--host "$HOST")
-fi
+HOST_ARG="$HOST"
+NCURSES_BUILD_CC=""
 if [ "$TARGET" = "aarch64-unknown-linux-gnu" ]; then
-  ncurses_cross=(--with-build-cc=gcc)
+  NCURSES_BUILD_CC=gcc
 fi
 
 (
   cd "$WORK/src/libevent-${LIBEVENT_VERSION}.tar.gz"
-  ./configure "${configure_host[@]}" --prefix="$WORK/prefix" --disable-shared --enable-static \
+  ./configure ${HOST_ARG:+--host="$HOST_ARG"} --prefix="$WORK/prefix" --disable-shared --enable-static \
     --disable-openssl --disable-samples --disable-libevent-regress
   make -j2
   make install
@@ -78,7 +78,8 @@ tmux_libs="-levent -lncurses"
 if [ "$TARGET_OS" = linux ]; then
   (
     cd "$WORK/src/ncurses-${NCURSES_VERSION}.tar.gz"
-    ./configure "${configure_host[@]}" "${ncurses_cross[@]}" --prefix="$WORK/prefix" --without-shared --with-normal \
+    ./configure ${HOST_ARG:+--host="$HOST_ARG"} ${NCURSES_BUILD_CC:+--with-build-cc="$NCURSES_BUILD_CC"} \
+      --prefix="$WORK/prefix" --without-shared --with-normal \
       --without-debug --without-ada --without-cxx --without-cxx-binding --without-progs --without-manpages \
       --without-tests --without-tack --enable-widec
     make -j2
@@ -89,11 +90,16 @@ if [ "$TARGET_OS" = linux ]; then
 fi
 (
   cd "$WORK/src/tmux-${TMUX_VERSION}.tar.gz"
-  PKG_CONFIG_PATH="$WORK/prefix/lib/pkgconfig" \
-  CPPFLAGS="$tmux_cppflags" \
-  LDFLAGS="-L$WORK/prefix/lib" \
-  LIBS="$tmux_libs" \
-  CC="$CC_BIN" ./configure "${configure_host[@]}" --disable-utf8proc
+  if [ "$TARGET" = "aarch64-unknown-linux-gnu" ]; then
+    PKG_CONFIG_PATH="$WORK/prefix/lib/pkgconfig" CPPFLAGS="$tmux_cppflags" \
+      LDFLAGS="-L$WORK/prefix/lib" LIBS="$tmux_libs" \
+      ac_cv_search_forkpty=-lutil CC="$CC_BIN" \
+      ./configure --host="$HOST_ARG" --disable-utf8proc
+  else
+    PKG_CONFIG_PATH="$WORK/prefix/lib/pkgconfig" CPPFLAGS="$tmux_cppflags" \
+      LDFLAGS="-L$WORK/prefix/lib" LIBS="$tmux_libs" CC="$CC_BIN" \
+      ./configure ${HOST_ARG:+--host="$HOST_ARG"} --disable-utf8proc
+  fi
   make -j2
   install -m 0755 tmux "$DEST/tmux"
 )
@@ -103,7 +109,7 @@ if [ "$TARGET_OS" = linux ]; then
     "https://netfilter.org/projects/libmnl/files/libmnl-${LIBMNL_VERSION}.tar.bz2"
   (
     cd "$WORK/src/libmnl-${LIBMNL_VERSION}.tar.bz2"
-    CC="$CC_BIN" ./configure "${configure_host[@]}" --prefix="$WORK/prefix" --disable-shared --enable-static
+    CC="$CC_BIN" ./configure ${HOST_ARG:+--host="$HOST_ARG"} --prefix="$WORK/prefix" --disable-shared --enable-static
     make -j2
     make install
   )
