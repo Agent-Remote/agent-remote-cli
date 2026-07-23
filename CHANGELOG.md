@@ -2,6 +2,13 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4 - 2026-07-23
+
+- feat: support runtime-aware sessions (9e5d650)
+- fix: avoid GitHub API for latest installer version (f8d2940)
+- fix: support piped installer execution (85b78b6)
+- fix: keep release version examples in sync (8e06f86)
+
 ## v0.0.3 - 2026-07-07
 
 - fix: update release installer docs (aca526d)
