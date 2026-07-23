@@ -46,6 +46,10 @@ pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
         "two-way-safe".to_string(),
         "--name".to_string(),
         name.to_string(),
+        "--default-file-mode".to_string(),
+        "0660".to_string(),
+        "--default-directory-mode".to_string(),
+        "0770".to_string(),
     ];
     for exclude in DEFAULT_EXCLUDES {
         args.push("--ignore".to_string());

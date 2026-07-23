@@ -73,6 +73,21 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
     };
 
     let session = match existing {
+        Some(session) if session.status == "interrupted" => {
+            client
+                .create_tool_session(
+                    &token,
+                    &CreateSessionRequest {
+                        tool_type: TOOL_TYPE.to_string(),
+                        tool_account_id: session.tool_account_id.clone(),
+                        workspace_id: session.workspace_id.clone(),
+                        project_key: session.project_key.clone(),
+                        argv: args.claude_args,
+                        replaces_session_id: Some(session.id),
+                    },
+                )
+                .await?
+        }
         Some(session) => session,
         None => {
             let account =
@@ -86,6 +101,7 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
                         workspace_id: sync.workspace_id.clone(),
                         project_key: identity.project_key,
                         argv: args.claude_args,
+                        replaces_session_id: None,
                     },
                 )
                 .await?
@@ -106,11 +122,12 @@ async fn list_sessions(paths: &AppPaths) -> Result<()> {
     }
     for session in sessions {
         println!(
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             session.id,
             session.status,
             session.project_key,
             session.node_id,
+            session.runtime_backend,
             session.tmux_session_name.unwrap_or_else(|| "-".to_string())
         );
     }
@@ -289,7 +306,7 @@ async fn ensure_workspace_sync(
     };
 
     let mut should_create_mutagen = false;
-    let sync = match state.get_sync_session_for_workspace(&workspace.id)? {
+    let mut sync = match state.get_sync_session_for_workspace(&workspace.id)? {
         Some(local) => client.get_sync_session(&token, &local.id).await?,
         None => {
             should_create_mutagen = true;
@@ -313,9 +330,36 @@ async fn ensure_workspace_sync(
     };
     persist_sync_session(&state, &server_url, &sync)?;
     if should_create_mutagen {
+        sync = wait_until_sync_active(&client, &token, sync).await?;
+        persist_sync_session(&state, &server_url, &sync)?;
         mutagen::create(paths, &sync, dry_run)?;
     }
     Ok(sync)
+}
+
+async fn wait_until_sync_active(
+    client: &ApiClient,
+    token: &str,
+    initial: SyncSessionData,
+) -> Result<SyncSessionData> {
+    if initial.status == "active" {
+        return Ok(initial);
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        sleep(Duration::from_secs(1)).await;
+        let sync = client.get_sync_session(token, &initial.id).await?;
+        if sync.status == "active" {
+            return Ok(sync);
+        }
+        if sync.status == "failed" || sync.status == "stopped" {
+            bail!("sync session {} became {}", sync.id, sync.status);
+        }
+    }
+    bail!(
+        "sync session {} was not prepared within 30 seconds",
+        initial.id
+    )
 }
 
 fn ensure_sync_ready(paths: &AppPaths, sync: &SyncSessionData) -> Result<()> {

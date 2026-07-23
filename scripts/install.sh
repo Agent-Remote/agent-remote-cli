@@ -35,7 +35,7 @@ Installs the latest agent-remote CLI release by default. When executed from an
 extracted release archive, installs the packaged files directly.
 
 Options:
-  --version VERSION     Release version, for example 0.0.3 or v0.0.3.
+  --version VERSION     Release version, for example 0.0.4 or v0.0.4.
   --repo OWNER/REPO     GitHub repository to download from.
   --home PATH           Destination for managed binaries and local state.
   --bin-dir PATH        Directory for command links or wrapper copies.
@@ -143,7 +143,7 @@ resolve_version() {
       | head -n 1)"
   fi
   if [ -z "$tag" ]; then
-    echo "failed to resolve latest release for $REPO; retry with --version 0.0.3" >&2
+    echo "failed to resolve latest release for $REPO; retry with --version 0.0.4" >&2
     exit 1
   fi
   VERSION="${tag#v}"

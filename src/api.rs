@@ -591,6 +591,7 @@ pub struct CreateSessionRequest {
     pub workspace_id: String,
     pub project_key: String,
     pub argv: Vec<String>,
+    pub replaces_session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -612,6 +613,9 @@ pub struct SessionData {
     pub status: String,
     pub tmux_session_name: Option<String>,
     pub container_id: Option<String>,
+    pub runtime_backend: String,
+    pub runtime_resource_id: Option<String>,
+    pub replaces_session_id: Option<String>,
     pub create_task_id: Option<String>,
     pub stop_task_id: Option<String>,
     pub created_at: String,
@@ -814,6 +818,7 @@ pub struct ToolAccountData {
     pub locale: String,
     pub preferred_node_tags: Vec<String>,
     pub affinity_node_id: Option<String>,
+    pub runtime_backend: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

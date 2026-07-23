@@ -80,6 +80,8 @@ The current implementation records and checks the manifest for Mutagen and WireG
 
 `agent-remote sync ensure` identifies the current directory, asks before creating a new remote sync relationship, registers the workspace with the control plane, creates a sync session, and starts the managed Mutagen session.
 
+Before starting Mutagen, the CLI waits for the node to finish preparing the remote workspace. Managed sync sessions use directory mode `0770` and file mode `0660` so the account-specific Native Runtime identity can access the workspace without making it world-accessible.
+
 Useful commands:
 
 ```sh
@@ -95,7 +97,9 @@ The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a si
 
 ## Tool Accounts
 
-`agent-remote account create` creates a remote tool-account record with region, timezone, locale, and preferred node tags. `agent-remote account bind` asks the control plane to create a temporary remote tmux login session on the selected node, and `agent-remote account verify` schedules the verifier task after login is complete. The CLI only stores the agent-remote device token; tool login state remains on the remote node account archive.
+`agent-remote account create` creates a remote tool-account record with region, timezone, locale, and preferred node tags. The control plane pins each account to an available runtime backend; clients display that backend but cannot silently switch it. `agent-remote account bind` asks the control plane to create a temporary remote tmux login session on the selected node, and `agent-remote account verify` schedules the verifier task after login is complete. The CLI only stores the agent-remote device token; tool login state remains on the remote node account archive.
+
+`fclaude` displays the selected runtime backend when it creates or resumes a session. If the control plane reconciles a lost Native Runtime session as `interrupted`, `fclaude` creates a linked replacement session instead of attaching to the stale resource or replaying the previous command.
 
 ## Development
 
@@ -116,7 +120,7 @@ scripts/run-quality-checks.sh
 Build macOS and Linux CLI archives:
 
 ```sh
-VERSION=0.0.3 scripts/package-release.sh
+VERSION=0.0.4 scripts/package-release.sh
 ```
 
 The release archive includes:
@@ -141,7 +145,7 @@ Install a specific version or customize paths:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.0.3 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version 0.0.4 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 Install a downloaded release archive:
