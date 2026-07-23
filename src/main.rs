@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod cli;
 mod config;
 mod dependencies;
@@ -26,6 +27,7 @@ use crate::api::{
     DeveloperCredentialSsh, GitSyncPolicy, RegisterDeviceRequest, SyncSessionData,
     ToolAccountConfigImportFile, ToolAccountConfigImportRequest, ToolAccountData, WorkspaceData,
 };
+use crate::auth::{clear_device_token_refresh, load_device_token, store_device_token};
 use crate::cli::{
     AccountCommand, AccountDefaultCommand, Cli, Command, CredentialsCommand, DepsCommand,
     LoginMethod, SshCommand, SyncCommand, WireGuardCommand,
@@ -280,8 +282,12 @@ async fn finalize_login(
     config.active_device_id = Some(device.id.clone());
     config.save(&paths)?;
 
-    let key = device_token_key(&server_url, &device.id);
-    let backend = secret_store.set_secret(&key, &registration.data.device_token.access_token)?;
+    let backend = store_device_token(
+        &paths,
+        &server_url,
+        &device.id,
+        &registration.data.device_token,
+    )?;
     let _ = secret_store.delete_secret(&user_token_key(&server_url));
 
     println!("logged in to {server_url}");
@@ -340,6 +346,7 @@ async fn logout(paths: AppPaths, revoke_remote: bool) -> Result<()> {
         let key = device_token_key(&server_url, &device_id);
         token = secret_store.get_secret(&key)?;
         let _ = secret_store.delete_secret(&key);
+        let _ = clear_device_token_refresh(&paths, &server_url, &device_id);
     }
     let user_key = user_token_key(&server_url);
     if token.is_none() {
@@ -433,7 +440,7 @@ async fn write_default_wireguard_config(paths: AppPaths) -> Result<()> {
 }
 
 async fn write_wireguard_config(paths: AppPaths, output: Option<PathBuf>) -> Result<()> {
-    let (server_url, device_id, token) = load_device_token(&paths)?;
+    let (server_url, device_id, token) = load_device_token(&paths).await?;
     let store = SecretStore::new(paths.clone());
     let private_key_name = wireguard_private_key_key(&server_url, &device_id);
     let private_key = match store.get_secret(&private_key_name)? {
@@ -473,7 +480,7 @@ async fn ssh_check(paths: AppPaths, args: crate::cli::SshCheckArgs) -> Result<()
     let version = ssh::check_ssh_available()?;
     println!("ssh: {version}");
     if let Some(session_id) = args.session_id {
-        let (server_url, _device_id, token) = load_device_token(&paths)?;
+        let (server_url, _device_id, token) = load_device_token(&paths).await?;
         let attach = ApiClient::new(server_url)?
             .attach_session(&token, &session_id)
             .await?;
@@ -488,7 +495,7 @@ async fn ssh_check(paths: AppPaths, args: crate::cli::SshCheckArgs) -> Result<()
 }
 
 async fn attach(paths: AppPaths, args: crate::cli::AttachArgs) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let attach = ApiClient::new(server_url)?
         .attach_session(&token, &args.session_id)
         .await?;
@@ -502,7 +509,7 @@ async fn attach(paths: AppPaths, args: crate::cli::AttachArgs) -> Result<()> {
 }
 
 async fn account_list(paths: AppPaths) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let accounts = ApiClient::new(server_url)?
         .list_tool_accounts(&token)
         .await?;
@@ -524,7 +531,7 @@ async fn account_list(paths: AppPaths) -> Result<()> {
 }
 
 async fn account_create(paths: AppPaths, args: crate::cli::AccountCreateArgs) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let account = ApiClient::new(server_url)?
         .create_tool_account(
             &token,
@@ -543,7 +550,7 @@ async fn account_create(paths: AppPaths, args: crate::cli::AccountCreateArgs) ->
 }
 
 async fn account_bind(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let binding = ApiClient::new(server_url)?
         .start_tool_account_binding(&token, &args.account_id)
         .await?;
@@ -555,7 +562,7 @@ async fn account_import_config(
     paths: AppPaths,
     args: crate::cli::AccountImportConfigArgs,
 ) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let include = discover_claude_config_paths(args.include_resume_history)?;
     if include.is_empty() {
         println!("no local Claude config paths found");
@@ -625,7 +632,7 @@ async fn account_import_config(
 }
 
 async fn account_verify(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let binding = ApiClient::new(server_url)?
         .verify_tool_account_binding(&token, &args.account_id)
         .await?;
@@ -634,7 +641,7 @@ async fn account_verify(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Res
 }
 
 async fn credentials_list(paths: AppPaths) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let profiles = ApiClient::new(server_url)?
         .list_developer_credential_profiles(&token)
         .await?;
@@ -652,7 +659,7 @@ async fn credentials_create(
     paths: AppPaths,
     args: crate::cli::CredentialsCreateArgs,
 ) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let profile = ApiClient::new(server_url)?
         .create_developer_credential_profile(
             &token,
@@ -674,7 +681,7 @@ async fn credentials_create(
 }
 
 async fn credentials_bind(paths: AppPaths, args: crate::cli::CredentialsBindArgs) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let profile = ApiClient::new(server_url)?
         .bind_developer_credential_profile(&token, &args.account, &args.profile)
         .await?;
@@ -686,7 +693,7 @@ async fn credentials_unbind(
     paths: AppPaths,
     args: crate::cli::CredentialsUnbindArgs,
 ) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     ApiClient::new(server_url)?
         .unbind_developer_credential_profile(&token, &args.account)
         .await?;
@@ -698,7 +705,7 @@ async fn credentials_unbind(
 }
 
 async fn account_status(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let client = ApiClient::new(server_url)?;
     let account = client.get_tool_account(&token, &args.account_id).await?;
     print_tool_account(&account);
@@ -710,7 +717,7 @@ async fn account_status(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Res
 }
 
 async fn account_disable(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let account = ApiClient::new(server_url)?
         .disable_tool_account(&token, &args.account_id)
         .await?;
@@ -722,7 +729,7 @@ async fn account_default_set(
     paths: AppPaths,
     args: crate::cli::AccountDefaultSetArgs,
 ) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let account = ApiClient::new(server_url.clone())?
         .get_tool_account(&token, &args.account_id)
         .await?;
@@ -995,7 +1002,7 @@ async fn sync_ensure(paths: AppPaths, args: crate::cli::SyncEnsureArgs) -> Resul
 }
 
 async fn sync_status(paths: AppPaths, args: crate::cli::SyncStatusArgs) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let identity = workspace::identify_workspace(args.workspace.as_deref())?;
     let state = LocalState::open(&paths)?;
     state.init_schema()?;
@@ -1044,7 +1051,7 @@ async fn sync_action(
     action: &str,
     args: crate::cli::SyncActionArgs,
 ) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let identity = workspace::identify_workspace(args.workspace.as_deref())?;
     let state = LocalState::open(&paths)?;
     state.init_schema()?;
@@ -1092,7 +1099,7 @@ async fn ensure_workspace_sync(
     assume_yes: bool,
     dry_run: bool,
 ) -> Result<SyncSessionData> {
-    let (server_url, device_id, token) = load_device_token(paths)?;
+    let (server_url, device_id, token) = load_device_token(paths).await?;
     let identity = workspace::identify_workspace(workspace_path)?;
     let state = LocalState::open(paths)?;
     state.init_schema()?;
@@ -1227,21 +1234,6 @@ fn persist_sync_session(
         mutagen_session_id: sync.mutagen_session_id.clone(),
         remote_endpoint: sync.remote_endpoint.clone(),
     })
-}
-
-fn load_device_token(paths: &AppPaths) -> Result<(String, String, String)> {
-    let config = Config::load(paths)?;
-    let server_url = config
-        .server_url
-        .context("not logged in: server URL is missing")?;
-    let device_id = config
-        .active_device_id
-        .context("not logged in with a registered device")?;
-    let store = SecretStore::new(paths.clone());
-    let token = store
-        .get_secret(&device_token_key(&server_url, &device_id))?
-        .context("device token is missing; run agent-remote login")?;
-    Ok((server_url, device_id, token))
 }
 
 fn default_account_key(tool: &str) -> String {

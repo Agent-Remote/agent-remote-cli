@@ -182,9 +182,12 @@ detect_target() {
 
 install_packaged() {
   local package_dir="$1"
-  for binary in agent-remote fclaude agent-remote-wireguard mutagen; do
+  for binary in agent-remote fclaude agent-remote-wireguard mutagen tmux wg wg-quick; do
     require_file "$package_dir/bin/$binary"
   done
+  if [ "$(uname -s)" = "Darwin" ]; then
+    require_file "$package_dir/bin/wireguard-go"
+  fi
   require_file "$package_dir/dependencies/manifest.json"
 
   mkdir -p "$AGENT_REMOTE_HOME/bin" "$AGENT_REMOTE_HOME/dependencies"
@@ -192,6 +195,12 @@ install_packaged() {
   install -m 0755 "$package_dir/bin/fclaude" "$AGENT_REMOTE_HOME/bin/fclaude"
   install -m 0755 "$package_dir/bin/agent-remote-wireguard" "$AGENT_REMOTE_HOME/bin/agent-remote-wireguard"
   install -m 0755 "$package_dir/bin/mutagen" "$AGENT_REMOTE_HOME/bin/mutagen"
+  install -m 0755 "$package_dir/bin/tmux" "$AGENT_REMOTE_HOME/bin/tmux"
+  install -m 0755 "$package_dir/bin/wg" "$AGENT_REMOTE_HOME/bin/wg"
+  install -m 0755 "$package_dir/bin/wg-quick" "$AGENT_REMOTE_HOME/bin/wg-quick"
+  if [ -f "$package_dir/bin/wireguard-go" ]; then
+    install -m 0755 "$package_dir/bin/wireguard-go" "$AGENT_REMOTE_HOME/bin/wireguard-go"
+  fi
   install -m 0644 "$package_dir/dependencies/manifest.json" "$AGENT_REMOTE_HOME/dependencies/manifest.json"
 
   if [ -n "$INSTALL_BIN_DIR" ]; then

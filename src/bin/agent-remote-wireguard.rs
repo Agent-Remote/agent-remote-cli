@@ -29,10 +29,10 @@ fn main() -> Result<()> {
             println!("config ok: {}", config.display());
             if let Some(path) = find_wg_quick() {
                 println!("wg-quick: {}", path.display());
+                Ok(())
             } else {
-                println!("wg-quick: missing");
+                bail!("wg-quick is missing; {}", install_hint());
             }
-            Ok(())
         }
         "up" | "down" => run_wg_quick(&action, &config, dry_run),
         value => bail!("unknown action {value}"),
@@ -49,7 +49,19 @@ fn run_wg_quick(action: &str, config: &PathBuf, dry_run: bool) -> Result<()> {
         println!("{} {} {}", wg_quick.display(), action, config.display());
         return Ok(());
     }
-    let status = Command::new(wg_quick)
+    let managed_bin = env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+    let mut command = Command::new(wg_quick);
+    if let Some(managed_bin) = managed_bin {
+        let mut paths = vec![managed_bin];
+        paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
+        command.env(
+            "PATH",
+            env::join_paths(paths).context("failed to build managed PATH")?,
+        );
+    }
+    let status = command
         .arg(action)
         .arg(config)
         .status()
@@ -75,6 +87,15 @@ fn find_wg_quick() -> Option<PathBuf> {
             }
         }
     }
+    for candidate in [
+        PathBuf::from("/opt/homebrew/bin/wg-quick"),
+        PathBuf::from("/usr/local/bin/wg-quick"),
+        PathBuf::from("/usr/bin/wg-quick"),
+    ] {
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
     let path_value = env::var_os("PATH")?;
     for dir in env::split_paths(&path_value) {
         let candidate = dir.join("wg-quick");
@@ -83,6 +104,14 @@ fn find_wg_quick() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn install_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "reinstall agent-remote to restore the managed WireGuard tools"
+    } else {
+        "install the wireguard-tools package for this system"
+    }
 }
 
 fn print_usage() {

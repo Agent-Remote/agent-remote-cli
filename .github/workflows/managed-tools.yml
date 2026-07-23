@@ -1,0 +1,63 @@
+name: managed-tools
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.x"
+      - name: Install build dependencies
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y autoconf automake build-essential bison pkg-config xz-utils
+            if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+              sudo apt-get install -y gcc-aarch64-linux-gnu
+            fi
+          else
+            brew install automake pkg-config
+          fi
+      - name: Build managed tools
+        run: |
+          scripts/build-managed-tools.sh \
+            "${{ matrix.target }}" managed/bin managed/sources managed/licenses
+          test -x managed/bin/tmux
+          test -x managed/bin/wg
+          test -x managed/bin/wg-quick
+          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+            test -x managed/bin/wireguard-go
+            managed/bin/tmux -V
+            managed/bin/wg --version
+            managed/bin/wireguard-go --version
+          elif [[ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" ]]; then
+            managed/bin/tmux -V
+            managed/bin/wg --version
+          fi
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: managed-tools-${{ matrix.target }}
+          path: managed
+          if-no-files-found: error

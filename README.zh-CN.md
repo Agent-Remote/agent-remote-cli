@@ -66,13 +66,15 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 ~/.config/agent-remote/dependencies/manifest.json
 ```
 
+四个发行目标都会内置托管的 `mutagen`、`tmux`、`wg` 和 `wg-quick`；macOS 包还会内置 `wireguard-go`。
+
 当前实现会记录并检查 Mutagen 和 WireGuard helper 的 manifest。发布包会为每个支持的平台包含托管 Mutagen 二进制和 WireGuard helper。
 
 ## WireGuard 和 SSH
 
 `agent-remote wireguard config` 会生成或复用本地 X25519 私钥，将其保存在系统凭据存储中（失败时回退到权限为 `0600` 的文件），只向控制平面登记公钥，并以 `0600` 权限写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。重复执行该命令可以自动修复注册时缺少 WireGuard peer 的设备；私钥绝不会发送到服务端。
 
-`agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper。该 helper 在可用时委托给 `wg-quick`，并支持用于诊断的 `--dry-run`。
+`agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper，并支持用于诊断的 `--dry-run`。四个平台的 CLI 发行包都会内置 `wg`、`wg-quick` 和 `tmux`；macOS 包还会内置所需的 `wireguard-go` userspace backend。helper 会直接使用这些托管二进制，不依赖 Homebrew 或其他系统包。启用隧道可能需要 `sudo`。
 
 `agent-remote attach --session-id <id>` 会向控制平面请求会话级 SSH 授权，在节点上调度 SSH key 同步，然后使用本地 `ssh` 执行节点侧 forced command。
 

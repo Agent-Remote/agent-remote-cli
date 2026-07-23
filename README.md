@@ -66,13 +66,15 @@ Managed external dependencies are expected under:
 ~/.config/agent-remote/dependencies/manifest.json
 ```
 
+The four release targets bundle managed `mutagen`, `tmux`, `wg`, and `wg-quick` binaries. macOS packages additionally bundle `wireguard-go`.
+
 The current implementation records and checks the manifest for Mutagen and WireGuard helpers. Release packages include the managed Mutagen binary and WireGuard helper for each supported platform.
 
 ## WireGuard and SSH
 
 `agent-remote wireguard config` creates or reuses a local X25519 private key, stores it in the platform credential store (with a `0600` file fallback), enrolls only its public key with the control plane, and writes `wireguard/agent-remote.conf` under the local agent-remote home with `0600` permissions. Running the command repairs devices that were registered without a WireGuard peer. The private key is never sent to the server.
 
-`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper. The helper delegates to `wg-quick` when available and supports `--dry-run` for diagnostics.
+`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. Every CLI release bundles `wg`, `wg-quick`, and `tmux`; macOS releases also bundle the required `wireguard-go` userspace backend. The helper uses these managed binaries directly, without Homebrew or other system packages. Bringing the tunnel up may require `sudo`.
 
 `agent-remote attach --session-id <id>` asks the control plane for a session-specific SSH authorization, schedules SSH key synchronization on the node, and then uses local `ssh` to run the node-side forced command.
 

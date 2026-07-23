@@ -6,9 +6,9 @@ use agent_remote_cli::api::{
     ApiClient, CreateSessionRequest, CreateSyncSessionRequest, CreateWorkspaceRequest,
     GitSyncPolicy, SessionData, SyncSessionData, ToolAccountData, WorkspaceData,
 };
-use agent_remote_cli::config::{AppPaths, Config};
+use agent_remote_cli::auth::load_device_token;
+use agent_remote_cli::config::AppPaths;
 use agent_remote_cli::local_state::{LocalState, LocalSyncSession, LocalWorkspace};
-use agent_remote_cli::secrets::{device_token_key, SecretStore};
 use agent_remote_cli::{mutagen, ssh, workspace};
 use anyhow::{bail, Context, Result};
 use tokio::time::sleep;
@@ -52,7 +52,7 @@ async fn run(args: FClaudeArgs) -> Result<()> {
 }
 
 async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(paths)?;
+    let (server_url, _device_id, token) = load_device_token(paths).await?;
     let identity = workspace::identify_workspace(None)?;
     let sync = ensure_workspace_sync(paths, None, args.yes, args.dry_run).await?;
     ensure_sync_ready(paths, &sync)?;
@@ -112,7 +112,7 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
 }
 
 async fn list_sessions(paths: &AppPaths) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(paths)?;
+    let (server_url, _device_id, token) = load_device_token(paths).await?;
     let sessions = ApiClient::new(server_url)?
         .list_sessions(&token, Some(TOOL_TYPE))
         .await?;
@@ -135,13 +135,13 @@ async fn list_sessions(paths: &AppPaths) -> Result<()> {
 }
 
 async fn attach_session(paths: &AppPaths, session_id: &str, print_only: bool) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(paths)?;
+    let (server_url, _device_id, token) = load_device_token(paths).await?;
     let client = ApiClient::new(server_url)?;
     attach_with_client(&client, &token, session_id, print_only).await
 }
 
 async fn stop_session(paths: &AppPaths, session_id: &str) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(paths)?;
+    let (server_url, _device_id, token) = load_device_token(paths).await?;
     let session = ApiClient::new(server_url)?
         .stop_tool_session(&token, session_id)
         .await?;
@@ -257,7 +257,7 @@ async fn ensure_workspace_sync(
     assume_yes: bool,
     dry_run: bool,
 ) -> Result<SyncSessionData> {
-    let (server_url, device_id, token) = load_device_token(paths)?;
+    let (server_url, device_id, token) = load_device_token(paths).await?;
     let identity = workspace::identify_workspace(workspace_path)?;
     let state = LocalState::open(paths)?;
     state.init_schema()?;
@@ -406,21 +406,6 @@ fn persist_sync_session(
         mutagen_session_id: sync.mutagen_session_id.clone(),
         remote_endpoint: sync.remote_endpoint.clone(),
     })
-}
-
-fn load_device_token(paths: &AppPaths) -> Result<(String, String, String)> {
-    let config = Config::load(paths)?;
-    let server_url = config
-        .server_url
-        .context("not logged in: server URL is missing")?;
-    let device_id = config
-        .active_device_id
-        .context("not logged in with a registered device")?;
-    let store = SecretStore::new(paths.clone());
-    let token = store
-        .get_secret(&device_token_key(&server_url, &device_id))?
-        .context("device token is missing; run agent-remote login")?;
-    Ok((server_url, device_id, token))
 }
 
 fn parse_args(raw: Vec<String>) -> Result<FClaudeArgs> {

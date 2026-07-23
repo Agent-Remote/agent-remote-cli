@@ -67,6 +67,12 @@ impl ApiClient {
         Ok(())
     }
 
+    pub async fn refresh_token(&self, token: &str) -> Result<AuthToken, ApiError> {
+        let response: Envelope<AuthToken> =
+            self.post_empty("/api/v1/auth/refresh", Some(token)).await?;
+        Ok(response.data)
+    }
+
     pub async fn register_device(
         &self,
         token: &str,

@@ -10,6 +10,9 @@ agent-remote is designed to manage or bundle selected external programs in relea
 | --- | --- | --- |
 | WireGuard tools/helpers | Local-to-node tunnel setup and checks | `wireguard-tools` is distributed under GPL-2.0-only. Platform-specific WireGuard implementations can have different licenses; packaged artifacts must carry their exact upstream notice. Source: https://git.zx2c4.com/wireguard-tools/tree/COPYING |
 | Mutagen | Workspace file synchronization | The Mutagen repository states that code is MIT unless otherwise specified, and also notes that official release builds from v0.17 onward include SSPL-licensed code by default. Packaged artifacts must identify whether they are official builds or custom MIT-only builds and include the matching upstream notices. Source: https://github.com/mutagen-io/mutagen/blob/master/LICENSE |
+| tmux | Managed terminal multiplexer available to CLI workflows | ISC. The exact license text and source archive are included in each release package. Source: https://github.com/tmux/tmux |
+| wireguard-go | macOS userspace WireGuard backend | MIT. Included only in macOS packages with its exact license text and source archive. Source: https://github.com/WireGuard/wireguard-go |
+| libevent, ncurses, libmnl | Static build dependencies for managed tmux and WireGuard tools | Their exact upstream license texts and source archives are included in each affected release package. |
 
 ## Packaging Rule
 
