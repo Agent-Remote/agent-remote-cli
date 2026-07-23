@@ -111,7 +111,7 @@ impl DependencyManager {
 
 impl DependencyManifest {
     pub fn default_managed() -> Self {
-        let mut dependencies = vec![
+        let dependencies = vec![
             ManagedDependency {
                 name: "mutagen".to_string(),
                 required_version: "managed-by-agent-remote-release".to_string(),
@@ -151,15 +151,19 @@ impl DependencyManifest {
             },
         ];
         #[cfg(target_os = "macos")]
-        dependencies.push(ManagedDependency {
-            name: "wireguard-go".to_string(),
-            required_version: "managed-by-agent-remote-release".to_string(),
-            binary: "bin/wireguard-go".to_string(),
-            source: "agent-remote-cli release artifact".to_string(),
-            license: "MIT".to_string(),
-            license_notice: "See the packaged dependencies/licenses/wireguard-go-LICENSE"
-                .to_string(),
-        });
+        let dependencies = {
+            let mut platform_dependencies = dependencies;
+            platform_dependencies.push(ManagedDependency {
+                name: "wireguard-go".to_string(),
+                required_version: "managed-by-agent-remote-release".to_string(),
+                binary: "bin/wireguard-go".to_string(),
+                source: "agent-remote-cli release artifact".to_string(),
+                license: "MIT".to_string(),
+                license_notice: "See the packaged dependencies/licenses/wireguard-go-LICENSE"
+                    .to_string(),
+            });
+            platform_dependencies
+        };
         Self {
             schema_version: 1,
             dependencies,
