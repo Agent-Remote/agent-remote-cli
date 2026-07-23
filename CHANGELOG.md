@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.5 - 2026-07-23
+
+- fix: bundle Mutagen agent bootstrap dependencies (3c3c9af)
+
 ## v0.0.4-fix.4 - 2026-07-23
 
 - fix: allocate tty for ssh attach (e5cc832)

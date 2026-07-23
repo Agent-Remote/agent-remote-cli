@@ -122,7 +122,7 @@ scripts/run-quality-checks.sh
 构建 macOS 和 Linux CLI 归档：
 
 ```sh
-VERSION=0.0.4-fix.4 scripts/package-release.sh
+VERSION=0.0.4-fix.5 scripts/package-release.sh
 ```
 
 发布归档包含：
@@ -147,7 +147,7 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.0.4-fix.4 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version 0.0.4-fix.5 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 安装已下载的发布归档：
