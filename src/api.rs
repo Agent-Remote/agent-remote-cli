@@ -94,6 +94,21 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    pub async fn enroll_wireguard_peer(
+        &self,
+        token: &str,
+        public_key: &str,
+    ) -> Result<(), ApiError> {
+        let _: Envelope<serde_json::Value> = self
+            .post(
+                "/api/v1/network/wireguard/peer",
+                Some(token),
+                &EnrollWireGuardPeerRequest { public_key },
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn attach_session(
         &self,
         token: &str,
@@ -552,9 +567,15 @@ pub struct DeviceData {
 pub struct WireGuardConfigData {
     pub device_id: String,
     pub interface_address: String,
-    pub private_key_ref: String,
+    #[serde(rename = "private_key_ref")]
+    pub _private_key_ref: String,
     pub dns: Vec<String>,
     pub peers: Vec<WireGuardNodePeerData>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnrollWireGuardPeerRequest<'a> {
+    public_key: &'a str,
 }
 
 #[derive(Clone, Debug, Deserialize)]

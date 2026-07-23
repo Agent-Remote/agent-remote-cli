@@ -124,6 +124,10 @@ pub fn device_token_key(server_url: &str, device_id: &str) -> String {
     format!("device-token:{server_url}:{device_id}")
 }
 
+pub fn wireguard_private_key_key(server_url: &str, device_id: &str) -> String {
+    format!("wireguard-private-key:{server_url}:{device_id}")
+}
+
 fn sanitize_key(key: &str) -> String {
     key.chars()
         .map(|character| match character {
@@ -267,7 +271,7 @@ mod tests {
 
     use crate::config::AppPaths;
 
-    use super::{device_token_key, SecretBackend, SecretStore};
+    use super::{device_token_key, wireguard_private_key_key, SecretBackend, SecretStore};
 
     #[test]
     fn file_secret_roundtrip() {
@@ -283,5 +287,17 @@ mod tests {
         );
         store.delete_secret(&key).unwrap();
         assert!(store.get_secret(&key).unwrap().is_none());
+    }
+
+    #[test]
+    fn wireguard_private_key_is_scoped_to_server_and_device() {
+        assert_ne!(
+            wireguard_private_key_key("https://one.test", "device-1"),
+            wireguard_private_key_key("https://two.test", "device-1")
+        );
+        assert_ne!(
+            wireguard_private_key_key("https://one.test", "device-1"),
+            wireguard_private_key_key("https://one.test", "device-2")
+        );
     }
 }

@@ -70,7 +70,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 
 ## WireGuard 和 SSH
 
-`agent-remote wireguard config` 会从控制平面获取当前设备的 WireGuard peer 配置，并写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。
+`agent-remote wireguard config` 会生成或复用本地 X25519 私钥，将其保存在系统凭据存储中（失败时回退到权限为 `0600` 的文件），只向控制平面登记公钥，并以 `0600` 权限写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。重复执行该命令可以自动修复注册时缺少 WireGuard peer 的设备；私钥绝不会发送到服务端。
 
 `agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper。该 helper 在可用时委托给 `wg-quick`，并支持用于诊断的 `--dry-run`。
 

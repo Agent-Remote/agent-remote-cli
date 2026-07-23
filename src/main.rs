@@ -34,7 +34,7 @@ use crate::config::{AppPaths, Config};
 use crate::dependencies::DependencyManager;
 use crate::doctor::Doctor;
 use crate::local_state::{LocalDevice, LocalState, LocalSyncSession, LocalWorkspace};
-use crate::secrets::{device_token_key, user_token_key, SecretStore};
+use crate::secrets::{device_token_key, user_token_key, wireguard_private_key_key, SecretStore};
 
 const CONFIG_IMPORT_MAX_FILE_BYTES: u64 = 1024 * 1024;
 const CONFIG_IMPORT_MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
@@ -433,11 +433,23 @@ async fn write_default_wireguard_config(paths: AppPaths) -> Result<()> {
 }
 
 async fn write_wireguard_config(paths: AppPaths, output: Option<PathBuf>) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths)?;
+    let (server_url, device_id, token) = load_device_token(&paths)?;
+    let store = SecretStore::new(paths.clone());
+    let private_key_name = wireguard_private_key_key(&server_url, &device_id);
+    let private_key = match store.get_secret(&private_key_name)? {
+        Some(private_key) => private_key,
+        None => {
+            let private_key = wireguard::generate_private_key();
+            store.set_secret(&private_key_name, &private_key)?;
+            private_key
+        }
+    };
+    let public_key = wireguard::public_key_from_private(&private_key)?;
     let client = ApiClient::new(server_url)?;
+    client.enroll_wireguard_peer(&token, &public_key).await?;
     let config = client.get_wireguard_config(&token).await?;
     let output = output.unwrap_or_else(|| wireguard::default_config_path(&paths));
-    wireguard::write_config(&output, &config)?;
+    wireguard::write_config(&output, &config, &private_key)?;
     println!("wrote WireGuard config to {}", output.display());
     println!("device: {}", config.device_id);
     println!("peers: {}", config.peers.len());
