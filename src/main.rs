@@ -420,11 +420,9 @@ async fn status(paths: AppPaths, online: bool) -> Result<()> {
             let health = client.healthz().await?;
             println!("server health: {}", health.status);
             if let Some(device) = active_device {
-                let store = SecretStore::new(paths.clone());
-                if let Some(token) = store.get_secret(&device_token_key(&server_url, &device.id))? {
-                    let remote = client.get_device(&token, &device.id).await?;
-                    println!("remote device: {}", remote.status);
-                }
+                let (_, _, token) = load_device_token(&paths).await?;
+                let remote = client.get_device(&token, &device.id).await?;
+                println!("remote device: {}", remote.status);
             }
         }
     }
