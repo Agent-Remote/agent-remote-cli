@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.3 - 2026-07-23
+
+- fix: refresh device token for online status (e8d55d6)
+
 ## v0.0.4-fix.2 - 2026-07-23
 
 - fix static ncurses cross-linking (6f4a366)
