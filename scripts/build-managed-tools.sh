@@ -75,6 +75,7 @@ fi
 )
 tmux_cppflags="-I$WORK/prefix/include"
 tmux_libs="-levent -lncurses"
+managed_pkg_config="$WORK/prefix/lib/pkgconfig"
 if [ "$TARGET_OS" = linux ]; then
   (
     cd "$WORK/src/ncurses-${NCURSES_VERSION}.tar.gz"
@@ -91,12 +92,14 @@ fi
 (
   cd "$WORK/src/tmux-${TMUX_VERSION}.tar.gz"
   if [ "$TARGET" = "aarch64-unknown-linux-gnu" ]; then
-    PKG_CONFIG_PATH="$WORK/prefix/lib/pkgconfig" CPPFLAGS="$tmux_cppflags" \
+    PKG_CONFIG_PATH="$managed_pkg_config" PKG_CONFIG_LIBDIR="$managed_pkg_config" \
+      CPPFLAGS="$tmux_cppflags" \
       LDFLAGS="-L$WORK/prefix/lib" LIBS="$tmux_libs" \
       ac_cv_search_forkpty=-lutil CC="$CC_BIN" \
       ./configure --host="$HOST_ARG" --disable-utf8proc
   else
-    PKG_CONFIG_PATH="$WORK/prefix/lib/pkgconfig" CPPFLAGS="$tmux_cppflags" \
+    PKG_CONFIG_PATH="$managed_pkg_config" PKG_CONFIG_LIBDIR="$managed_pkg_config" \
+      CPPFLAGS="$tmux_cppflags" \
       LDFLAGS="-L$WORK/prefix/lib" LIBS="$tmux_libs" CC="$CC_BIN" \
       ./configure ${HOST_ARG:+--host="$HOST_ARG"} --disable-utf8proc
   fi
@@ -117,7 +120,8 @@ fi
 
 (
   cd "$WORK/src/wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.xz/src"
-  make -j2 CC="$CC_BIN" PKG_CONFIG_PATH="$WORK/prefix/lib/pkgconfig" \
+  make -j2 CC="$CC_BIN" PKG_CONFIG_PATH="$managed_pkg_config" \
+    PKG_CONFIG_LIBDIR="$managed_pkg_config" \
     CFLAGS="-O2 -I$WORK/prefix/include -DRUNSTATEDIR=\\\"/var/run\\\"" \
     LDFLAGS="-L$WORK/prefix/lib" wg
   install -m 0755 wg "$DEST/wg"

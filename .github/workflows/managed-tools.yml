@@ -56,6 +56,10 @@ jobs:
             managed/bin/tmux -V
             managed/bin/wg --version
           fi
+          if [[ "${{ matrix.target }}" == *linux-gnu ]]; then
+            ! readelf -d managed/bin/tmux | grep -E 'lib(event|ncurses|tinfo)'
+            ! readelf -d managed/bin/wg | grep -E 'libmnl'
+          fi
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: managed-tools-${{ matrix.target }}
