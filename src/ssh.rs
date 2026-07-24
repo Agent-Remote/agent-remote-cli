@@ -31,7 +31,7 @@ pub fn execute_attach(attach: &AttachSessionData) -> Result<()> {
         attach.command_args.clone()
     };
     let status = Command::new("ssh")
-        .arg("-t")
+        .arg("-tt")
         .arg("-p")
         .arg(attach.ssh_port.to_string())
         .arg(format!("{}@{}", attach.ssh_user, attach.ssh_host))
