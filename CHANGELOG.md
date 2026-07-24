@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.8 - 2026-07-24
+
+- fix: force pty for remote attaches (a739d4a)
+
 ## v0.0.4-fix.7 - 2026-07-24
 
 - fix: exclude Git reflogs from sync (f7de1eb)
