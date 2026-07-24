@@ -1,6 +1,6 @@
 [package]
 name = "agent-remote-cli"
-version = "0.0.4-fix.8"
+version = "0.0.4-fix.9"
 edition = "2021"
 license = "GPL-3.0-only"
 repository = "https://github.com/Agent-Remote/agent-remote-cli"

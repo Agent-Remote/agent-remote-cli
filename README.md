@@ -122,7 +122,7 @@ scripts/run-quality-checks.sh
 Build macOS and Linux CLI archives:
 
 ```sh
-VERSION=0.0.4-fix.8 scripts/package-release.sh
+VERSION=0.0.4-fix.9 scripts/package-release.sh
 ```
 
 The release archive includes:
@@ -147,7 +147,7 @@ Install a specific version or customize paths:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.0.4-fix.8 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version 0.0.4-fix.9 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 Install a downloaded release archive:

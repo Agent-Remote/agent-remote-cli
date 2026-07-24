@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.9 - 2026-07-24
+
+- fix: forward authorized SSH agents (faa1f68)
+
 ## v0.0.4-fix.8 - 2026-07-24
 
 - fix: force pty for remote attaches (a739d4a)
