@@ -606,6 +606,8 @@ pub struct AttachSessionData {
     pub tmux_session_name: String,
     pub command_args: Vec<String>,
     pub ssh_command: String,
+    #[serde(default)]
+    pub forward_ssh_agent: bool,
     pub authorization_task_id: String,
     pub expires_in: u64,
 }
