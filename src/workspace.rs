@@ -5,6 +5,7 @@ use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 
 pub const DEFAULT_EXCLUDES: &[&str] = &[
+    ".agent-remote-workspace.json",
     ".git/**/*.lock",
     ".git/hooks",
     ".git/worktrees",
@@ -131,7 +132,12 @@ fn hex_digit(value: u8) -> char {
 mod tests {
     use tempfile::tempdir;
 
-    use super::identify_workspace;
+    use super::{identify_workspace, DEFAULT_EXCLUDES};
+
+    #[test]
+    fn excludes_agent_remote_workspace_marker() {
+        assert!(DEFAULT_EXCLUDES.contains(&".agent-remote-workspace.json"));
+    }
 
     #[test]
     fn computes_stable_project_key() {
