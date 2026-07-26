@@ -177,6 +177,9 @@ fn run_binary(paths: &AppPaths, binary: &Path, args: &[String]) -> Result<String
 
 fn mutagen_path(paths: &AppPaths) -> Result<OsString> {
     let mut entries = vec![paths.bin_dir()];
+    if let Some(openssh_bin) = crate::platform::openssh_bin_dir() {
+        entries.push(openssh_bin);
+    }
     if let Some(current) = env::var_os("PATH") {
         entries.extend(env::split_paths(&current));
     }

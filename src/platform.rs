@@ -66,6 +66,29 @@ pub fn managed_binary(dir: &std::path::Path, name: &str) -> PathBuf {
     dir.join(executable_name(name))
 }
 
+pub fn ssh_binary() -> PathBuf {
+    #[cfg(windows)]
+    {
+        return windows_openssh_path("ssh").unwrap_or_else(|| PathBuf::from("ssh.exe"));
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("ssh")
+    }
+}
+
+pub fn openssh_bin_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        return windows_openssh_path("ssh")
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 #[cfg(windows)]
 pub fn windows_openssh_path(name: &str) -> Option<PathBuf> {
     if let Some(windows) = env::var_os("WINDIR") {
@@ -153,7 +176,7 @@ fn command_output(command: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::executable_name;
+    use super::{executable_name, ssh_binary};
 
     #[test]
     fn executable_names_follow_the_host_platform() {
@@ -163,5 +186,14 @@ mod tests {
             "mutagen"
         };
         assert_eq!(executable_name("mutagen"), expected);
+    }
+
+    #[test]
+    fn ssh_binary_follows_the_host_platform() {
+        let expected = if cfg!(windows) { "ssh.exe" } else { "ssh" };
+        assert_eq!(
+            ssh_binary().file_name().and_then(|value| value.to_str()),
+            Some(expected)
+        );
     }
 }

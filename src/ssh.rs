@@ -5,10 +5,11 @@ use anyhow::{bail, Context, Result};
 use crate::api::AttachSessionData;
 
 pub fn check_ssh_available() -> Result<String> {
-    let output = Command::new("ssh")
+    let ssh = crate::platform::ssh_binary();
+    let output = Command::new(&ssh)
         .arg("-V")
         .output()
-        .context("failed to execute ssh")?;
+        .with_context(|| format!("failed to execute {}", ssh.display()))?;
     let version = if output.stderr.is_empty() {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     } else {
@@ -30,10 +31,11 @@ pub fn execute_attach(attach: &AttachSessionData) -> Result<()> {
     } else {
         attach.command_args.clone()
     };
-    let status = Command::new("ssh")
+    let ssh = crate::platform::ssh_binary();
+    let status = Command::new(&ssh)
         .args(attach_args(attach, remote_command))
         .status()
-        .context("failed to execute ssh attach")?;
+        .with_context(|| format!("failed to execute SSH attach with {}", ssh.display()))?;
     if !status.success() {
         bail!("ssh attach exited with {status}");
     }
