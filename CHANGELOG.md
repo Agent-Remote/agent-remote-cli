@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.12 - 2026-07-26
+
+- feat: support Windows clients (f1de6b2)
+- docs: refresh third-party notices (f01c2de)
+
 ## v0.0.4-fix.11 - 2026-07-26
 
 - feat: improve CLI help and output (1f672e0)
