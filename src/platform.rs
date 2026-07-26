@@ -66,27 +66,24 @@ pub fn managed_binary(dir: &std::path::Path, name: &str) -> PathBuf {
     dir.join(executable_name(name))
 }
 
+#[cfg(windows)]
 pub fn ssh_binary() -> PathBuf {
-    #[cfg(windows)]
-    {
-        return windows_openssh_path("ssh").unwrap_or_else(|| PathBuf::from("ssh.exe"));
-    }
-    #[cfg(not(windows))]
-    {
-        PathBuf::from("ssh")
-    }
+    windows_openssh_path("ssh").unwrap_or_else(|| PathBuf::from("ssh.exe"))
 }
 
+#[cfg(not(windows))]
+pub fn ssh_binary() -> PathBuf {
+    PathBuf::from("ssh")
+}
+
+#[cfg(windows)]
 pub fn openssh_bin_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        return windows_openssh_path("ssh")
-            .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
+    windows_openssh_path("ssh").and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+}
+
+#[cfg(not(windows))]
+pub fn openssh_bin_dir() -> Option<PathBuf> {
+    None
 }
 
 #[cfg(windows)]
