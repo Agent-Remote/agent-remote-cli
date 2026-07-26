@@ -46,6 +46,7 @@ foreach ($name in $requiredDependencies) {
         throw "Manifest is missing dependency: $name"
     }
 }
+$wireGuardDependency = $manifest.dependencies | Where-Object name -eq "wireguard-windows"
 
 foreach ($dependency in $manifest.dependencies) {
     $binary = Join-Path $PackageDirectory (Resolve-PackageBinary $dependency.binary)
@@ -101,5 +102,26 @@ foreach ($command in $commands) {
 }
 & (Join-Path $InstallHome "bin/mutagen.exe") version
 if ($LASTEXITCODE -ne 0) { throw "Mutagen did not execute successfully" }
+
+$wireGuard = Join-Path $env:ProgramFiles "WireGuard/wireguard.exe"
+Assert-File $wireGuard
+$installedWireGuardVersion = (Get-Item $wireGuard).VersionInfo.ProductVersion
+if (-not $installedWireGuardVersion.StartsWith([string]$wireGuardDependency.required_version)) {
+    throw "Installed WireGuard version $installedWireGuardVersion does not match $($wireGuardDependency.required_version)"
+}
+$wireGuardStdout = Join-Path $env:RUNNER_TEMP "wireguard-smoke.stdout"
+$wireGuardStderr = Join-Path $env:RUNNER_TEMP "wireguard-smoke.stderr"
+$wireGuardProcess = Start-Process $wireGuard -Wait -PassThru `
+    -ArgumentList "/agent-remote-install-smoke-test" `
+    -RedirectStandardOutput $wireGuardStdout -RedirectStandardError $wireGuardStderr
+$wireGuardOutput = ((Get-Content $wireGuardStdout -Raw), (Get-Content $wireGuardStderr -Raw)) -join "`n"
+if ($wireGuardProcess.ExitCode -ne 1 -or $wireGuardOutput -notmatch "Command Line Options") {
+    throw "Installed WireGuard command-line entry point did not execute as expected"
+}
+
+$wireGuardConfig = Join-Path $env:RUNNER_TEMP "agent-remote-install-smoke.conf"
+Set-Content -Path $wireGuardConfig -Value "[Interface]`nPrivateKey = install-smoke-test" -Encoding ascii
+& (Join-Path $InstallHome "bin/agent-remote-wireguard.exe") check --config $wireGuardConfig
+if ($LASTEXITCODE -ne 0) { throw "agent-remote-wireguard did not find the installed WireGuard executable" }
 
 Write-Host "Windows install smoke test passed"

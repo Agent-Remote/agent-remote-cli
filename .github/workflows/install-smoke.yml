@@ -75,5 +75,5 @@ jobs:
           ./scripts/package-release.ps1 -Version $version -Target $target
           $package = Join-Path $PWD "dist/agent-remote-cli-$version-$target"
           $installHome = Join-Path $env:RUNNER_TEMP "agent-remote-home"
-          & "$package/install.ps1" -AgentRemoteHome $installHome -NoPathUpdate
+          & "$package/install.ps1" -AgentRemoteHome $installHome -NoPathUpdate -InstallPrerequisites
           ./tests/install_smoke_test.ps1 -PackageDirectory $package -InstallHome $installHome -ExpectedVersion $version

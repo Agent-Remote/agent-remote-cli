@@ -151,7 +151,7 @@ VERSION=0.0.4-fix.13 scripts/package-release.sh
 
 打包文件应安装到 agent-remote home，或由平台安装器放到 `PATH` 中。
 
-GitHub Actions 会在 `v*` tag 上运行相同打包流程，并把归档上传到 GitHub Release。`install-smoke` workflow 还会在 Windows、Linux 和 macOS 原生 runner 的隔离目录中构建并安装发布包，检查所有 manifest 校验和与依赖文件，并实际执行安装后的 CLI。
+GitHub Actions 会在 `v*` tag 上运行相同打包流程，并把归档上传到 GitHub Release。`install-smoke` workflow 还会在 Windows、Linux 和 macOS 原生 runner 的隔离目录中构建并安装发布包，检查所有 manifest 校验和与依赖文件，并实际执行安装后的 CLI。在 Windows 上，该流程还会安装发布包内的 WireGuard MSI，并验证其命令行入口和 `agent-remote-wireguard` 集成。
 
 直接安装最新 release：
 
