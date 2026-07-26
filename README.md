@@ -24,9 +24,14 @@ agent-remote account bind <account-id>
 agent-remote account verify <account-id>
 agent-remote account status <account-id>
 agent-remote ssh check --session-id <session-id>
-agent-remote attach --session-id <session-id> --print-only
-agent-remote logout
+agent-remote attach <session-id> --print-only
+agent-remote logout [--no-revoke-remote]
 ```
+
+Every command and nested command provides `--help`. Runtime output supports
+`--color auto|always|never`; `auto` also honors `NO_COLOR` and `TERM=dumb`.
+Errors, warnings, successful actions, section headings, details, and status
+tables use consistent terminal styling.
 
 `agent-remote init` is the recommended first-run path. It guides the user through:
 
@@ -76,7 +81,7 @@ The current implementation records and checks the manifest for Mutagen and WireG
 
 `agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. Every CLI release bundles `wg`, `wg-quick`, and `tmux`; macOS releases also bundle the required `wireguard-go` userspace backend. The helper uses these managed binaries directly, without Homebrew or other system packages. Bringing the tunnel up may require `sudo`.
 
-`agent-remote attach --session-id <id>` asks the control plane for a session-specific SSH authorization, schedules SSH key synchronization on the node, and then uses local `ssh` to run the node-side forced command.
+`agent-remote attach <id>` asks the control plane for a session-specific SSH authorization, schedules SSH key synchronization on the node, and then uses local `ssh` to run the node-side forced command. The former `--session-id <id>` form remains supported for compatibility.
 
 ## Workspace Sync
 
@@ -102,6 +107,10 @@ The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a si
 `agent-remote account create` creates a remote tool-account record with region, timezone, locale, and preferred node tags. The control plane pins each account to an available runtime backend; clients display that backend but cannot silently switch it. `agent-remote account bind` asks the control plane to create a temporary remote tmux login session on the selected node, and `agent-remote account verify` schedules the verifier task after login is complete. The CLI only stores the agent-remote device token; tool login state remains on the remote node account archive.
 
 `fclaude` displays the selected runtime backend when it creates or resumes a session. If the control plane reconciles a lost Native Runtime session as `interrupted`, `fclaude` creates a linked replacement session instead of attaching to the stale resource or replaying the previous command.
+
+`fclaude list` prints a compact, space-aligned table with 12-character session and node IDs and a suffix-preserving working directory. Use `fclaude list --no-trunc` for complete values. The displayed short session ID can be passed directly to `fclaude attach <id>` or `fclaude stop <id>`; ambiguous prefixes are rejected.
+
+`agent-remote account list` and `agent-remote credentials list` use the same compact ID convention and support `--no-trunc`. Displayed account and credential profile IDs can be used anywhere those IDs are accepted, including account binding, status, configuration import, default selection, and credential binding. `fclaude --account-id <id>` accepts the same account prefixes. Prefixes must contain at least four hexadecimal characters and must uniquely identify one item.
 
 ## Development
 

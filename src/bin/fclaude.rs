@@ -1,4 +1,3 @@
-use std::env;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -7,10 +6,14 @@ use agent_remote_cli::api::{
     GitSyncPolicy, SessionData, SyncSessionData, ToolAccountData, WorkspaceData,
 };
 use agent_remote_cli::auth::load_device_token;
+use agent_remote_cli::cli::VERSION;
 use agent_remote_cli::config::AppPaths;
+use agent_remote_cli::identifiers::{resolve_id, short_id};
 use agent_remote_cli::local_state::{LocalState, LocalSyncSession, LocalWorkspace};
+use agent_remote_cli::terminal::{self, ColorChoice, Details, Table};
 use agent_remote_cli::{mutagen, ssh, workspace};
 use anyhow::{bail, Context, Result};
+use clap::{Args as ClapArgs, Parser, Subcommand};
 use tokio::time::sleep;
 
 const TOOL_TYPE: &str = "claude";
@@ -27,6 +30,7 @@ enum Mode {
 #[derive(Debug, Default, PartialEq, Eq)]
 struct SessionListArgs {
     statuses: Vec<String>,
+    no_trunc: bool,
 }
 
 #[derive(Debug)]
@@ -40,10 +44,189 @@ struct FClaudeArgs {
     claude_args: Vec<String>,
 }
 
+#[derive(Debug, Parser)]
+#[command(
+    name = "fclaude",
+    version = VERSION,
+    about = "Run and manage remote Claude Code sessions",
+    long_about = "Start Claude Code in the synchronized current workspace, resume the matching remote session, or explicitly list, attach, and stop sessions.",
+    after_help = "Examples:\n  fclaude\n  fclaude --model opus\n  fclaude new -- --model sonnet\n  fclaude list --running\n  fclaude attach b68873d48e07\n  fclaude stop b68873d48e07",
+    trailing_var_arg = true,
+    args_conflicts_with_subcommands = true
+)]
+struct FClaudeCli {
+    /// Override the agent-remote state and configuration directory.
+    #[arg(long, env = "AGENT_REMOTE_HOME", global = true, value_name = "PATH")]
+    home: Option<PathBuf>,
+
+    /// Use a Claude account by its displayed short ID or full UUID.
+    #[arg(long, global = true, value_name = "ACCOUNT_ID")]
+    account_id: Option<String>,
+
+    /// Accept workspace synchronization prompts.
+    #[arg(long, short = 'y', global = true)]
+    yes: bool,
+
+    /// Print local synchronization actions without executing them.
+    #[arg(long, global = true)]
+    dry_run: bool,
+
+    /// Control colored output.
+    #[arg(
+        long,
+        env = "AGENT_REMOTE_COLOR",
+        global = true,
+        value_enum,
+        default_value_t = ColorChoice::Auto
+    )]
+    color: ColorChoice,
+
+    #[command(subcommand)]
+    command: Option<FClaudeCommand>,
+
+    /// Arguments passed directly to Claude Code in the default run mode.
+    #[arg(value_name = "CLAUDE_ARG", allow_hyphen_values = true)]
+    claude_args: Vec<String>,
+}
+
+#[derive(Debug, Subcommand)]
+enum FClaudeCommand {
+    /// Start or resume the Claude session for the current workspace.
+    Run(ClaudePassthroughArgs),
+    /// Always create a new Claude session for the current workspace.
+    New(ClaudePassthroughArgs),
+    /// List Claude sessions with optional status filters.
+    List(FClaudeListArgs),
+    /// Attach to a session using its displayed short ID or full UUID.
+    Attach(AttachArgs),
+    /// Stop a session using its displayed short ID or full UUID.
+    Stop(SessionReferenceArgs),
+}
+
+#[derive(Debug, Default, ClapArgs)]
+#[command(trailing_var_arg = true)]
+struct ClaudePassthroughArgs {
+    /// Arguments passed directly to Claude Code; use -- before ambiguous values.
+    #[arg(value_name = "CLAUDE_ARG", allow_hyphen_values = true)]
+    claude_args: Vec<String>,
+}
+
+#[derive(Debug, ClapArgs)]
+struct FClaudeListArgs {
+    /// Include sessions with this status; repeat for multiple statuses.
+    #[arg(long = "status", value_name = "STATUS")]
+    statuses: Vec<String>,
+
+    /// Include starting sessions.
+    #[arg(long)]
+    starting: bool,
+
+    /// Include running sessions.
+    #[arg(long)]
+    running: bool,
+
+    /// Include active sessions.
+    #[arg(long)]
+    active: bool,
+
+    /// Include sessions currently stopping.
+    #[arg(long)]
+    stopping: bool,
+
+    /// Include stopped sessions.
+    #[arg(long)]
+    stopped: bool,
+
+    /// Include interrupted sessions.
+    #[arg(long)]
+    interrupted: bool,
+
+    /// Include failed sessions.
+    #[arg(long)]
+    failed: bool,
+
+    /// Show full UUIDs and paths instead of compact values.
+    #[arg(long)]
+    no_trunc: bool,
+}
+
+#[derive(Debug, ClapArgs)]
+struct AttachArgs {
+    /// Unique session ID prefix or full UUID.
+    #[arg(value_name = "SESSION")]
+    session_id: String,
+
+    /// Print the authorized SSH command without executing it.
+    #[arg(long)]
+    print_only: bool,
+}
+
+#[derive(Debug, ClapArgs)]
+struct SessionReferenceArgs {
+    /// Unique session ID prefix or full UUID.
+    #[arg(value_name = "SESSION")]
+    session_id: String,
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
-    let args = parse_args(env::args().skip(1).collect())?;
-    run(args).await
+async fn main() {
+    let cli = FClaudeCli::parse();
+    terminal::configure(cli.color);
+    if let Err(error) = run(cli.into_args()).await {
+        eprintln!("{} {error:#}", terminal::failure("ERROR"));
+        std::process::exit(1);
+    }
+}
+
+impl FClaudeCli {
+    fn into_args(self) -> FClaudeArgs {
+        let (mode, claude_args, print_only) = match self.command {
+            Some(FClaudeCommand::Run(args)) => (Mode::Run, args.claude_args, false),
+            Some(FClaudeCommand::New(args)) => (Mode::New, args.claude_args, false),
+            Some(FClaudeCommand::List(args)) => (
+                Mode::List(SessionListArgs {
+                    statuses: args.resolved_statuses(),
+                    no_trunc: args.no_trunc,
+                }),
+                Vec::new(),
+                false,
+            ),
+            Some(FClaudeCommand::Attach(args)) => {
+                (Mode::Attach(args.session_id), Vec::new(), args.print_only)
+            }
+            Some(FClaudeCommand::Stop(args)) => (Mode::Stop(args.session_id), Vec::new(), false),
+            None => (Mode::Run, self.claude_args, false),
+        };
+        FClaudeArgs {
+            home: self.home,
+            account_id: self.account_id,
+            yes: self.yes,
+            dry_run: self.dry_run,
+            print_only,
+            mode,
+            claude_args,
+        }
+    }
+}
+
+impl FClaudeListArgs {
+    fn resolved_statuses(&self) -> Vec<String> {
+        let mut statuses = self.statuses.clone();
+        for (enabled, status) in [
+            (self.starting, "starting"),
+            (self.running, "running"),
+            (self.active, "active"),
+            (self.stopping, "stopping"),
+            (self.stopped, "stopped"),
+            (self.interrupted, "interrupted"),
+            (self.failed, "failed"),
+        ] {
+            if enabled && !statuses.iter().any(|value| value == status) {
+                statuses.push(status.to_string());
+            }
+        }
+        statuses
+    }
 }
 
 async fn run(args: FClaudeArgs) -> Result<()> {
@@ -122,27 +305,35 @@ async fn list_sessions(paths: &AppPaths, args: &SessionListArgs) -> Result<()> {
         .list_sessions(&token, Some(TOOL_TYPE), &args.statuses)
         .await?;
     if sessions.is_empty() {
-        println!("claude sessions: none");
+        terminal::note("No Claude sessions match the selected filters.");
         return Ok(());
     }
-    println!("ID\tSTATUS\tWORKING_DIRECTORY\tPROJECT\tNODE\tBACKEND\tTMUX");
+    let mut table = Table::new(["ID", "STATUS", "WORKDIR", "NODE", "BACKEND"]);
     for session in sessions {
         let working_directory = session
             .workspace_local_path
             .as_deref()
             .or(session.workspace_remote_path.as_deref())
             .unwrap_or("-");
-        println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            display_cell(&session.id),
-            display_cell(&session.status),
-            display_cell(working_directory),
-            display_cell(&session.project_key),
-            display_cell(&session.node_id),
-            display_cell(&session.runtime_backend),
-            display_cell(session.tmux_session_name.as_deref().unwrap_or("-")),
-        );
+        table.row(if args.no_trunc {
+            vec![
+                display_cell(&session.id),
+                display_cell(&session.status),
+                display_cell(working_directory),
+                display_cell(&session.node_id),
+                display_cell(&session.runtime_backend),
+            ]
+        } else {
+            vec![
+                short_id(&session.id),
+                display_cell(&session.status),
+                truncate_left(&display_cell(working_directory), 44),
+                short_id(&session.node_id),
+                display_cell(&session.runtime_backend),
+            ]
+        });
     }
+    table.render();
     Ok(())
 }
 
@@ -150,22 +341,49 @@ fn display_cell(value: &str) -> String {
     value.replace(['\t', '\n', '\r'], " ")
 }
 
+fn truncate_left(value: &str, max_chars: usize) -> String {
+    let characters: Vec<_> = value.chars().collect();
+    if characters.len() <= max_chars {
+        return value.to_string();
+    }
+    format!(
+        "...{}",
+        characters[characters.len() - (max_chars - 3)..]
+            .iter()
+            .collect::<String>()
+    )
+}
+
 async fn attach_session(paths: &AppPaths, session_id: &str, print_only: bool) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(paths).await?;
     let client = ApiClient::new(server_url)?;
-    attach_with_client(&client, &token, session_id, print_only).await
+    let session_id = resolve_session_id(&client, &token, session_id).await?;
+    attach_with_client(&client, &token, &session_id, print_only).await
 }
 
 async fn stop_session(paths: &AppPaths, session_id: &str) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(paths).await?;
-    let session = ApiClient::new(server_url)?
-        .stop_tool_session(&token, session_id)
-        .await?;
-    println!("session: {} ({})", session.id, session.status);
+    let client = ApiClient::new(server_url)?;
+    let session_id = resolve_session_id(&client, &token, session_id).await?;
+    let session = client.stop_tool_session(&token, &session_id).await?;
+    terminal::success_line("Claude session stop requested");
+    let mut details = Details::new()
+        .field("Session", session.id)
+        .status("Status", session.status);
     if let Some(task_id) = session.stop_task_id {
-        println!("stop task: {task_id}");
+        details = details.field("Stop task", task_id);
     }
+    details.render();
     Ok(())
+}
+
+async fn resolve_session_id(client: &ApiClient, token: &str, reference: &str) -> Result<String> {
+    let sessions = client.list_sessions(token, Some(TOOL_TYPE), &[]).await?;
+    resolve_id(
+        reference,
+        "Claude session",
+        sessions.iter().map(|session| session.id.as_str()),
+    )
 }
 
 async fn attach_with_client(
@@ -175,8 +393,11 @@ async fn attach_with_client(
     print_only: bool,
 ) -> Result<()> {
     let attach = client.attach_session(token, session_id).await?;
-    println!("{}", attach.ssh_command);
-    println!("tmux: {}", attach.tmux_session_name);
+    terminal::section("Claude Attach");
+    Details::new()
+        .field("Command", terminal::command(&attach.ssh_command))
+        .field("Tmux", &attach.tmux_session_name)
+        .render();
     if print_only {
         return Ok(());
     }
@@ -190,7 +411,16 @@ async fn choose_account(
     explicit_account_id: Option<&str>,
 ) -> Result<ToolAccountData> {
     if let Some(account_id) = explicit_account_id {
-        let account = client.get_tool_account(token, account_id).await?;
+        let accounts = client.list_tool_accounts(token).await?;
+        let account_id = resolve_id(
+            account_id,
+            "Claude account",
+            accounts.iter().map(|account| account.id.as_str()),
+        )?;
+        let account = accounts
+            .into_iter()
+            .find(|account| account.id == account_id)
+            .context("resolved Claude account disappeared from the account list")?;
         validate_active_account(&account)?;
         return Ok(account);
     }
@@ -212,13 +442,16 @@ async fn choose_account(
         0 => bail!("no active Claude account; bind and verify one with agent-remote account"),
         1 => Ok(active.into_iter().next().expect("one active account")),
         _ => {
-            eprintln!("multiple active Claude accounts found:");
+            terminal::warning_line("Multiple active Claude accounts found.");
+            let mut table = Table::new(["ID", "NAME", "REGION"]);
             for account in active {
-                eprintln!(
-                    "{}\t{}\t{}",
-                    account.id, account.display_name, account.region_code
-                );
+                table.row([
+                    short_id(&account.id),
+                    account.display_name,
+                    account.region_code,
+                ]);
             }
+            table.render();
             bail!("choose one with --account-id or set a default with agent-remote account default set")
         }
     }
@@ -295,9 +528,12 @@ async fn ensure_workspace_sync(
         },
         None => {
             if !assume_yes {
-                println!("workspace: {}", identity.local_path.display());
-                println!(
-                    "agent-remote needs to create a remote sync relationship for this directory."
+                terminal::section("Workspace Setup");
+                Details::new()
+                    .field("Workspace", identity.local_path.display())
+                    .render();
+                terminal::note(
+                    "A remote synchronization relationship is required for this directory.",
                 );
                 if !prompt_yes_no("Create workspace sync now? [y/N] ")? {
                     bail!("workspace sync not confirmed; remote session will not be started");
@@ -424,102 +660,10 @@ fn persist_sync_session(
     })
 }
 
-fn parse_args(raw: Vec<String>) -> Result<FClaudeArgs> {
-    let mut home = None;
-    let mut account_id = None;
-    let mut yes = false;
-    let mut dry_run = false;
-    let mut print_only = false;
-    let mut mode = Mode::Run;
-    let mut claude_args = Vec::new();
-    let mut index = 0;
-    while index < raw.len() {
-        let value = &raw[index];
-        match value.as_str() {
-            "--" => {
-                claude_args.extend(raw[index + 1..].iter().cloned());
-                break;
-            }
-            "--home" => {
-                index += 1;
-                home = Some(PathBuf::from(
-                    raw.get(index).context("--home requires a value")?,
-                ));
-            }
-            "--account-id" => {
-                index += 1;
-                account_id = Some(
-                    raw.get(index)
-                        .context("--account-id requires a value")?
-                        .clone(),
-                );
-            }
-            "--yes" | "-y" => yes = true,
-            "--dry-run" => dry_run = true,
-            "--print-only" => print_only = true,
-            "new" if mode == Mode::Run => mode = Mode::New,
-            "list" if mode == Mode::Run => mode = Mode::List(SessionListArgs::default()),
-            "--status" if matches!(mode, Mode::List(_)) => {
-                index += 1;
-                let status = raw.get(index).context("--status requires a value")?.clone();
-                add_list_status(&mut mode, status);
-            }
-            "--starting" | "--running" | "--active" | "--stopping" | "--stopped"
-            | "--interrupted" | "--failed"
-                if matches!(mode, Mode::List(_)) =>
-            {
-                add_list_status(&mut mode, value.trim_start_matches("--").to_string());
-            }
-            "attach" if mode == Mode::Run => {
-                index += 1;
-                mode = Mode::Attach(
-                    raw.get(index)
-                        .context("attach requires a session ID")?
-                        .clone(),
-                );
-            }
-            "stop" if mode == Mode::Run => {
-                index += 1;
-                mode = Mode::Stop(
-                    raw.get(index)
-                        .context("stop requires a session ID")?
-                        .clone(),
-                );
-            }
-            _ if value.starts_with('-') => {
-                claude_args.extend(raw[index..].iter().cloned());
-                break;
-            }
-            _ => {
-                claude_args.extend(raw[index..].iter().cloned());
-                break;
-            }
-        }
-        index += 1;
-    }
-    Ok(FClaudeArgs {
-        home,
-        account_id,
-        yes,
-        dry_run,
-        print_only,
-        mode,
-        claude_args,
-    })
-}
-
-fn add_list_status(mode: &mut Mode, status: String) {
-    if let Mode::List(args) = mode {
-        if !args.statuses.contains(&status) {
-            args.statuses.push(status);
-        }
-    }
-}
-
 fn prompt_yes_no(prompt: &str) -> Result<bool> {
     use std::io::{self, Write};
 
-    print!("{prompt}");
+    print!("{}", terminal::prompt(prompt));
     io::stdout().flush()?;
     let mut value = String::new();
     io::stdin().read_line(&mut value)?;
@@ -533,60 +677,103 @@ fn default_account_key() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, Mode, SessionListArgs};
+    use super::{truncate_left, FClaudeCli, Mode, SessionListArgs};
+    use clap::{Command, CommandFactory, Parser};
+
+    fn parse_args(values: &[&str]) -> super::FClaudeArgs {
+        FClaudeCli::try_parse_from(std::iter::once("fclaude").chain(values.iter().copied()))
+            .unwrap()
+            .into_args()
+    }
+
+    fn assert_documented(command: &Command, path: &str) {
+        assert!(
+            command.get_about().is_some() || command.get_long_about().is_some(),
+            "{path} is missing command help"
+        );
+        for argument in command.get_arguments() {
+            if matches!(argument.get_id().as_str(), "help" | "version") {
+                continue;
+            }
+            assert!(
+                argument.get_help().is_some() || argument.get_long_help().is_some(),
+                "{path} argument {} is missing help",
+                argument.get_id()
+            );
+        }
+        for child in command.get_subcommands() {
+            assert_documented(child, &format!("{path} {}", child.get_name()));
+        }
+    }
+
+    #[test]
+    fn every_fclaude_command_and_argument_has_help() {
+        let command = FClaudeCli::command();
+        command.clone().debug_assert();
+        assert_documented(&command, "fclaude");
+    }
 
     #[test]
     fn parses_direct_passthrough_flags() {
-        let args = parse_args(vec!["--model".into(), "opus".into()]).unwrap();
+        let args = parse_args(&["--model", "opus"]);
         assert_eq!(args.mode, Mode::Run);
         assert_eq!(args.claude_args, vec!["--model", "opus"]);
     }
 
     #[test]
     fn parses_double_dash_passthrough_flags() {
-        let args = parse_args(vec!["--".into(), "--model".into(), "opus".into()]).unwrap();
+        let args = parse_args(&["--", "--model", "opus"]);
         assert_eq!(args.mode, Mode::Run);
         assert_eq!(args.claude_args, vec!["--model", "opus"]);
     }
 
     #[test]
     fn parses_attach_mode() {
-        let args = parse_args(vec!["attach".into(), "session_1".into()]).unwrap();
-        assert_eq!(args.mode, Mode::Attach("session_1".into()));
+        let args = parse_args(&["attach", "01234567"]);
+        assert_eq!(args.mode, Mode::Attach("01234567".into()));
     }
 
     #[test]
     fn parses_list_status_shortcuts() {
-        let args = parse_args(vec![
-            "list".into(),
-            "--running".into(),
-            "--stopped".into(),
-            "--running".into(),
-        ])
-        .unwrap();
+        let args = parse_args(&["list", "--running", "--stopped"]);
         assert_eq!(
             args.mode,
             Mode::List(SessionListArgs {
                 statuses: vec!["running".into(), "stopped".into()],
+                no_trunc: false,
             })
         );
     }
 
     #[test]
     fn parses_repeatable_explicit_list_status() {
-        let args = parse_args(vec![
-            "list".into(),
-            "--status".into(),
-            "active".into(),
-            "--status".into(),
-            "failed".into(),
-        ])
-        .unwrap();
+        let args = parse_args(&["list", "--status", "active", "--status", "failed"]);
         assert_eq!(
             args.mode,
             Mode::List(SessionListArgs {
                 statuses: vec!["active".into(), "failed".into()],
+                no_trunc: false,
             })
+        );
+    }
+
+    #[test]
+    fn parses_untruncated_list_mode() {
+        let args = parse_args(&["list", "--no-trunc"]);
+        assert_eq!(
+            args.mode,
+            Mode::List(SessionListArgs {
+                statuses: vec![],
+                no_trunc: true,
+            })
+        );
+    }
+
+    #[test]
+    fn keeps_workdir_suffix_when_truncated() {
+        assert_eq!(
+            truncate_left("/one/two/three/project", 16),
+            "...three/project"
         );
     }
 }

@@ -31,6 +31,7 @@ serde_json = "1.0"
 sha2 = "0.10"
 tokio = { version = "1.40", features = ["macros", "rt-multi-thread", "time"] }
 toml = "0.8"
+unicode-width = "0.2"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 
 [dev-dependencies]

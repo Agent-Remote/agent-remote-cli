@@ -9,6 +9,7 @@ mod mutagen;
 mod platform;
 mod secrets;
 mod ssh;
+mod terminal;
 mod wireguard;
 mod workspace;
 
@@ -37,14 +38,20 @@ use crate::dependencies::DependencyManager;
 use crate::doctor::Doctor;
 use crate::local_state::{LocalDevice, LocalState, LocalSyncSession, LocalWorkspace};
 use crate::secrets::{device_token_key, user_token_key, wireguard_private_key_key, SecretStore};
+use crate::terminal::{Details, Table};
+use agent_remote_cli::identifiers::{resolve_id, short_id};
 
 const CONFIG_IMPORT_MAX_FILE_BYTES: u64 = 1024 * 1024;
 const CONFIG_IMPORT_MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     let cli = Cli::parse();
-    run(cli).await
+    terminal::configure(cli.color);
+    if let Err(error) = run(cli).await {
+        eprintln!("{} {error:#}", terminal::failure("ERROR"));
+        std::process::exit(1);
+    }
 }
 
 async fn run(cli: Cli) -> Result<()> {
@@ -67,14 +74,11 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Sync(SyncCommand::Resume(args)) => sync_action(paths, "resume", args).await,
         Command::Sync(SyncCommand::Resolve(args)) => sync_action(paths, "resolve", args).await,
         Command::Sync(SyncCommand::Reset(args)) => sync_action(paths, "reset", args).await,
-        Command::Account(AccountCommand::List) => account_list(paths).await,
+        Command::Account(AccountCommand::List(args)) => account_list(paths, args).await,
         Command::Account(AccountCommand::Create(args)) => account_create(paths, args).await,
         Command::Account(AccountCommand::Bind(args)) => account_bind(paths, args).await,
         Command::Account(AccountCommand::ImportConfig(args)) => {
             account_import_config(paths, args).await
-        }
-        Command::Account(AccountCommand::ExportConfig(_args)) => {
-            bail!("account config export is not implemented yet")
         }
         Command::Account(AccountCommand::Verify(args)) => account_verify(paths, args).await,
         Command::Account(AccountCommand::Status(args)) => account_status(paths, args).await,
@@ -88,7 +92,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Account(AccountCommand::Default(AccountDefaultCommand::Clear(args))) => {
             account_default_clear(paths, args)
         }
-        Command::Credentials(CredentialsCommand::List) => credentials_list(paths).await,
+        Command::Credentials(CredentialsCommand::List(args)) => credentials_list(paths, args).await,
         Command::Credentials(CredentialsCommand::Create(args)) => {
             credentials_create(paths, args).await
         }
@@ -108,21 +112,21 @@ struct DeviceRegistrationOptions {
 }
 
 async fn init(paths: AppPaths, args: crate::cli::InitArgs) -> Result<()> {
-    println!("agent-remote initialization");
+    terminal::section("Agent Remote Setup");
     paths.ensure_base_dirs()?;
     let state = LocalState::open(&paths)?;
     state.init_schema()?;
 
     let manager = DependencyManager::new(paths.clone());
     manager.ensure_manifest()?;
-    println!("checking managed dependencies...");
+    terminal::section("Managed Dependencies");
     for status in manager.check_all()? {
-        println!(
-            "{} {} at {}",
-            if status.installed { "ok" } else { "warn" },
-            status.name,
-            status.binary_path.display()
-        );
+        let message = format!("{} at {}", status.name, status.binary_path.display());
+        if status.installed {
+            terminal::success_line(message);
+        } else {
+            terminal::warning_line(message);
+        }
     }
 
     let config = Config::load(&paths)?;
@@ -133,11 +137,11 @@ async fn init(paths: AppPaths, args: crate::cli::InitArgs) -> Result<()> {
     };
     let client = ApiClient::new(server_url.clone())?;
     match client.healthz().await {
-        Ok(health) => println!("server reachable: {}", health.status),
-        Err(error) => println!("warn server health check failed: {error}"),
+        Ok(health) => terminal::success_line(format!("Server reachable ({})", health.status)),
+        Err(error) => terminal::warning_line(format!("Server health check failed: {error}")),
     }
 
-    println!("login with an existing agent-remote user account.");
+    terminal::note("Sign in with an existing agent-remote user account.");
     let login_args = crate::cli::LoginArgs {
         server_url: Some(server_url.clone()),
         method: args.method,
@@ -176,14 +180,19 @@ async fn init(paths: AppPaths, args: crate::cli::InitArgs) -> Result<()> {
         if should_write {
             match write_default_wireguard_config(paths.clone()).await {
                 Ok(()) => {}
-                Err(error) => println!("warn WireGuard config not written: {error}"),
+                Err(error) => {
+                    terminal::warning_line(format!("WireGuard config not written: {error}"))
+                }
             }
         }
     }
 
-    println!("initialization complete");
-    println!("next: agent-remote status --online");
-    println!("next: fclaude");
+    terminal::success_line("Initialization complete");
+    terminal::note(format!(
+        "Next: {}",
+        terminal::command("agent-remote status --online")
+    ));
+    terminal::note(format!("Next: {}", terminal::command("fclaude")));
     Ok(())
 }
 
@@ -243,10 +252,15 @@ async fn finalize_login(
         let key = user_token_key(&server_url);
         let backend = secret_store.set_secret(&key, &user_token.access_token)?;
         state.set_kv("last_login_mode", "user_token")?;
-        println!("logged in to {server_url}");
-        println!("stored user token in {backend}");
-        println!("token expires in {} seconds", user_token.expires_in);
-        println!("device registration skipped");
+        terminal::success_line(format!("Logged in to {server_url}"));
+        Details::new()
+            .field("Credential store", backend)
+            .field(
+                "Token lifetime",
+                format!("{} seconds", user_token.expires_in),
+            )
+            .field("Device", "not registered")
+            .render();
         return Ok(None);
     }
 
@@ -290,12 +304,15 @@ async fn finalize_login(
     )?;
     let _ = secret_store.delete_secret(&user_token_key(&server_url));
 
-    println!("logged in to {server_url}");
-    println!("registered device {} ({})", device.name, device.id);
-    println!(
-        "stored device token in {backend}; expires in {} seconds",
-        registration.data.device_token.expires_in
-    );
+    terminal::success_line(format!("Logged in to {server_url}"));
+    Details::new()
+        .field("Device", format!("{} ({})", device.name, device.id))
+        .field("Credential store", backend)
+        .field(
+            "Token lifetime",
+            format!("{} seconds", registration.data.device_token.expires_in),
+        )
+        .render();
     Ok(Some(device.id))
 }
 
@@ -306,7 +323,7 @@ async fn password_login(client: &ApiClient, args: &crate::cli::LoginArgs) -> Res
     };
     let password = match &args.password {
         Some(password) => password.clone(),
-        None => rpassword::prompt_password("Password: ")?,
+        None => rpassword::prompt_password(terminal::prompt("Password: "))?,
     };
     client
         .login_password(&username, &password, args.totp_code.as_deref())
@@ -316,9 +333,12 @@ async fn password_login(client: &ApiClient, args: &crate::cli::LoginArgs) -> Res
 
 async fn device_code_login(client: &ApiClient) -> Result<AuthToken> {
     let start = client.start_cli_login().await?;
-    println!("Open: {}", start.verification_url);
-    println!("Code: {}", start.user_code);
-    println!("Waiting for approval...");
+    terminal::section("Device Login");
+    Details::new()
+        .field("Open", start.verification_url)
+        .field("Code", terminal::command(start.user_code))
+        .status("Status", "waiting for approval")
+        .render();
 
     let deadline = Instant::now() + Duration::from_secs(start.expires_in);
     while Instant::now() < deadline {
@@ -336,7 +356,7 @@ async fn device_code_login(client: &ApiClient) -> Result<AuthToken> {
 async fn logout(paths: AppPaths, revoke_remote: bool) -> Result<()> {
     let config = Config::load(&paths)?;
     let Some(server_url) = config.server_url.clone() else {
-        println!("not logged in");
+        terminal::note("Not logged in.");
         return Ok(());
     };
     let secret_store = SecretStore::new(paths.clone());
@@ -358,7 +378,10 @@ async fn logout(paths: AppPaths, revoke_remote: bool) -> Result<()> {
         if let Some(access_token) = token {
             let client = ApiClient::new(server_url.clone())?;
             if let Err(error) = client.logout(&access_token).await {
-                eprintln!("remote logout failed: {error}");
+                eprintln!(
+                    "{} Remote logout failed: {error}",
+                    terminal::warning("WARN")
+                );
             }
         }
     }
@@ -366,7 +389,7 @@ async fn logout(paths: AppPaths, revoke_remote: bool) -> Result<()> {
     let mut config = config;
     config.active_device_id = None;
     config.save(&paths)?;
-    println!("logged out from {server_url}");
+    terminal::success_line(format!("Logged out from {server_url}"));
     Ok(())
 }
 
@@ -375,24 +398,27 @@ async fn status(paths: AppPaths, online: bool) -> Result<()> {
     let state = LocalState::open(&paths)?;
     state.init_schema()?;
 
-    println!("home: {}", paths.home().display());
-    match &config.server_url {
-        Some(server_url) => println!("server: {server_url}"),
-        None => println!("server: not configured"),
-    }
+    terminal::section("Client Status");
+    let mut details = Details::new().field("Home", paths.home().display());
+    details = match &config.server_url {
+        Some(server_url) => details.field("Server", server_url),
+        None => details.status("Server", "not configured"),
+    };
 
     let active_device = match &config.active_device_id {
         Some(device_id) => state.get_device(device_id)?,
         None => None,
     };
-    match &active_device {
-        Some(device) => println!("device: {} ({}, {})", device.name, device.id, device.status),
-        None => println!("device: not registered"),
-    }
-    match state.get_kv("last_login_mode")? {
-        Some(mode) => println!("login mode: {mode}"),
-        None => println!("login mode: unknown"),
-    }
+    details = match &active_device {
+        Some(device) => details
+            .field("Device", format!("{} ({})", device.name, device.id))
+            .status("Device status", device.status.clone()),
+        None => details.status("Device", "not registered"),
+    };
+    details = match state.get_kv("last_login_mode")? {
+        Some(mode) => details.field("Login mode", mode),
+        None => details.status("Login mode", "unknown"),
+    };
 
     let token_present = config
         .server_url
@@ -409,21 +435,24 @@ async fn status(paths: AppPaths, online: bool) -> Result<()> {
             }
         })
         .is_some();
-    println!(
-        "token: {}",
-        if token_present { "present" } else { "missing" }
+    details = details.status(
+        "Credential",
+        if token_present { "present" } else { "missing" },
     );
+    details.render();
 
     if online {
         if let Some(server_url) = config.server_url {
             let client = ApiClient::new(server_url.clone())?;
             let health = client.healthz().await?;
-            println!("server health: {}", health.status);
+            terminal::section("Live Status");
+            let mut online_details = Details::new().status("Server", health.status);
             if let Some(device) = active_device {
                 let (_, _, token) = load_device_token(&paths).await?;
                 let remote = client.get_device(&token, &device.id).await?;
-                println!("remote device: {}", remote.status);
+                online_details = online_details.status("Remote device", remote.status);
             }
+            online_details.render();
         }
     }
     Ok(())
@@ -455,9 +484,12 @@ async fn write_wireguard_config(paths: AppPaths, output: Option<PathBuf>) -> Res
     let config = client.get_wireguard_config(&token).await?;
     let output = output.unwrap_or_else(|| wireguard::default_config_path(&paths));
     wireguard::write_config(&output, &config, &private_key)?;
-    println!("wrote WireGuard config to {}", output.display());
-    println!("device: {}", config.device_id);
-    println!("peers: {}", config.peers.len());
+    terminal::success_line("WireGuard configuration written");
+    Details::new()
+        .field("Path", output.display())
+        .field("Device", config.device_id)
+        .field("Peers", config.peers.len())
+        .render();
     Ok(())
 }
 
@@ -470,61 +502,119 @@ fn wireguard_action(
         .config
         .unwrap_or_else(|| wireguard::default_config_path(&paths));
     wireguard::run_helper(&paths, action, &config, args.dry_run)?;
-    println!("wireguard {action} ok using {}", config.display());
+    terminal::success_line(format!("WireGuard {action} using {}", config.display()));
     Ok(())
 }
 
 async fn ssh_check(paths: AppPaths, args: crate::cli::SshCheckArgs) -> Result<()> {
     let version = ssh::check_ssh_available()?;
-    println!("ssh: {version}");
+    terminal::success_line(format!("SSH available ({version})"));
     if let Some(session_id) = args.session_id {
         let (server_url, _device_id, token) = load_device_token(&paths).await?;
-        let attach = ApiClient::new(server_url)?
-            .attach_session(&token, &session_id)
-            .await?;
-        println!("session: {}", attach.session_id);
-        println!("node: {} {}", attach.node_id, attach.node_wireguard_ip);
-        println!("tmux: {}", attach.tmux_session_name);
-        println!("command: {}", attach.ssh_command);
-        println!("authorization task: {}", attach.authorization_task_id);
-        println!("expires in: {} seconds", attach.expires_in);
+        let client = ApiClient::new(server_url)?;
+        let session_id = resolve_session_reference(&client, &token, &session_id).await?;
+        let attach = client.attach_session(&token, &session_id).await?;
+        terminal::section("Attach Authorization");
+        Details::new()
+            .field("Session", attach.session_id)
+            .field(
+                "Node",
+                format!("{} ({})", attach.node_id, attach.node_wireguard_ip),
+            )
+            .field("Tmux", attach.tmux_session_name)
+            .field("Command", terminal::command(attach.ssh_command))
+            .field("Task", attach.authorization_task_id)
+            .field("Expires", format!("{} seconds", attach.expires_in))
+            .render();
     }
     Ok(())
 }
 
 async fn attach(paths: AppPaths, args: crate::cli::AttachArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
-    let attach = ApiClient::new(server_url)?
-        .attach_session(&token, &args.session_id)
-        .await?;
-    println!("{}", attach.ssh_command);
-    println!("tmux: {}", attach.tmux_session_name);
-    println!("authorization expires in {} seconds", attach.expires_in);
+    let reference = args
+        .session
+        .or(args.session_id)
+        .context("missing session reference")?;
+    let client = ApiClient::new(server_url)?;
+    let session_id = resolve_session_reference(&client, &token, &reference).await?;
+    let attach = client.attach_session(&token, &session_id).await?;
+    terminal::section("Attach");
+    Details::new()
+        .field("Command", terminal::command(&attach.ssh_command))
+        .field("Tmux", &attach.tmux_session_name)
+        .field("Expires", format!("{} seconds", attach.expires_in))
+        .render();
     if args.print_only {
         return Ok(());
     }
     ssh::execute_attach(&attach)
 }
 
-async fn account_list(paths: AppPaths) -> Result<()> {
+async fn resolve_session_reference(
+    client: &ApiClient,
+    token: &str,
+    reference: &str,
+) -> Result<String> {
+    let sessions = client.list_sessions(token, None, &[]).await?;
+    resolve_id(
+        reference,
+        "session",
+        sessions.iter().map(|session| session.id.as_str()),
+    )
+}
+
+async fn resolve_account_reference(
+    client: &ApiClient,
+    token: &str,
+    reference: &str,
+) -> Result<String> {
+    let accounts = client.list_tool_accounts(token).await?;
+    resolve_id(
+        reference,
+        "tool account",
+        accounts.iter().map(|account| account.id.as_str()),
+    )
+}
+
+async fn resolve_profile_reference(
+    client: &ApiClient,
+    token: &str,
+    reference: &str,
+) -> Result<String> {
+    let profiles = client.list_developer_credential_profiles(token).await?;
+    resolve_id(
+        reference,
+        "credential profile",
+        profiles.iter().map(|profile| profile.id.as_str()),
+    )
+}
+
+async fn account_list(paths: AppPaths, args: crate::cli::ListArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let accounts = ApiClient::new(server_url)?
         .list_tool_accounts(&token)
         .await?;
     if accounts.is_empty() {
-        println!("tool accounts: none");
+        terminal::note("No tool accounts found.");
         return Ok(());
     }
+    let mut table = Table::new(["ID", "TOOL", "NAME", "STATUS", "REGION", "RUNTIME"]);
     for account in accounts {
-        println!(
-            "{}\t{}\t{}\t{}\t{}",
-            account.id,
+        table.row([
+            if args.no_trunc {
+                account.id
+            } else {
+                short_id(&account.id)
+            },
             account.tool_type,
             account.display_name,
             account.status,
-            account.region_code
-        );
+            account.region_code,
+            account.runtime_backend.unwrap_or_else(|| "-".to_string()),
+        ]);
     }
+    table.render();
     Ok(())
 }
 
@@ -549,8 +639,10 @@ async fn account_create(paths: AppPaths, args: crate::cli::AccountCreateArgs) ->
 
 async fn account_bind(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
-    let binding = ApiClient::new(server_url)?
-        .start_tool_account_binding(&token, &args.account_id)
+    let client = ApiClient::new(server_url)?;
+    let account_id = resolve_account_reference(&client, &token, &args.account_id).await?;
+    let binding = client
+        .start_tool_account_binding(&token, &account_id)
         .await?;
     print_binding_status(&binding);
     Ok(())
@@ -561,17 +653,22 @@ async fn account_import_config(
     args: crate::cli::AccountImportConfigArgs,
 ) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
+    let client = ApiClient::new(server_url)?;
+    let account_id = resolve_account_reference(&client, &token, &args.account).await?;
     let include = discover_claude_config_paths(args.include_resume_history)?;
     if include.is_empty() {
-        println!("no local Claude config paths found");
+        terminal::note("No supported local Claude configuration paths found.");
         return Ok(());
     }
-    println!("candidate paths:");
+    terminal::section("Configuration Import");
+    println!("{}", terminal::label("Candidate paths"));
     for path in &include {
-        println!("  {path}");
+        println!("  {}", terminal::command(path));
     }
     if args.include_resume_history {
-        println!("resume history may include private prompts, transcripts, and local paths.");
+        terminal::warning_line(
+            "Resume history may include private prompts, transcripts, and local paths.",
+        );
     }
     if !args.yes
         && !args.dry_run
@@ -584,10 +681,10 @@ async fn account_import_config(
     } else {
         collect_claude_config_files(&include)?
     };
-    let result = ApiClient::new(server_url)?
+    let result = client
         .create_tool_account_config_import(
             &token,
-            &args.account,
+            &account_id,
             &ToolAccountConfigImportRequest {
                 tool_type: args.tool,
                 source: "local_cli".to_string(),
@@ -604,52 +701,73 @@ async fn account_import_config(
             },
         )
         .await?;
-    println!("tool account: {}", result.tool_account_id);
-    println!("dry run: {}", result.dry_run);
-    println!("accepted:");
+    terminal::success_line(if result.dry_run {
+        "Configuration import preview complete"
+    } else {
+        "Configuration import queued"
+    });
+    Details::new()
+        .field("Tool account", result.tool_account_id)
+        .field("Dry run", result.dry_run)
+        .render();
+    println!("{}", terminal::label("Accepted"));
     for path in result.accepted {
         println!("  {path}");
     }
-    println!("rejected:");
+    println!("{}", terminal::label("Rejected"));
     for path in result.rejected {
         println!("  {path}");
     }
     for warning in result.warnings {
-        println!("warning: {warning}");
+        terminal::warning_line(warning);
     }
     if let Some(task_id) = result.task_id {
-        println!("task: {task_id}");
+        Details::new().field("Task", task_id).render();
     }
     if let Some(path) = result.account_remote_path {
-        println!("remote account path: {path}");
+        Details::new().field("Remote path", path).render();
     }
     if let Some(count) = result.imported_file_count {
-        println!("files queued: {count}");
+        Details::new().field("Files queued", count).render();
     }
     Ok(())
 }
 
 async fn account_verify(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
-    let binding = ApiClient::new(server_url)?
-        .verify_tool_account_binding(&token, &args.account_id)
+    let client = ApiClient::new(server_url)?;
+    let account_id = resolve_account_reference(&client, &token, &args.account_id).await?;
+    let binding = client
+        .verify_tool_account_binding(&token, &account_id)
         .await?;
     print_binding_status(&binding);
     Ok(())
 }
 
-async fn credentials_list(paths: AppPaths) -> Result<()> {
+async fn credentials_list(paths: AppPaths, args: crate::cli::ListArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let profiles = ApiClient::new(server_url)?
         .list_developer_credential_profiles(&token)
         .await?;
     if profiles.is_empty() {
-        println!("developer credential profiles: none");
+        terminal::note("No developer credential profiles found.");
         return Ok(());
     }
+    let mut table = Table::new(["ID", "NAME", "STATUS", "GITHUB CLI", "SSH"]);
     for profile in profiles {
-        print_developer_credential_profile(&profile);
+        table.row([
+            if args.no_trunc {
+                profile.id
+            } else {
+                short_id(&profile.id)
+            },
+            profile.display_name,
+            profile.status,
+            profile.github_cli_mode,
+            profile.ssh_mode,
+        ]);
     }
+    table.render();
     Ok(())
 }
 
@@ -680,8 +798,11 @@ async fn credentials_create(
 
 async fn credentials_bind(paths: AppPaths, args: crate::cli::CredentialsBindArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
-    let profile = ApiClient::new(server_url)?
-        .bind_developer_credential_profile(&token, &args.account, &args.profile)
+    let client = ApiClient::new(server_url)?;
+    let account_id = resolve_account_reference(&client, &token, &args.account).await?;
+    let profile_id = resolve_profile_reference(&client, &token, &args.profile).await?;
+    let profile = client
+        .bind_developer_credential_profile(&token, &account_id, &profile_id)
         .await?;
     print_developer_credential_profile(&profile);
     Ok(())
@@ -692,23 +813,26 @@ async fn credentials_unbind(
     args: crate::cli::CredentialsUnbindArgs,
 ) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
-    ApiClient::new(server_url)?
-        .unbind_developer_credential_profile(&token, &args.account)
+    let client = ApiClient::new(server_url)?;
+    let account_id = resolve_account_reference(&client, &token, &args.account).await?;
+    client
+        .unbind_developer_credential_profile(&token, &account_id)
         .await?;
-    println!(
-        "developer credential profile unbound from account {}",
-        args.account
-    );
+    terminal::success_line(format!(
+        "Developer credential profile unbound from account {}",
+        account_id
+    ));
     Ok(())
 }
 
 async fn account_status(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let client = ApiClient::new(server_url)?;
-    let account = client.get_tool_account(&token, &args.account_id).await?;
+    let account_id = resolve_account_reference(&client, &token, &args.account_id).await?;
+    let account = client.get_tool_account(&token, &account_id).await?;
     print_tool_account(&account);
     let binding = client
-        .get_tool_account_binding_status(&token, &args.account_id)
+        .get_tool_account_binding_status(&token, &account_id)
         .await?;
     print_binding_status(&binding);
     Ok(())
@@ -716,9 +840,9 @@ async fn account_status(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Res
 
 async fn account_disable(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
-    let account = ApiClient::new(server_url)?
-        .disable_tool_account(&token, &args.account_id)
-        .await?;
+    let client = ApiClient::new(server_url)?;
+    let account_id = resolve_account_reference(&client, &token, &args.account_id).await?;
+    let account = client.disable_tool_account(&token, &account_id).await?;
     print_tool_account(&account);
     Ok(())
 }
@@ -728,9 +852,9 @@ async fn account_default_set(
     args: crate::cli::AccountDefaultSetArgs,
 ) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
-    let account = ApiClient::new(server_url.clone())?
-        .get_tool_account(&token, &args.account_id)
-        .await?;
+    let client = ApiClient::new(server_url.clone())?;
+    let account_id = resolve_account_reference(&client, &token, &args.account_id).await?;
+    let account = client.get_tool_account(&token, &account_id).await?;
     if account.tool_type != args.tool {
         bail!(
             "account {} is {}, not {}",
@@ -742,7 +866,10 @@ async fn account_default_set(
     let state = LocalState::open(&paths)?;
     state.init_schema()?;
     state.set_kv(&default_account_key(&args.tool), &account.id)?;
-    println!("default {} account: {}", args.tool, account.id);
+    terminal::success_line(format!(
+        "Default {} account set to {}",
+        args.tool, account.id
+    ));
     Ok(())
 }
 
@@ -750,8 +877,10 @@ fn account_default_get(paths: AppPaths, args: crate::cli::AccountDefaultGetArgs)
     let state = LocalState::open(&paths)?;
     state.init_schema()?;
     match state.get_kv(&default_account_key(&args.tool))? {
-        Some(account_id) => println!("default {} account: {}", args.tool, account_id),
-        None => println!("default {} account: not set", args.tool),
+        Some(account_id) => Details::new()
+            .field(format!("Default {} account", args.tool), account_id)
+            .render(),
+        None => terminal::note(format!("Default {} account is not set.", args.tool)),
     }
     Ok(())
 }
@@ -760,38 +889,45 @@ fn account_default_clear(paths: AppPaths, args: crate::cli::AccountDefaultGetArg
     let state = LocalState::open(&paths)?;
     state.init_schema()?;
     state.delete_kv(&default_account_key(&args.tool))?;
-    println!("default {} account cleared", args.tool);
+    terminal::success_line(format!("Default {} account cleared", args.tool));
     Ok(())
 }
 
 fn print_tool_account(account: &ToolAccountData) {
-    println!("account: {}", account.id);
-    println!("tool: {}", account.tool_type);
-    println!("name: {}", account.display_name);
-    println!("status: {}", account.status);
-    println!("region: {}", account.region_code);
-    println!("timezone: {}", account.timezone);
-    println!("locale: {}", account.locale);
-    println!(
-        "runtime: {}",
-        account.runtime_backend.as_deref().unwrap_or("not pinned")
-    );
+    terminal::section("Tool Account");
+    let mut details = Details::new()
+        .field("Account", &account.id)
+        .field("Tool", &account.tool_type)
+        .field("Name", &account.display_name)
+        .status("Status", account.status.clone())
+        .field("Region", &account.region_code)
+        .field("Timezone", &account.timezone)
+        .field("Locale", &account.locale)
+        .field(
+            "Runtime",
+            account.runtime_backend.as_deref().unwrap_or("not pinned"),
+        );
     if let Some(node_id) = &account.affinity_node_id {
-        println!("affinity node: {node_id}");
+        details = details.field("Affinity node", node_id);
     }
     if !account.preferred_node_tags.is_empty() {
-        println!("tags: {}", account.preferred_node_tags.join(","));
+        details = details.field("Node tags", account.preferred_node_tags.join(", "));
     }
+    details.render();
 }
 
 fn print_developer_credential_profile(profile: &DeveloperCredentialProfileData) {
-    println!(
-        "{}\t{}\t{}\tgh={}\tssh={}",
-        profile.id, profile.display_name, profile.status, profile.github_cli_mode, profile.ssh_mode
-    );
+    terminal::section("Developer Credential Profile");
+    let mut details = Details::new()
+        .field("Profile", &profile.id)
+        .field("Name", &profile.display_name)
+        .status("Status", profile.status.clone())
+        .field("GitHub CLI", &profile.github_cli_mode)
+        .field("SSH", &profile.ssh_mode);
     if !profile.git_identity.is_null() {
-        println!("git: {}", profile.git_identity);
+        details = details.field("Git identity", &profile.git_identity);
     }
+    details.render();
 }
 
 fn discover_claude_config_paths(include_resume_history: bool) -> Result<Vec<String>> {
@@ -960,42 +1096,48 @@ fn home_dir() -> Result<PathBuf> {
 }
 
 fn print_binding_status(status: &BindingStatusData) {
-    println!("binding status: {}", status.status);
+    terminal::section("Account Binding");
+    let mut details = Details::new().status("Status", status.status.clone());
     if let Some(node_id) = &status.node_id {
-        println!("node: {node_id}");
+        details = details.field("Node", node_id);
     }
     if let Some(task_id) = &status.task_id {
-        println!("task: {task_id}");
+        details = details.field("Task", task_id);
     }
     if let Some(binding_session_id) = &status.binding_session_id {
-        println!("binding session: {binding_session_id}");
+        details = details.field("Binding session", binding_session_id);
     }
     if let Some(tmux_session_name) = &status.tmux_session_name {
-        println!("tmux: {tmux_session_name}");
+        details = details.field("Tmux", tmux_session_name);
     }
     if let Some(path) = &status.account_remote_path {
-        println!("remote account path: {path}");
+        details = details.field("Remote path", path);
     }
     if let Some(command) = &status.connect_command {
-        println!("command: {command}");
+        details = details.field("Command", terminal::command(command));
     }
     if let Some(verifier) = &status.verifier {
-        println!("verifier: {verifier}");
+        details = details.field("Verifier", verifier);
     }
     if let Some(error) = &status.error {
-        println!("error: {error}");
+        details = details.field("Error", terminal::failure(error));
     }
+    details.render();
 }
 
 async fn sync_ensure(paths: AppPaths, args: crate::cli::SyncEnsureArgs) -> Result<()> {
     let sync =
         ensure_workspace_sync(&paths, args.workspace.as_deref(), args.yes, args.dry_run).await?;
-    println!("workspace: {}", sync.workspace_id);
-    println!("sync session: {} ({})", sync.id, sync.status);
-    println!("remote: {}", sync.remote_path);
+    terminal::success_line("Workspace synchronization ready");
+    let mut details = Details::new()
+        .field("Workspace", sync.workspace_id)
+        .field("Sync session", sync.id)
+        .status("Status", sync.status)
+        .field("Remote path", sync.remote_path);
     if let Some(endpoint) = sync.remote_endpoint {
-        println!("endpoint: {endpoint}");
+        details = details.field("Endpoint", endpoint);
     }
+    details.render();
     Ok(())
 }
 
@@ -1007,39 +1149,48 @@ async fn sync_status(paths: AppPaths, args: crate::cli::SyncStatusArgs) -> Resul
     let Some(local_workspace) =
         state.get_workspace_by_project_key(&server_url, &identity.project_key)?
     else {
-        println!("workspace: not registered");
-        println!("path: {}", identity.local_path.display());
+        terminal::note("Workspace is not registered.");
+        Details::new()
+            .field("Path", identity.local_path.display())
+            .render();
         return Ok(());
     };
     let Some(local_sync) = state.get_sync_session_for_workspace(&local_workspace.id)? else {
-        println!("workspace: {}", local_workspace.id);
-        println!("sync session: missing");
+        Details::new()
+            .field("Workspace", local_workspace.id)
+            .status("Sync session", "missing")
+            .render();
         return Ok(());
     };
     let client = ApiClient::new(server_url.clone())?;
     let sync = client.get_sync_session(&token, &local_sync.id).await?;
     persist_sync_session(&state, &server_url, &sync)?;
     let mutagen_status = mutagen::status(&paths, &sync)?;
-    println!("workspace: {}", local_workspace.id);
-    println!("path: {}", local_workspace.local_path);
-    println!("sync session: {} ({})", sync.id, sync.status);
-    println!("conflicts: {}", sync.conflict_status);
-    println!(
-        "mutagen: {}",
-        if mutagen_status.installed {
-            "present"
-        } else {
-            "missing"
-        }
-    );
+    terminal::section("Workspace Sync");
+    Details::new()
+        .field("Workspace", local_workspace.id)
+        .field("Path", local_workspace.local_path)
+        .field("Sync session", sync.id)
+        .status("Status", sync.status)
+        .status("Conflicts", sync.conflict_status.clone())
+        .status(
+            "Mutagen",
+            if mutagen_status.installed {
+                "present"
+            } else {
+                "missing"
+            },
+        )
+        .render();
     if !mutagen_status.output.is_empty() {
-        println!("{}", mutagen_status.output);
+        terminal::section("Mutagen");
+        println!("{}", mutagen_status.output.trim());
     }
     if sync.conflict_status != "none" || mutagen_status.has_conflicts {
         if args.fail_on_conflict {
             bail!("workspace sync has unresolved conflicts");
         }
-        println!("sync has unresolved conflicts");
+        terminal::warning_line("Workspace sync has unresolved conflicts");
     }
     Ok(())
 }
@@ -1066,25 +1217,25 @@ async fn sync_action(
             mutagen::pause(&paths, &current, args.dry_run)?;
             let sync = client.pause_sync_session(&token, &current.id).await?;
             persist_sync_session(&state, &server_url, &sync)?;
-            println!("sync paused: {}", sync.id);
+            terminal::success_line(format!("Sync paused ({})", sync.id));
         }
         "resume" => {
             let sync = client.resume_sync_session(&token, &current.id).await?;
             mutagen::resume(&paths, &sync, args.dry_run)?;
             persist_sync_session(&state, &server_url, &sync)?;
-            println!("sync resumed: {}", sync.id);
+            terminal::success_line(format!("Sync resumed ({})", sync.id));
         }
         "resolve" => {
             mutagen::resolve(&paths, &current, args.dry_run)?;
             let sync = client.resolve_sync_session(&token, &current.id).await?;
             persist_sync_session(&state, &server_url, &sync)?;
-            println!("sync resolved: {}", sync.id);
+            terminal::success_line(format!("Sync conflicts resolved ({})", sync.id));
         }
         "reset" => {
             let sync = client.reset_sync_session(&token, &current.id).await?;
             mutagen::reset(&paths, &sync, args.dry_run)?;
             persist_sync_session(&state, &server_url, &sync)?;
-            println!("sync reset: {}", sync.id);
+            terminal::success_line(format!("Sync reset ({})", sync.id));
         }
         _ => bail!("unsupported sync action: {action}"),
     }
@@ -1119,9 +1270,12 @@ async fn ensure_workspace_sync(
         },
         None => {
             if !assume_yes {
-                println!("workspace: {}", identity.local_path.display());
-                println!(
-                    "agent-remote needs to create a remote sync relationship for this directory."
+                terminal::section("Workspace Setup");
+                Details::new()
+                    .field("Workspace", identity.local_path.display())
+                    .render();
+                terminal::note(
+                    "A remote synchronization relationship is required for this directory.",
                 );
                 if !prompt_yes_no("Create workspace sync now? [y/N] ")? {
                     bail!("workspace sync not confirmed; remote session will not be started");
@@ -1242,20 +1396,20 @@ fn deps_status(paths: AppPaths, fix: bool) -> Result<()> {
     if fix {
         manager.ensure_manifest()?;
     }
-    for status in manager.check_all()? {
-        println!(
-            "{}: {} ({}) license: {}; notice: {}",
-            status.name,
-            if status.installed {
-                "present"
+    let mut table = Table::new(["DEPENDENCY", "STATUS", "PATH", "LICENSE"]);
+    for dependency in manager.check_all()? {
+        table.row([
+            dependency.name,
+            if dependency.installed {
+                "present".to_string()
             } else {
-                "missing"
+                "missing".to_string()
             },
-            status.binary_path.display(),
-            status.license,
-            status.license_notice
-        );
+            dependency.binary_path.display().to_string(),
+            dependency.license,
+        ]);
     }
+    table.render();
     Ok(())
 }
 
@@ -1266,7 +1420,7 @@ fn normalize_server_url(raw: &str) -> String {
 fn prompt_line(prompt: &str) -> Result<String> {
     use std::io::{self, Write};
 
-    print!("{prompt}");
+    print!("{}", terminal::prompt(prompt));
     io::stdout().flush()?;
     let mut value = String::new();
     io::stdin().read_line(&mut value)?;
@@ -1280,7 +1434,7 @@ fn prompt_line(prompt: &str) -> Result<String> {
 fn prompt_line_default(prompt: &str, default: &str) -> Result<String> {
     use std::io::{self, Write};
 
-    print!("{prompt} [{default}]: ");
+    print!("{}", terminal::prompt(format!("{prompt} [{default}]: ")));
     io::stdout().flush()?;
     let mut value = String::new();
     io::stdin().read_line(&mut value)?;
@@ -1295,7 +1449,7 @@ fn prompt_line_default(prompt: &str, default: &str) -> Result<String> {
 fn prompt_optional_line(prompt: &str) -> Result<Option<String>> {
     use std::io::{self, Write};
 
-    print!("{prompt}");
+    print!("{}", terminal::prompt(prompt));
     io::stdout().flush()?;
     let mut value = String::new();
     io::stdin().read_line(&mut value)?;
@@ -1310,7 +1464,7 @@ fn prompt_optional_line(prompt: &str) -> Result<Option<String>> {
 fn prompt_yes_no(prompt: &str) -> Result<bool> {
     use std::io::{self, Write};
 
-    print!("{prompt}");
+    print!("{}", terminal::prompt(prompt));
     io::stdout().flush()?;
     let mut value = String::new();
     io::stdin().read_line(&mut value)?;
@@ -1321,7 +1475,7 @@ fn prompt_yes_no(prompt: &str) -> Result<bool> {
 fn prompt_yes_no_default(prompt: &str, default: bool) -> Result<bool> {
     use std::io::{self, Write};
 
-    print!("{prompt}");
+    print!("{}", terminal::prompt(prompt));
     io::stdout().flush()?;
     let mut value = String::new();
     io::stdin().read_line(&mut value)?;
@@ -1343,7 +1497,7 @@ fn init_ssh_public_key(
         return Ok(explicit);
     }
     if let Some(default_path) = platform::default_ssh_public_key_path() {
-        println!("using SSH public key {}", default_path.display());
+        terminal::note(format!("Using SSH public key {}", default_path.display()));
         return Ok(Some(default_path));
     }
     let path = prompt_optional_line("SSH public key path: ")?;

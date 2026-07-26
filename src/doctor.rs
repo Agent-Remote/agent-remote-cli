@@ -5,6 +5,7 @@ use crate::config::{AppPaths, Config};
 use crate::dependencies::DependencyManager;
 use crate::local_state::LocalState;
 use crate::secrets::{device_token_key, user_token_key, SecretStore};
+use crate::terminal;
 
 pub struct Doctor {
     paths: AppPaths,
@@ -16,6 +17,7 @@ impl Doctor {
     }
 
     pub async fn run(&self, fix: bool) -> Result<()> {
+        terminal::section("Agent Remote Doctor");
         if fix {
             self.paths.ensure_base_dirs()?;
         }
@@ -60,12 +62,14 @@ impl Doctor {
             self.paths.config_path().display(),
         );
         match &config.server_url {
-            Some(server_url) => println!("ok server configured: {server_url}"),
-            None => println!("warn server not configured"),
+            Some(server_url) => terminal::success_line(format!("Server configured: {server_url}")),
+            None => terminal::warning_line("Server is not configured"),
         }
         match &config.active_device_id {
-            Some(device_id) => println!("ok active device configured: {device_id}"),
-            None => println!("warn active device not configured"),
+            Some(device_id) => {
+                terminal::success_line(format!("Active device configured: {device_id}"))
+            }
+            None => terminal::warning_line("Active device is not configured"),
         }
     }
 
@@ -124,18 +128,24 @@ impl Doctor {
 
     async fn check_server(&self, config: &Config) -> Result<()> {
         let Some(server_url) = &config.server_url else {
-            println!("warn network server check skipped");
+            terminal::warning_line("Network server check skipped");
             return Ok(());
         };
         match ApiClient::new(server_url.clone())?.healthz().await {
-            Ok(health) => println!("ok network server reachable: {}", health.status),
-            Err(error) => println!("fail network server unreachable: {error}"),
+            Ok(health) => {
+                terminal::success_line(format!("Network server reachable: {}", health.status))
+            }
+            Err(error) => terminal::failure_line(format!("Network server unreachable: {error}")),
         }
         Ok(())
     }
 }
 
 fn status_line(label: &str, ok: bool, detail: impl std::fmt::Display) {
-    let status = if ok { "ok" } else { "warn" };
-    println!("{status} {label}: {detail}");
+    let message = format!("{label}: {detail}");
+    if ok {
+        terminal::success_line(message);
+    } else {
+        terminal::warning_line(message);
+    }
 }

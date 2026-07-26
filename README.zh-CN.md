@@ -24,9 +24,13 @@ agent-remote account bind <account-id>
 agent-remote account verify <account-id>
 agent-remote account status <account-id>
 agent-remote ssh check --session-id <session-id>
-agent-remote attach --session-id <session-id> --print-only
-agent-remote logout
+agent-remote attach <session-id> --print-only
+agent-remote logout [--no-revoke-remote]
 ```
+
+每个命令和嵌套命令都提供 `--help`。运行时输出支持
+`--color auto|always|never`；`auto` 同时遵循 `NO_COLOR` 和 `TERM=dumb`。
+错误、警告、成功操作、分区标题、详情和状态表格使用统一的终端样式。
 
 `agent-remote init` 是推荐的首次运行路径。它会引导用户完成：
 
@@ -76,7 +80,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 
 `agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper，并支持用于诊断的 `--dry-run`。四个平台的 CLI 发行包都会内置 `wg`、`wg-quick` 和 `tmux`；macOS 包还会内置所需的 `wireguard-go` userspace backend。helper 会直接使用这些托管二进制，不依赖 Homebrew 或其他系统包。启用隧道可能需要 `sudo`。
 
-`agent-remote attach --session-id <id>` 会向控制平面请求会话级 SSH 授权，在节点上调度 SSH key 同步，然后使用本地 `ssh` 执行节点侧 forced command。
+`agent-remote attach <id>` 会向控制平面请求会话级 SSH 授权，在节点上调度 SSH key 同步，然后使用本地 `ssh` 执行节点侧 forced command。旧的 `--session-id <id>` 写法仍然兼容。
 
 ## Workspace 同步
 
@@ -102,6 +106,10 @@ CLI 会使用 agent-remote home 中托管的 `bin/mutagen`，或使用同级打�
 `agent-remote account create` 会创建包含地区、时区、locale 和首选节点标签的远端工具账户记录。控制平面会把每个账户固定到可用 runtime backend；客户端会展示该 backend，但不能静默切换。`agent-remote account bind` 会请求控制平面在选定节点上创建临时远端 tmux 登录 session；登录完成后，`agent-remote account verify` 会调度 verifier 任务。CLI 只保存 agent-remote 设备 token；工具登录状态保留在远端节点账户归档中。
 
 `fclaude` 在创建或恢复 session 时会显示选定的 runtime backend。如果控制平面把丢失的 Native Runtime session 对账为 `interrupted`，`fclaude` 会创建有关联关系的 replacement session，而不会 attach 到失效资源或重放之前的命令。
+
+`fclaude list` 默认输出按空格对齐的紧凑表格，session 和 node ID 缩短为 12 位，并从左侧省略过长的工作目录以保留项目名。使用 `fclaude list --no-trunc` 可查看完整值。列表中的短 session ID 可直接传给 `fclaude attach <id>` 或 `fclaude stop <id>`；如果前缀不唯一，命令会拒绝执行。
+
+`agent-remote account list` 和 `agent-remote credentials list` 使用相同的紧凑 ID 规则，并支持 `--no-trunc`。显示出的 account 和 credential profile 短 ID 可直接用于账户绑定、状态查询、配置导入、默认账户选择和凭据绑定等操作。`fclaude --account-id <id>` 同样接受账户短 ID。前缀至少需要 4 个十六进制字符，并且必须唯一匹配一条记录。
 
 ## 开发
 

@@ -2,39 +2,93 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+use agent_remote_cli::cli::VERSION;
+use agent_remote_cli::terminal::{self, ColorChoice, Details};
 use anyhow::{bail, Context, Result};
+use clap::{Args, Parser, Subcommand};
 
-fn main() -> Result<()> {
-    let mut args = env::args().skip(1);
-    let action = args.next().unwrap_or_else(|| "help".to_string());
-    if action == "help" || action == "--help" || action == "-h" {
-        print_usage();
-        return Ok(());
+#[derive(Debug, Parser)]
+#[command(
+    name = "agent-remote-wireguard",
+    version = VERSION,
+    about = "Operate the WireGuard tunnel bundled with agent-remote",
+    after_help = "Examples:\n  agent-remote-wireguard check --config ~/.config/agent-remote/wireguard/agent-remote.conf\n  agent-remote-wireguard up --config ./agent-remote.conf --dry-run\n  agent-remote-wireguard down --config ./agent-remote.conf"
+)]
+struct Cli {
+    /// Control colored output.
+    #[arg(
+        long,
+        env = "AGENT_REMOTE_COLOR",
+        global = true,
+        value_enum,
+        default_value_t = ColorChoice::Auto
+    )]
+    color: ColorChoice,
+
+    #[command(subcommand)]
+    command: WireGuardCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum WireGuardCommand {
+    /// Validate a WireGuard configuration and locate wg-quick.
+    Check(ConfigArgs),
+    /// Bring a WireGuard interface up.
+    Up(ActionArgs),
+    /// Bring a WireGuard interface down.
+    Down(ActionArgs),
+}
+
+#[derive(Debug, Args)]
+struct ConfigArgs {
+    /// WireGuard configuration file.
+    #[arg(long, value_name = "PATH")]
+    config: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct ActionArgs {
+    /// WireGuard configuration file.
+    #[arg(long, value_name = "PATH")]
+    config: PathBuf,
+
+    /// Print the wg-quick command without changing interface state.
+    #[arg(long)]
+    dry_run: bool,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    terminal::configure(cli.color);
+    if let Err(error) = run(cli.command) {
+        eprintln!("{} {error:#}", terminal::failure("ERROR"));
+        std::process::exit(1);
     }
-    let mut config: Option<PathBuf> = None;
-    let mut dry_run = false;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--config" => config = args.next().map(PathBuf::from),
-            "--dry-run" => dry_run = true,
-            value => bail!("unknown argument {value}"),
-        }
-    }
-    let config = config.context("--config is required")?;
+}
+
+fn run(command: WireGuardCommand) -> Result<()> {
+    let (action, config, dry_run) = match command {
+        WireGuardCommand::Check(args) => ("check", args.config, false),
+        WireGuardCommand::Up(args) => ("up", args.config, args.dry_run),
+        WireGuardCommand::Down(args) => ("down", args.config, args.dry_run),
+    };
     if !config.exists() {
         bail!("WireGuard config does not exist: {}", config.display());
     }
-    match action.as_str() {
+    match action {
         "check" => {
-            println!("config ok: {}", config.display());
+            terminal::success_line("WireGuard configuration is readable");
             if let Some(path) = find_wg_quick() {
-                println!("wg-quick: {}", path.display());
+                Details::new()
+                    .field("Config", config.display())
+                    .field("wg-quick", path.display())
+                    .render();
                 Ok(())
             } else {
                 bail!("wg-quick is missing; {}", install_hint());
             }
         }
-        "up" | "down" => run_wg_quick(&action, &config, dry_run),
+        "up" | "down" => run_wg_quick(action, &config, dry_run),
         value => bail!("unknown action {value}"),
     }
 }
@@ -46,7 +100,15 @@ fn run_wg_quick(action: &str, config: &PathBuf, dry_run: bool) -> Result<()> {
         find_wg_quick().context("wg-quick is missing from this release or PATH")?
     };
     if dry_run {
-        println!("{} {} {}", wg_quick.display(), action, config.display());
+        terminal::note(format!(
+            "Dry run: {}",
+            terminal::command(format!(
+                "{} {} {}",
+                wg_quick.display(),
+                action,
+                config.display()
+            ))
+        ));
         return Ok(());
     }
     let managed_bin = env::current_exe()
@@ -69,6 +131,7 @@ fn run_wg_quick(action: &str, config: &PathBuf, dry_run: bool) -> Result<()> {
     if !status.success() {
         bail!("wg-quick exited with {status}");
     }
+    terminal::success_line(format!("WireGuard interface {action} complete"));
     Ok(())
 }
 
@@ -114,6 +177,36 @@ fn install_hint() -> &'static str {
     }
 }
 
-fn print_usage() {
-    println!("agent-remote-wireguard <check|up|down> --config <path> [--dry-run]");
+#[cfg(test)]
+mod tests {
+    use clap::{Command, CommandFactory};
+
+    use super::Cli;
+
+    fn assert_documented(command: &Command, path: &str) {
+        assert!(
+            command.get_about().is_some() || command.get_long_about().is_some(),
+            "{path} is missing command help"
+        );
+        for argument in command.get_arguments() {
+            if matches!(argument.get_id().as_str(), "help" | "version") {
+                continue;
+            }
+            assert!(
+                argument.get_help().is_some() || argument.get_long_help().is_some(),
+                "{path} argument {} is missing help",
+                argument.get_id()
+            );
+        }
+        for child in command.get_subcommands() {
+            assert_documented(child, &format!("{path} {}", child.get_name()));
+        }
+    }
+
+    #[test]
+    fn every_wireguard_command_and_argument_has_help() {
+        let command = Cli::command();
+        command.clone().debug_assert();
+        assert_documented(&command, "agent-remote-wireguard");
+    }
 }
