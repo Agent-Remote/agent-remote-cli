@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.15 - 2026-07-26
+
+- fix: satisfy Windows clippy (851c140)
+
 ## v0.0.4-fix.14 - 2026-07-26
 
 - fix: resolve Windows OpenSSH tools (05b2976)
