@@ -134,10 +134,21 @@ impl ApiClient {
         &self,
         token: &str,
         tool_type: Option<&str>,
+        statuses: &[String],
     ) -> Result<Vec<SessionData>, ApiError> {
-        let path = match tool_type {
-            Some(tool_type) => format!("/api/v1/sessions?tool_type={}", url_encode(tool_type)),
-            None => "/api/v1/sessions".to_string(),
+        let mut query = Vec::new();
+        if let Some(tool_type) = tool_type {
+            query.push(format!("tool_type={}", url_encode(tool_type)));
+        }
+        query.extend(
+            statuses
+                .iter()
+                .map(|status| format!("status={}", url_encode(status))),
+        );
+        let path = if query.is_empty() {
+            "/api/v1/sessions".to_string()
+        } else {
+            format!("/api/v1/sessions?{}", query.join("&"))
         };
         let response: Envelope<SessionListData> = self.get(&path, Some(token)).await?;
         Ok(response.data.items)
@@ -637,6 +648,8 @@ pub struct SessionData {
     pub user_id: String,
     pub tool_account_id: String,
     pub workspace_id: String,
+    pub workspace_local_path: Option<String>,
+    pub workspace_remote_path: Option<String>,
     pub node_id: String,
     pub project_key: String,
     pub status: String,

@@ -19,9 +19,14 @@ const TOOL_TYPE: &str = "claude";
 enum Mode {
     Run,
     New,
-    List,
+    List(SessionListArgs),
     Attach(String),
     Stop(String),
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SessionListArgs {
+    statuses: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -44,7 +49,7 @@ async fn main() -> Result<()> {
 async fn run(args: FClaudeArgs) -> Result<()> {
     let paths = AppPaths::new(args.home.clone())?;
     match &args.mode {
-        Mode::List => list_sessions(&paths).await,
+        Mode::List(list_args) => list_sessions(&paths, list_args).await,
         Mode::Attach(session_id) => attach_session(&paths, session_id, args.print_only).await,
         Mode::Stop(session_id) => stop_session(&paths, session_id).await,
         Mode::Run | Mode::New => run_or_create_session(&paths, args).await,
@@ -111,27 +116,38 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
     attach_with_client(&client, &token, &session.id, args.print_only).await
 }
 
-async fn list_sessions(paths: &AppPaths) -> Result<()> {
+async fn list_sessions(paths: &AppPaths, args: &SessionListArgs) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(paths).await?;
     let sessions = ApiClient::new(server_url)?
-        .list_sessions(&token, Some(TOOL_TYPE))
+        .list_sessions(&token, Some(TOOL_TYPE), &args.statuses)
         .await?;
     if sessions.is_empty() {
         println!("claude sessions: none");
         return Ok(());
     }
+    println!("ID\tSTATUS\tWORKING_DIRECTORY\tPROJECT\tNODE\tBACKEND\tTMUX");
     for session in sessions {
+        let working_directory = session
+            .workspace_local_path
+            .as_deref()
+            .or(session.workspace_remote_path.as_deref())
+            .unwrap_or("-");
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}",
-            session.id,
-            session.status,
-            session.project_key,
-            session.node_id,
-            session.runtime_backend,
-            session.tmux_session_name.unwrap_or_else(|| "-".to_string())
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            display_cell(&session.id),
+            display_cell(&session.status),
+            display_cell(working_directory),
+            display_cell(&session.project_key),
+            display_cell(&session.node_id),
+            display_cell(&session.runtime_backend),
+            display_cell(session.tmux_session_name.as_deref().unwrap_or("-")),
         );
     }
     Ok(())
+}
+
+fn display_cell(value: &str) -> String {
+    value.replace(['\t', '\n', '\r'], " ")
 }
 
 async fn attach_session(paths: &AppPaths, session_id: &str, print_only: bool) -> Result<()> {
@@ -442,7 +458,18 @@ fn parse_args(raw: Vec<String>) -> Result<FClaudeArgs> {
             "--dry-run" => dry_run = true,
             "--print-only" => print_only = true,
             "new" if mode == Mode::Run => mode = Mode::New,
-            "list" if mode == Mode::Run => mode = Mode::List,
+            "list" if mode == Mode::Run => mode = Mode::List(SessionListArgs::default()),
+            "--status" if matches!(mode, Mode::List(_)) => {
+                index += 1;
+                let status = raw.get(index).context("--status requires a value")?.clone();
+                add_list_status(&mut mode, status);
+            }
+            "--starting" | "--running" | "--active" | "--stopping" | "--stopped"
+            | "--interrupted" | "--failed"
+                if matches!(mode, Mode::List(_)) =>
+            {
+                add_list_status(&mut mode, value.trim_start_matches("--").to_string());
+            }
             "attach" if mode == Mode::Run => {
                 index += 1;
                 mode = Mode::Attach(
@@ -481,6 +508,14 @@ fn parse_args(raw: Vec<String>) -> Result<FClaudeArgs> {
     })
 }
 
+fn add_list_status(mode: &mut Mode, status: String) {
+    if let Mode::List(args) = mode {
+        if !args.statuses.contains(&status) {
+            args.statuses.push(status);
+        }
+    }
+}
+
 fn prompt_yes_no(prompt: &str) -> Result<bool> {
     use std::io::{self, Write};
 
@@ -498,7 +533,7 @@ fn default_account_key() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, Mode};
+    use super::{parse_args, Mode, SessionListArgs};
 
     #[test]
     fn parses_direct_passthrough_flags() {
@@ -518,5 +553,40 @@ mod tests {
     fn parses_attach_mode() {
         let args = parse_args(vec!["attach".into(), "session_1".into()]).unwrap();
         assert_eq!(args.mode, Mode::Attach("session_1".into()));
+    }
+
+    #[test]
+    fn parses_list_status_shortcuts() {
+        let args = parse_args(vec![
+            "list".into(),
+            "--running".into(),
+            "--stopped".into(),
+            "--running".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            args.mode,
+            Mode::List(SessionListArgs {
+                statuses: vec!["running".into(), "stopped".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_repeatable_explicit_list_status() {
+        let args = parse_args(vec![
+            "list".into(),
+            "--status".into(),
+            "active".into(),
+            "--status".into(),
+            "failed".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            args.mode,
+            Mode::List(SessionListArgs {
+                statuses: vec!["active".into(), "failed".into()],
+            })
+        );
     }
 }
