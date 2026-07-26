@@ -14,6 +14,13 @@ function Assert-File([string]$Path) {
     if (-not (Test-Path $Path -PathType Leaf)) { throw "Missing file: $Path" }
 }
 
+function Resolve-PackageBinary([string]$RelativePath) {
+    if (-not [System.IO.Path]::GetExtension($RelativePath)) {
+        return "$RelativePath.exe"
+    }
+    return $RelativePath
+}
+
 $binFiles = @(
     "agent-remote.exe",
     "fclaude.exe",
@@ -41,7 +48,7 @@ foreach ($name in $requiredDependencies) {
 }
 
 foreach ($dependency in $manifest.dependencies) {
-    $binary = Join-Path $PackageDirectory $dependency.binary
+    $binary = Join-Path $PackageDirectory (Resolve-PackageBinary $dependency.binary)
     Assert-File $binary
     if ($dependency.PSObject.Properties.Name -contains "binary_sha256") {
         $actual = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -21,12 +21,23 @@ SOURCE_DEST="$(cd "$SOURCE_DEST" && pwd)"
 LICENSE_DEST="$(cd "$LICENSE_DEST" && pwd)"
 
 download_source() {
-  local name="$1" url="$2" archive
+  local name="$1" url="$2" archive source_dir attempt
   archive="$WORK/$name"
-  curl --fail --show-error --location --retry 5 --retry-all-errors --retry-delay 5 "$url" -o "$archive"
-  cp "$archive" "$SOURCE_DEST/$name"
-  mkdir -p "$WORK/src/$name"
-  tar -xf "$archive" -C "$WORK/src/$name" --strip-components=1
+  source_dir="$WORK/src/$name"
+  for attempt in 1 2 3; do
+    rm -f "$archive"
+    rm -rf "$source_dir"
+    mkdir -p "$source_dir"
+    if curl --fail --show-error --location --retry 5 --retry-all-errors --retry-delay 5 "$url" -o "$archive" &&
+      tar -xf "$archive" -C "$source_dir" --strip-components=1 &&
+      find "$source_dir" -mindepth 1 -print -quit | grep -q .; then
+      cp "$archive" "$SOURCE_DEST/$name"
+      return
+    fi
+    echo "download or extraction failed for $name (attempt $attempt/3)" >&2
+  done
+  echo "failed to prepare source archive after 3 attempts: $name" >&2
+  return 1
 }
 
 download_source "tmux-${TMUX_VERSION}.tar.gz" \
