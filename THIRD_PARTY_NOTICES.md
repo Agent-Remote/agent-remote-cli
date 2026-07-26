@@ -1,25 +1,32 @@
-# Third Party Notices
+# Third-Party Notices
 
 This repository is licensed under GPL-3.0-only. See `LICENSE`.
 
-agent-remote is designed to manage or bundle selected external programs in release artifacts. The exact binary artifact, version, source URL, checksum, and license text must be recorded by the release process whenever a binary is shipped.
+## Managed Release Components
 
-## Managed External Programs
-
-| Component | Use in agent-remote | Upstream license notice |
+| Component | Use | License or notice |
 | --- | --- | --- |
-| WireGuard tools/helpers | Local-to-node tunnel setup and checks | `wireguard-tools` is distributed under GPL-2.0-only. Platform-specific WireGuard implementations can have different licenses; packaged artifacts must carry their exact upstream notice. Source: https://git.zx2c4.com/wireguard-tools/tree/COPYING |
-| Mutagen | Workspace file synchronization | The Mutagen repository states that code is MIT unless otherwise specified, and also notes that official release builds from v0.17 onward include SSPL-licensed code by default. Packaged artifacts must identify whether they are official builds or custom MIT-only builds and include the matching upstream notices. Source: https://github.com/mutagen-io/mutagen/blob/master/LICENSE |
-| tmux | Managed terminal multiplexer available to CLI workflows | ISC. The exact license text and source archive are included in each release package. Source: https://github.com/tmux/tmux |
-| wireguard-go | macOS userspace WireGuard backend | MIT. Included only in macOS packages with its exact license text and source archive. Source: https://github.com/WireGuard/wireguard-go |
-| libevent, ncurses, libmnl | Static build dependencies for managed tmux and WireGuard tools | Their exact upstream license texts and source archives are included in each affected release package. |
+| Mutagen 0.18.1 | Workspace synchronization | The source is MIT unless otherwise marked. Official builds from v0.17 include SSPL-licensed code; releases must include the notices matching the exact downloaded artifact. Source: https://github.com/mutagen-io/mutagen/blob/master/LICENSE |
+| tmux 3.5a | Managed terminal multiplexer | ISC. Source: https://github.com/tmux/tmux/blob/master/COPYING |
+| wireguard-tools 1.0.20210914 | WireGuard configuration and control | GPL-2.0-only. Source: https://git.zx2c4.com/wireguard-tools/tree/COPYING |
+| wireguard-go 0.0.20250522 | macOS userspace WireGuard backend | MIT. Source: https://github.com/WireGuard/wireguard-go/blob/master/LICENSE |
+| libevent 2.1.12-stable | Static tmux dependency | 3-clause BSD. Source: https://github.com/libevent/libevent/blob/master/LICENSE |
+| ncurses 6.5 | Static tmux dependency | X11-style license. Source: https://invisible-island.net/ncurses/ncurses-license.html |
+| libmnl 1.0.5 | Static Linux WireGuard dependency | LGPL-2.1-or-later. Source: https://netfilter.org/projects/libmnl/ |
 
-## Packaging Rule
+Release archives include the source archives and license texts used to build
+managed native tools. Their versions and checksums are recorded in
+`dependencies/manifest.json`.
 
-Do not publish an agent-remote release artifact with embedded WireGuard or Mutagen binaries unless the artifact includes:
+Rust crates linked into the CLI retain their upstream licenses. The exact crate
+graph is recorded in `Cargo.lock`; release automation must include a
+Cargo.lock-derived license inventory whenever the binaries are distributed.
 
-- the exact upstream component name and version;
-- the source URL used to obtain or build it;
-- the checksum of the packaged binary;
-- the applicable upstream license text;
-- any required source offer or source distribution instructions.
+## Distribution Requirements
+
+When a release artifact redistributes third-party software, it must include:
+
+- the exact component name and version;
+- the source URL and checksum;
+- the applicable license and notice text;
+- any required source code, source offer, or relinking instructions.
