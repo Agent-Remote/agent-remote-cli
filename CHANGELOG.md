@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.10 - 2026-07-26
+
+- feat: improve claude session listing (bbd4299)
+
 ## v0.0.4-fix.9 - 2026-07-24
 
 - fix: forward authorized SSH agents (faa1f68)
