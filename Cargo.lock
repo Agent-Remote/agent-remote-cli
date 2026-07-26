@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agent-remote-cli"
-version = "0.0.4-fix.12"
+version = "0.0.4-fix.13"
 dependencies = [
  "anyhow",
  "base64",

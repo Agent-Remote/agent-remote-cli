@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.13 - 2026-07-26
+
+- fix: bundle WireGuard for Windows (89761b5)
+- fix: preserve LF checkouts on Windows (9da4f3a)
+
 ## v0.0.4-fix.12 - 2026-07-26
 
 - feat: support Windows clients (f1de6b2)
