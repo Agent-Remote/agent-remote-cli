@@ -9,6 +9,7 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "dunce",
  "rand_core 0.6.4",
  "reqwest",
  "rpassword",
@@ -20,6 +21,7 @@ dependencies = [
  "tokio",
  "toml",
  "unicode-width",
+ "windows-sys 0.61.2",
  "x25519-dalek",
 ]
 
@@ -263,6 +265,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "equivalent"

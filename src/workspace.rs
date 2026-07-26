@@ -35,8 +35,7 @@ pub fn identify_workspace(path: Option<&Path>) -> Result<WorkspaceIdentity> {
         Some(path) => path.to_path_buf(),
         None => std::env::current_dir().context("failed to read current directory")?,
     };
-    let local_path = raw_path
-        .canonicalize()
+    let local_path = canonicalize_workspace(&raw_path)
         .with_context(|| format!("failed to canonicalize {}", raw_path.display()))?;
     if !local_path.is_dir() {
         bail!(
@@ -44,7 +43,7 @@ pub fn identify_workspace(path: Option<&Path>) -> Result<WorkspaceIdentity> {
             local_path.display()
         );
     }
-    let normalized = local_path.to_string_lossy().to_string();
+    let normalized = normalized_project_path(&local_path);
     let project_key = format!("sha256:{}", sha256_hex(normalized.as_bytes()));
     let display_name = local_path
         .file_name()
@@ -56,6 +55,25 @@ pub fn identify_workspace(path: Option<&Path>) -> Result<WorkspaceIdentity> {
         project_key,
         display_name,
     })
+}
+
+#[cfg(windows)]
+fn canonicalize_workspace(path: &Path) -> std::io::Result<PathBuf> {
+    dunce::canonicalize(path)
+}
+
+#[cfg(not(windows))]
+fn canonicalize_workspace(path: &Path) -> std::io::Result<PathBuf> {
+    path.canonicalize()
+}
+
+fn normalized_project_path(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        value.to_lowercase()
+    } else {
+        value
+    }
 }
 
 pub fn check_git_locks(workspace_path: &Path) -> Result<Option<GitLockStatus>> {
@@ -148,5 +166,8 @@ mod tests {
         let second = identify_workspace(Some(dir.path())).unwrap();
         assert_eq!(first.project_key, second.project_key);
         assert!(first.project_key.starts_with("sha256:"));
+        if cfg!(windows) {
+            assert!(!first.local_path.to_string_lossy().starts_with(r"\\?\"));
+        }
     }
 }

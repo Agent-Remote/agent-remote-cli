@@ -202,7 +202,7 @@ pub struct DepsStatusArgs {
 pub enum WireGuardCommand {
     /// Fetch peer data and write a WireGuard configuration.
     Config(WireGuardConfigArgs),
-    /// Validate the configuration and managed wg-quick executable.
+    /// Validate the configuration and platform WireGuard tunnel tool.
     Check(WireGuardActionArgs),
     /// Bring the managed WireGuard tunnel up.
     Up(WireGuardActionArgs),
@@ -223,7 +223,7 @@ pub struct WireGuardActionArgs {
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
-    /// Print the wg-quick command without changing tunnel state.
+    /// Print the platform WireGuard command without changing tunnel state.
     #[arg(long)]
     pub dry_run: bool,
 }

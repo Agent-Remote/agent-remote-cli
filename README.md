@@ -47,12 +47,14 @@ The CLI initialization flow does not create users. Administrators create regular
 
 - macOS: Keychain through the `security` command
 - Linux: Secret Service through `secret-tool`
+- Windows: Windows Credential Manager through the native Win32 API
 
 If the system credential store is unavailable, the CLI falls back to files under the agent-remote home directory with owner-only permissions. SQLite stores only local metadata and never stores access tokens or tool account login state.
 
 ## Local Paths
 
-By default the CLI uses:
+By default the CLI uses `~/.config/agent-remote/` on macOS and Linux, and
+`%LOCALAPPDATA%\agent-remote\` on Windows:
 
 ```text
 ~/.config/agent-remote/
@@ -71,7 +73,7 @@ Managed external dependencies are expected under:
 ~/.config/agent-remote/dependencies/manifest.json
 ```
 
-The four release targets bundle managed `mutagen`, `tmux`, `wg`, and `wg-quick` binaries. macOS packages additionally bundle `wireguard-go`.
+The four macOS/Linux release targets bundle managed `mutagen`, `tmux`, `wg`, and `wg-quick` binaries. macOS packages additionally bundle `wireguard-go`. Windows x64 and ARM64 packages bundle native CLI executables, Mutagen, and an `scp.exe` compatibility proxy; they use the official system-installed WireGuard for Windows tunnel service.
 
 The current implementation records and checks the manifest for Mutagen and WireGuard helpers. Release packages include the managed Mutagen binary and WireGuard helper for each supported platform.
 
@@ -79,9 +81,9 @@ The current implementation records and checks the manifest for Mutagen and WireG
 
 `agent-remote wireguard config` creates or reuses a local X25519 private key, stores it in the platform credential store (with a `0600` file fallback), enrolls only its public key with the control plane, and writes `wireguard/agent-remote.conf` under the local agent-remote home with `0600` permissions. Running the command repairs devices that were registered without a WireGuard peer. The private key is never sent to the server.
 
-`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. Every CLI release bundles `wg`, `wg-quick`, and `tmux`; macOS releases also bundle the required `wireguard-go` userspace backend. The helper uses these managed binaries directly, without Homebrew or other system packages. Bringing the tunnel up may require `sudo`.
+`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. On macOS and Linux, release packages provide the required managed WireGuard tools. On Windows, the helper controls the official WireGuard for Windows tunnel service with `/installtunnelservice` and `/uninstalltunnelservice`; run tunnel changes from an elevated terminal.
 
-`agent-remote attach <id>` asks the control plane for a session-specific SSH authorization, schedules SSH key synchronization on the node, and then uses local `ssh` to run the node-side forced command. The former `--session-id <id>` form remains supported for compatibility.
+`agent-remote attach <id>` asks the control plane for a session-specific SSH authorization, schedules SSH key synchronization on the node, and then uses local `ssh` to run the node-side forced command. Windows uses the built-in OpenSSH Client optional feature. The former `--session-id <id>` form remains supported for compatibility.
 
 ## Workspace Sync
 
@@ -134,6 +136,12 @@ Build macOS and Linux CLI archives:
 VERSION=0.0.4-fix.11 scripts/package-release.sh
 ```
 
+Build a Windows x64 archive from PowerShell on Windows (pass `-Target aarch64-pc-windows-msvc` for ARM64):
+
+```powershell
+./scripts/package-release.ps1 -Version 0.0.4-fix.11
+```
+
 The release archive includes:
 
 - `agent-remote`
@@ -164,6 +172,15 @@ Install a downloaded release archive:
 ```sh
 ./install.sh
 ```
+
+Install on x64 or ARM64 Windows from PowerShell:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.ps1 -OutFile install.ps1
+.\install.ps1 -InstallPrerequisites
+```
+
+`-InstallPrerequisites` installs the Windows OpenSSH Client optional feature and official WireGuard package when they are missing, and may require an elevated PowerShell. Omit it when both are already installed. The installer adds `%LOCALAPPDATA%\agent-remote\bin` to the user `PATH`; open a new terminal after installation.
 
 The installer copies managed binaries into `AGENT_REMOTE_HOME/bin`, writes the dependency manifest, and links `agent-remote`, `fclaude`, and `agent-remote-wireguard` into `~/.local/bin` by default. It can also override the GitHub repository, version, target, OS, architecture, home directory, link directory, and symlink/copy behavior.
 

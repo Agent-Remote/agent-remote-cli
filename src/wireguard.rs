@@ -65,20 +65,7 @@ pub fn write_config(path: &Path, config: &WireGuardConfigData, private_key: &str
         fs::create_dir_all(parent)?;
     }
     fs::write(path, render_config(config, private_key))?;
-    set_owner_only_permissions(path)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_owner_only_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_owner_only_permissions(_path: &Path) -> Result<()> {
+    crate::platform::set_owner_only_permissions(path)?;
     Ok(())
 }
 
@@ -87,13 +74,13 @@ pub fn default_config_path(paths: &AppPaths) -> PathBuf {
 }
 
 pub fn helper_path(paths: &AppPaths) -> PathBuf {
-    let managed = paths.bin_dir().join("agent-remote-wireguard");
+    let managed = crate::platform::managed_binary(&paths.bin_dir(), "agent-remote-wireguard");
     if managed.exists() {
         return managed;
     }
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
-            let sibling = parent.join("agent-remote-wireguard");
+            let sibling = crate::platform::managed_binary(parent, "agent-remote-wireguard");
             if sibling.exists() {
                 return sibling;
             }
@@ -128,11 +115,14 @@ pub fn run_helper(paths: &AppPaths, action: &str, config_path: &Path, dry_run: b
 mod tests {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
+    #[cfg(unix)]
     use tempfile::tempdir;
 
     use crate::api::{WireGuardConfigData, WireGuardNodePeerData};
 
-    use super::{generate_private_key, public_key_from_private, render_config, write_config};
+    #[cfg(unix)]
+    use super::write_config;
+    use super::{generate_private_key, public_key_from_private, render_config};
 
     #[test]
     fn renders_wireguard_config() {

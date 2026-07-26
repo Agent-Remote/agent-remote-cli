@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use agent_remote_cli::cli::VERSION;
@@ -31,7 +31,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum WireGuardCommand {
-    /// Validate a WireGuard configuration and locate wg-quick.
+    /// Validate a WireGuard configuration and locate the platform tunnel tool.
     Check(ConfigArgs),
     /// Bring a WireGuard interface up.
     Up(ActionArgs),
@@ -52,7 +52,7 @@ struct ActionArgs {
     #[arg(long, value_name = "PATH")]
     config: PathBuf,
 
-    /// Print the wg-quick command without changing interface state.
+    /// Print the platform tunnel command without changing interface state.
     #[arg(long)]
     dry_run: bool,
 }
@@ -78,26 +78,37 @@ fn run(command: WireGuardCommand) -> Result<()> {
     match action {
         "check" => {
             terminal::success_line("WireGuard configuration is readable");
-            if let Some(path) = find_wg_quick() {
+            if let Some(path) = find_tunnel_tool() {
                 Details::new()
                     .field("Config", config.display())
-                    .field("wg-quick", path.display())
+                    .field("Tunnel tool", path.display())
                     .render();
                 Ok(())
             } else {
-                bail!("wg-quick is missing; {}", install_hint());
+                bail!("WireGuard tunnel tool is missing; {}", install_hint());
             }
         }
-        "up" | "down" => run_wg_quick(action, &config, dry_run),
+        "up" | "down" => run_tunnel_tool(action, &config, dry_run),
         value => bail!("unknown action {value}"),
     }
 }
 
-fn run_wg_quick(action: &str, config: &PathBuf, dry_run: bool) -> Result<()> {
+#[cfg(windows)]
+fn run_tunnel_tool(action: &str, config: &Path, dry_run: bool) -> Result<()> {
+    run_wireguard_windows(action, config, dry_run)
+}
+
+#[cfg(not(windows))]
+fn run_tunnel_tool(action: &str, config: &Path, dry_run: bool) -> Result<()> {
+    run_wg_quick(action, config, dry_run)
+}
+
+#[cfg(not(windows))]
+fn run_wg_quick(action: &str, config: &Path, dry_run: bool) -> Result<()> {
     let wg_quick = if dry_run {
-        find_wg_quick().unwrap_or_else(|| PathBuf::from("wg-quick"))
+        find_tunnel_tool().unwrap_or_else(|| PathBuf::from("wg-quick"))
     } else {
-        find_wg_quick().context("wg-quick is missing from this release or PATH")?
+        find_tunnel_tool().context("wg-quick is missing from this release or PATH")?
     };
     if dry_run {
         terminal::note(format!(
@@ -135,7 +146,49 @@ fn run_wg_quick(action: &str, config: &PathBuf, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn find_wg_quick() -> Option<PathBuf> {
+#[cfg(windows)]
+fn run_wireguard_windows(action: &str, config: &Path, dry_run: bool) -> Result<()> {
+    let wireguard = if dry_run {
+        find_tunnel_tool().unwrap_or_else(|| PathBuf::from("wireguard.exe"))
+    } else {
+        find_tunnel_tool().context(
+            "wireguard.exe is missing; install WireGuard for Windows from wireguard.com/install",
+        )?
+    };
+    let (argument, value) = if action == "up" {
+        ("/installtunnelservice", config.as_os_str().to_owned())
+    } else {
+        let tunnel_name = config
+            .file_stem()
+            .context("WireGuard configuration has no tunnel name")?;
+        ("/uninstalltunnelservice", tunnel_name.to_owned())
+    };
+    if dry_run {
+        terminal::note(format!(
+            "Dry run: {}",
+            terminal::command(format!(
+                "{} {} {}",
+                wireguard.display(),
+                argument,
+                value.to_string_lossy()
+            ))
+        ));
+        return Ok(());
+    }
+    let status = Command::new(&wireguard)
+        .arg(argument)
+        .arg(&value)
+        .status()
+        .with_context(|| format!("failed to execute {}", wireguard.display()))?;
+    if !status.success() {
+        bail!("WireGuard for Windows exited with {status}; run from an elevated terminal");
+    }
+    terminal::success_line(format!("WireGuard interface {action} complete"));
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn find_tunnel_tool() -> Option<PathBuf> {
     if let Some(path) = env::var_os("AGENT_REMOTE_WG_QUICK") {
         let path = PathBuf::from(path);
         if path.exists() {
@@ -169,9 +222,30 @@ fn find_wg_quick() -> Option<PathBuf> {
     None
 }
 
+#[cfg(windows)]
+fn find_tunnel_tool() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("AGENT_REMOTE_WIREGUARD") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let candidate = parent.join("wireguard.exe");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    agent_remote_cli::platform::windows_wireguard_path()
+}
+
 fn install_hint() -> &'static str {
     if cfg!(target_os = "macos") {
         "reinstall agent-remote to restore the managed WireGuard tools"
+    } else if cfg!(windows) {
+        "install WireGuard for Windows from https://www.wireguard.com/install/"
     } else {
         "install the wireguard-tools package for this system"
     }

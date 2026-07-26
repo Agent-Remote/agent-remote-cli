@@ -64,6 +64,11 @@ if readme.exists():
         f"VERSION={version} scripts/package-release.sh",
         text,
     )
+    text = re.sub(
+        r"package-release\.ps1 -Version [0-9A-Za-z.+-]+",
+        f"package-release.ps1 -Version {version}",
+        text,
+    )
     text = re.sub(r"--version [0-9A-Za-z.+-]+", f"--version {version}", text)
     readme.write_text(text)
 
@@ -73,6 +78,11 @@ if readme_cn.exists():
     text = re.sub(
         r"VERSION=[0-9A-Za-z.+-]+ scripts/package-release\.sh",
         f"VERSION={version} scripts/package-release.sh",
+        text,
+    )
+    text = re.sub(
+        r"package-release\.ps1 -Version [0-9A-Za-z.+-]+",
+        f"package-release.ps1 -Version {version}",
         text,
     )
     text = re.sub(r"--version [0-9A-Za-z.+-]+", f"--version {version}", text)

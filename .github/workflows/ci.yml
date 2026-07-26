@@ -7,7 +7,12 @@ on:
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
@@ -16,3 +21,19 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - name: Validate PowerShell scripts and Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($file in @("scripts/install.ps1", "scripts/package-release.ps1")) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file), [ref]$tokens, [ref]$errors
+            )
+            if ($errors.Count) { throw ($errors | Out-String) }
+          }
+          ./scripts/package-release.ps1 -Version "0.0.0-ci"
+          if (-not (Test-Path "dist/agent-remote-cli-0.0.0-ci-x86_64-pc-windows-msvc.zip")) {
+            throw "Windows release archive was not created"
+          }

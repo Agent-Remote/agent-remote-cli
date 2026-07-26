@@ -77,7 +77,7 @@ impl DependencyManager {
     }
 
     fn check_dependency(&self, dependency: ManagedDependency) -> DependencyStatus {
-        let binary_path = self.paths.home().join(&dependency.binary);
+        let binary_path = self.paths.home().join(platform_binary(&dependency.binary));
         let installed = binary_path.exists();
         let version_output = if installed {
             Command::new(&binary_path)
@@ -111,7 +111,7 @@ impl DependencyManager {
 
 impl DependencyManifest {
     pub fn default_managed() -> Self {
-        let dependencies = vec![
+        let mut dependencies = vec![
             ManagedDependency {
                 name: "mutagen".to_string(),
                 required_version: "managed-by-agent-remote-release".to_string(),
@@ -132,15 +132,27 @@ impl DependencyManifest {
                     "See THIRD_PARTY_NOTICES.md and the exact packaged WireGuard artifact notice"
                         .to_string(),
             },
-            ManagedDependency {
+        ];
+        if cfg!(windows) {
+            dependencies.push(ManagedDependency {
+                name: "scp-proxy".to_string(),
+                required_version: "managed-by-agent-remote-release".to_string(),
+                binary: "bin/scp".to_string(),
+                source: "agent-remote-cli release artifact".to_string(),
+                license: "GPL-3.0-only".to_string(),
+                license_notice: "See THIRD_PARTY_NOTICES.md".to_string(),
+            });
+        }
+        if !cfg!(windows) {
+            dependencies.push(ManagedDependency {
                 name: "tmux".to_string(),
                 required_version: "managed-by-agent-remote-release".to_string(),
                 binary: "bin/tmux".to_string(),
                 source: "agent-remote-cli release artifact".to_string(),
                 license: "ISC".to_string(),
                 license_notice: "See the packaged dependencies/licenses/tmux-COPYING".to_string(),
-            },
-            ManagedDependency {
+            });
+            dependencies.push(ManagedDependency {
                 name: "wireguard-tools".to_string(),
                 required_version: "managed-by-agent-remote-release".to_string(),
                 binary: "bin/wg".to_string(),
@@ -148,8 +160,8 @@ impl DependencyManifest {
                 license: "GPL-2.0-only".to_string(),
                 license_notice: "See the packaged dependencies/licenses/wireguard-tools-COPYING"
                     .to_string(),
-            },
-        ];
+            });
+        }
         #[cfg(target_os = "macos")]
         let dependencies = {
             let mut platform_dependencies = dependencies;
@@ -171,6 +183,16 @@ impl DependencyManifest {
     }
 }
 
+fn platform_binary(binary: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(binary);
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return path.to_path_buf();
+    };
+    path.parent()
+        .unwrap_or_else(|| std::path::Path::new(""))
+        .join(crate::platform::executable_name(file_name))
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -190,7 +212,13 @@ mod tests {
         let statuses = manager.check_all().unwrap();
         assert_eq!(
             statuses.len(),
-            if cfg!(target_os = "macos") { 5 } else { 4 }
+            if cfg!(target_os = "macos") {
+                5
+            } else if cfg!(windows) {
+                3
+            } else {
+                4
+            }
         );
         assert!(statuses.iter().all(|status| !status.installed));
         assert!(statuses.iter().any(|status| status.name == "mutagen"));

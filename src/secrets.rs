@@ -3,11 +3,14 @@ use std::fmt;
 use std::fs;
 #[cfg(all(unix, not(target_os = "macos")))]
 use std::io::Write;
+#[cfg(unix)]
 use std::process::Command;
 #[cfg(all(unix, not(target_os = "macos")))]
 use std::process::Stdio;
 
-use anyhow::{anyhow, Context, Result};
+#[cfg(not(windows))]
+use anyhow::anyhow;
+use anyhow::{Context, Result};
 
 use crate::config::AppPaths;
 
@@ -90,7 +93,7 @@ impl SecretStore {
         self.paths.ensure_base_dirs()?;
         let path = self.secret_path(key);
         fs::write(&path, value).with_context(|| format!("failed to write {}", path.display()))?;
-        set_owner_only_permissions(&path)?;
+        crate::platform::set_owner_only_permissions(&path)?;
         Ok(())
     }
 
@@ -235,34 +238,98 @@ fn delete_system_secret(key: &str) -> Result<()> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn set_system_secret(key: &str, value: &str) -> Result<()> {
+    use windows_sys::Win32::Security::Credentials::{
+        CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+    };
+
+    let mut target = windows_target(key);
+    let mut blob = value.as_bytes().to_vec();
+    let credential = CREDENTIALW {
+        Type: CRED_TYPE_GENERIC,
+        TargetName: target.as_mut_ptr(),
+        CredentialBlobSize: blob
+            .len()
+            .try_into()
+            .context("secret is too large for Windows Credential Manager")?,
+        CredentialBlob: blob.as_mut_ptr(),
+        Persist: CRED_PERSIST_LOCAL_MACHINE,
+        ..CREDENTIALW::default()
+    };
+    let written = unsafe { CredWriteW(&credential, 0) };
+    if written == 0 {
+        Err(std::io::Error::last_os_error()).context("CredWriteW failed")
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn get_system_secret(key: &str) -> Result<Option<String>> {
+    use std::ptr;
+    use windows_sys::Win32::Security::Credentials::{
+        CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
+    };
+
+    let target = windows_target(key);
+    let mut raw: *mut CREDENTIALW = ptr::null_mut();
+    let read = unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut raw) };
+    if read == 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(1168) {
+            return Ok(None);
+        }
+        return Err(error).context("CredReadW failed");
+    }
+    let result = unsafe {
+        let credential = &*raw;
+        let blob = std::slice::from_raw_parts(
+            credential.CredentialBlob,
+            credential.CredentialBlobSize as usize,
+        );
+        String::from_utf8(blob.to_vec()).context("stored credential is not valid UTF-8")
+    };
+    unsafe { CredFree(raw.cast()) };
+    result.map(Some)
+}
+
+#[cfg(windows)]
+fn delete_system_secret(key: &str) -> Result<()> {
+    use windows_sys::Win32::Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC};
+
+    let target = windows_target(key);
+    let deleted = unsafe { CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) };
+    if deleted == 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(1168) {
+            return Err(error).context("CredDeleteW failed");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_target(key: &str) -> Vec<u16> {
+    format!("{SERVICE}/{key}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn set_system_secret(_key: &str, _value: &str) -> Result<()> {
     Err(anyhow!("platform credential store is not supported"))
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 fn get_system_secret(_key: &str) -> Result<Option<String>> {
     Err(anyhow!("platform credential store is not supported"))
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 fn delete_system_secret(_key: &str) -> Result<()> {
     Err(anyhow!("platform credential store is not supported"))
-}
-
-#[cfg(unix)]
-fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(0o600);
-    fs::set_permissions(path, permissions)?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_owner_only_permissions(_path: &std::path::Path) -> Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]

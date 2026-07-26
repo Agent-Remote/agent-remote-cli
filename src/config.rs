@@ -16,7 +16,7 @@ impl AppPaths {
             Some(path) => path,
             None => match env::var_os("AGENT_REMOTE_HOME") {
                 Some(path) => PathBuf::from(path),
-                None => default_home()?,
+                None => crate::platform::default_app_home()?,
             },
         };
         Ok(Self { home })
@@ -99,11 +99,6 @@ impl Config {
         fs::write(paths.config_path(), raw)?;
         Ok(())
     }
-}
-
-fn default_home() -> Result<PathBuf> {
-    let home = env::var_os("HOME").context("HOME is not set")?;
-    Ok(PathBuf::from(home).join(".config").join("agent-remote"))
 }
 
 #[cfg(test)]

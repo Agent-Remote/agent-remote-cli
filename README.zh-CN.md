@@ -46,12 +46,14 @@ CLI 初始化流程不会创建用户。服务器完成 bootstrap 后，管理�
 
 - macOS：通过 `security` 命令使用 Keychain
 - Linux：通过 `secret-tool` 使用 Secret Service
+- Windows：通过原生 Win32 API 使用 Windows 凭据管理器
 
 如果系统凭据存储不可用，CLI 会回退到 agent-remote home 目录下仅所有者可访问的文件。SQLite 只保存本地元数据，绝不会保存 access token 或工具账户登录状态。
 
 ## 本地路径
 
-默认情况下 CLI 使用：
+macOS 和 Linux 默认使用 `~/.config/agent-remote/`，Windows 默认使用
+`%LOCALAPPDATA%\agent-remote\`：
 
 ```text
 ~/.config/agent-remote/
@@ -70,7 +72,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 ~/.config/agent-remote/dependencies/manifest.json
 ```
 
-四个发行目标都会内置托管的 `mutagen`、`tmux`、`wg` 和 `wg-quick`；macOS 包还会内置 `wireguard-go`。
+四个 macOS/Linux 发行目标都会内置托管的 `mutagen`、`tmux`、`wg` 和 `wg-quick`；macOS 包还会内置 `wireguard-go`。Windows x64 和 ARM64 包内置原生 CLI、Mutagen 和兼容用的 `scp.exe` 代理，并调用系统安装的官方 WireGuard for Windows tunnel service。
 
 当前实现会记录并检查 Mutagen 和 WireGuard helper 的 manifest。发布包会为每个支持的平台包含托管 Mutagen 二进制和 WireGuard helper。
 
@@ -78,9 +80,9 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 
 `agent-remote wireguard config` 会生成或复用本地 X25519 私钥，将其保存在系统凭据存储中（失败时回退到权限为 `0600` 的文件），只向控制平面登记公钥，并以 `0600` 权限写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。重复执行该命令可以自动修复注册时缺少 WireGuard peer 的设备；私钥绝不会发送到服务端。
 
-`agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper，并支持用于诊断的 `--dry-run`。四个平台的 CLI 发行包都会内置 `wg`、`wg-quick` 和 `tmux`；macOS 包还会内置所需的 `wireguard-go` userspace backend。helper 会直接使用这些托管二进制，不依赖 Homebrew 或其他系统包。启用隧道可能需要 `sudo`。
+`agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper，并支持用于诊断的 `--dry-run`。macOS 和 Linux 发布包提供所需的托管 WireGuard 工具；Windows helper 使用 `/installtunnelservice` 和 `/uninstalltunnelservice` 控制官方 WireGuard for Windows tunnel service，变更隧道时需要在管理员终端中运行。
 
-`agent-remote attach <id>` 会向控制平面请求会话级 SSH 授权，在节点上调度 SSH key 同步，然后使用本地 `ssh` 执行节点侧 forced command。旧的 `--session-id <id>` 写法仍然兼容。
+`agent-remote attach <id>` 会向控制平面请求会话级 SSH 授权，在节点上调度 SSH key 同步，然后使用本地 `ssh` 执行节点侧 forced command。Windows 使用系统的 OpenSSH Client 可选功能。旧的 `--session-id <id>` 写法仍然兼容。
 
 ## Workspace 同步
 
@@ -133,6 +135,12 @@ scripts/run-quality-checks.sh
 VERSION=0.0.4-fix.11 scripts/package-release.sh
 ```
 
+在 Windows PowerShell 中构建 Windows x64 归档（ARM64 可传入 `-Target aarch64-pc-windows-msvc`）：
+
+```powershell
+./scripts/package-release.ps1 -Version 0.0.4-fix.11
+```
+
 发布归档包含：
 
 - `agent-remote`
@@ -163,6 +171,15 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
 ```sh
 ./install.sh
 ```
+
+在 x64 或 ARM64 Windows PowerShell 中安装：
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.ps1 -OutFile install.ps1
+.\install.ps1 -InstallPrerequisites
+```
+
+`-InstallPrerequisites` 会在缺失时安装 Windows OpenSSH Client 可选功能和官方 WireGuard 包，可能需要管理员 PowerShell；两者已经安装时可省略。安装器会把 `%LOCALAPPDATA%\agent-remote\bin` 加入用户 `PATH`，安装后请打开新终端。
 
 安装器会把托管二进制复制到 `AGENT_REMOTE_HOME/bin`，写入 dependency manifest，并默认把 `agent-remote`、`fclaude` 和 `agent-remote-wireguard` 链接到 `~/.local/bin`。它也可以覆盖 GitHub 仓库、版本、target、OS、架构、home 目录、链接目录，以及 symlink/copy 行为。
 

@@ -17,13 +17,13 @@ pub struct MutagenStatus {
 }
 
 pub fn binary_path(paths: &AppPaths) -> PathBuf {
-    let managed = paths.bin_dir().join("mutagen");
+    let managed = crate::platform::managed_binary(&paths.bin_dir(), "mutagen");
     if managed.exists() {
         return managed;
     }
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
-            let sibling = parent.join("mutagen");
+            let sibling = crate::platform::managed_binary(parent, "mutagen");
             if sibling.exists() {
                 return sibling;
             }

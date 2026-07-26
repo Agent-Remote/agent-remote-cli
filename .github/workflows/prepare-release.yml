@@ -46,7 +46,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
-            git add Cargo.toml Cargo.lock README.md README.zh-CN.md CHANGELOG.md
+            git add Cargo.toml Cargo.lock README.md README.zh-CN.md CHANGELOG.md scripts/prepare-release.sh
             git commit -m "chore: release v${version}"
           fi
           git tag "v${version}"

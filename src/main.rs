@@ -1090,9 +1090,11 @@ fn to_claude_import_path(home: &Path, path: &Path) -> Result<String> {
 }
 
 fn home_dir() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is not set")
+    platform::user_home_dir().context(if cfg!(windows) {
+        "USERPROFILE is not set"
+    } else {
+        "HOME is not set"
+    })
 }
 
 fn print_binding_status(status: &BindingStatusData) {

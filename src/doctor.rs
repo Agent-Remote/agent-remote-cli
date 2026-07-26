@@ -28,8 +28,29 @@ impl Doctor {
         self.check_state(fix)?;
         self.check_token(&config)?;
         self.check_dependencies(fix)?;
+        #[cfg(windows)]
+        self.check_windows_tools();
         self.check_server(&config).await?;
         Ok(())
+    }
+
+    #[cfg(windows)]
+    fn check_windows_tools(&self) {
+        status_line(
+            "OpenSSH Client",
+            crate::platform::windows_openssh_path("ssh").is_some(),
+            "Windows OpenSSH Client optional feature",
+        );
+        status_line(
+            "system scp",
+            crate::platform::windows_openssh_path("scp").is_some(),
+            "Windows OpenSSH scp.exe",
+        );
+        status_line(
+            "WireGuard for Windows",
+            crate::platform::windows_wireguard_path().is_some(),
+            "official WireGuard tunnel service manager",
+        );
     }
 
     fn check_paths(&self) {
