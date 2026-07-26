@@ -204,7 +204,7 @@ install_packaged() {
   if [ -f "$package_dir/bin/wireguard-go" ]; then
     install -m 0755 "$package_dir/bin/wireguard-go" "$AGENT_REMOTE_HOME/bin/wireguard-go"
   fi
-  install -m 0644 "$package_dir/dependencies/manifest.json" "$AGENT_REMOTE_HOME/dependencies/manifest.json"
+  cp -R "$package_dir/dependencies/." "$AGENT_REMOTE_HOME/dependencies/"
 
   if [ -n "$INSTALL_BIN_DIR" ]; then
     mkdir -p "$INSTALL_BIN_DIR"

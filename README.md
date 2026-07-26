@@ -152,7 +152,7 @@ The release archive includes:
 
 The packaged files should be installed into the agent-remote home or placed on `PATH` by the platform installer.
 
-GitHub Actions runs the same packaging flow for `v*` tags and uploads the archives to the GitHub Release.
+GitHub Actions runs the same packaging flow for `v*` tags and uploads the archives to the GitHub Release. The `install-smoke` workflow also builds and installs native packages in isolated directories on Windows, Linux, and macOS, verifies every manifest checksum and dependency file, and executes the installed CLI binaries.
 
 Install the latest release directly:
 

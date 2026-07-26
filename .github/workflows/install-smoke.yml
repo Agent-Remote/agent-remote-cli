@@ -1,0 +1,71 @@
+name: install-smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-go@v6
+        if: runner.os != 'Windows'
+        with:
+          go-version: "1.24.x"
+      - name: Install Unix build dependencies
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y autoconf automake build-essential bison pkg-config xz-utils
+          else
+            brew install automake pkg-config
+          fi
+      - name: Build and install Unix package
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGETS: ${{ matrix.target }}
+          VERSION: 0.0.0-install-ci
+        run: |
+          scripts/package-release.sh
+          package="$PWD/dist/agent-remote-cli-${VERSION}-${TARGETS}"
+          install_home="$RUNNER_TEMP/agent-remote-home"
+          link_dir="$RUNNER_TEMP/agent-remote-links"
+          "$package/install.sh" \
+            --home "$install_home" \
+            --bin-dir "$link_dir"
+          bash tests/install_smoke_test.sh \
+            "$package" "$install_home" "$link_dir" "$VERSION"
+      - name: Build and install Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "0.0.0-install-ci"
+          $target = "${{ matrix.target }}"
+          ./scripts/package-release.ps1 -Version $version -Target $target
+          $package = Join-Path $PWD "dist/agent-remote-cli-$version-$target"
+          $installHome = Join-Path $env:RUNNER_TEMP "agent-remote-home"
+          & "$package/install.ps1" -AgentRemoteHome $installHome -NoPathUpdate
+          ./tests/install_smoke_test.ps1 -PackageDirectory $package -InstallHome $installHome -ExpectedVersion $version
