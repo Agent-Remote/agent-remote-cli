@@ -2,6 +2,13 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.14 - 2026-07-26
+
+- fix: resolve Windows OpenSSH tools (05b2976)
+- ci: install and verify WireGuard on Windows (d824c50)
+- ci: harden cross-platform install checks (978c269)
+- ci: verify cross-platform CLI installation (05e47d7)
+
 ## v0.0.4-fix.13 - 2026-07-26
 
 - fix: bundle WireGuard for Windows (89761b5)
