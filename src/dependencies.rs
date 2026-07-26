@@ -135,6 +135,15 @@ impl DependencyManifest {
         ];
         if cfg!(windows) {
             dependencies.push(ManagedDependency {
+                name: "wireguard-windows".to_string(),
+                required_version: "managed-by-agent-remote-release".to_string(),
+                binary: "dependencies/installers/wireguard.msi".to_string(),
+                source: "agent-remote-cli release artifact".to_string(),
+                license: "MIT".to_string(),
+                license_notice: "See the packaged dependencies/licenses/wireguard-windows-COPYING"
+                    .to_string(),
+            });
+            dependencies.push(ManagedDependency {
                 name: "scp-proxy".to_string(),
                 required_version: "managed-by-agent-remote-release".to_string(),
                 binary: "bin/scp".to_string(),
@@ -188,18 +197,33 @@ fn platform_binary(binary: &str) -> std::path::PathBuf {
     let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
         return path.to_path_buf();
     };
+    let file_name = if path.extension().is_some() {
+        file_name.to_string()
+    } else {
+        crate::platform::executable_name(file_name)
+    };
     path.parent()
         .unwrap_or_else(|| std::path::Path::new(""))
-        .join(crate::platform::executable_name(file_name))
+        .join(file_name)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use tempfile::tempdir;
 
     use crate::config::AppPaths;
 
-    use super::DependencyManager;
+    use super::{platform_binary, DependencyManager};
+
+    #[test]
+    fn preserves_packaged_installer_extensions() {
+        assert_eq!(
+            platform_binary("dependencies/installers/wireguard.msi"),
+            PathBuf::from("dependencies/installers/wireguard.msi")
+        );
+    }
 
     #[test]
     fn creates_default_manifest_and_reports_missing_binaries() {
@@ -212,13 +236,7 @@ mod tests {
         let statuses = manager.check_all().unwrap();
         assert_eq!(
             statuses.len(),
-            if cfg!(target_os = "macos") {
-                5
-            } else if cfg!(windows) {
-                3
-            } else {
-                4
-            }
+            if cfg!(target_os = "macos") { 5 } else { 4 }
         );
         assert!(statuses.iter().all(|status| !status.installed));
         assert!(statuses.iter().any(|status| status.name == "mutagen"));

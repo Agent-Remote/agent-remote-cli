@@ -2,7 +2,8 @@ param(
     [string]$Version,
     [string]$Target = "x86_64-pc-windows-msvc",
     [string]$OutDir = "dist",
-    [string]$MutagenVersion = "0.18.1"
+    [string]$MutagenVersion = "0.18.1",
+    [string]$WireGuardVersion = "1.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,9 +13,9 @@ if (-not $Version) {
     $manifest = Get-Content Cargo.toml -Raw
     $Version = [regex]::Match($manifest, '(?m)^version = "([^"]+)"').Groups[1].Value
 }
-$mutagenArchitecture = switch ($Target) {
-    "x86_64-pc-windows-msvc" { "amd64" }
-    "aarch64-pc-windows-msvc" { "arm64" }
+$architecture = switch ($Target) {
+    "x86_64-pc-windows-msvc" { @{ Mutagen = "amd64"; WireGuard = "amd64" } }
+    "aarch64-pc-windows-msvc" { @{ Mutagen = "arm64"; WireGuard = "arm64" } }
     default { throw "Unsupported Windows release target: $Target" }
 }
 
@@ -26,8 +27,11 @@ $packageName = "agent-remote-cli-$Version-$Target"
 $work = Join-Path $OutDir $packageName
 $bin = Join-Path $work "bin"
 $dependencies = Join-Path $work "dependencies"
+$installers = Join-Path $dependencies "installers"
+$sources = Join-Path $dependencies "sources"
+$licenses = Join-Path $dependencies "licenses"
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
-New-Item -ItemType Directory -Force $bin, $dependencies | Out-Null
+New-Item -ItemType Directory -Force $bin, $installers, $sources, $licenses | Out-Null
 
 foreach ($name in @("agent-remote", "fclaude", "agent-remote-wireguard")) {
     Copy-Item "target/$Target/release/$name.exe" "$bin/$name.exe"
@@ -35,11 +39,23 @@ foreach ($name in @("agent-remote", "fclaude", "agent-remote-wireguard")) {
 Copy-Item "target/$Target/release/agent-remote-scp.exe" "$bin/scp.exe"
 
 $download = Join-Path ([System.IO.Path]::GetTempPath()) "agent-remote-mutagen-$([guid]::NewGuid()).tar.gz"
-$mutagenUrl = "https://github.com/mutagen-io/mutagen/releases/download/v$MutagenVersion/mutagen_windows_${mutagenArchitecture}_v$MutagenVersion.tar.gz"
+$mutagenUrl = "https://github.com/mutagen-io/mutagen/releases/download/v$MutagenVersion/mutagen_windows_$($architecture.Mutagen)_v$MutagenVersion.tar.gz"
 Invoke-WebRequest -Uri $mutagenUrl -OutFile $download
 tar.exe -xzf $download -C $bin
 if ($LASTEXITCODE -ne 0) { throw "failed to extract Mutagen" }
 Remove-Item $download
+
+$wireGuardMsiName = "wireguard-$($architecture.WireGuard)-$WireGuardVersion.msi"
+$wireGuardMsiUrl = "https://download.wireguard.com/windows-client/$wireGuardMsiName"
+$wireGuardMsi = Join-Path $installers $wireGuardMsiName
+Invoke-WebRequest -Uri $wireGuardMsiUrl -OutFile $wireGuardMsi
+
+$wireGuardSourceName = "wireguard-windows-$WireGuardVersion.tar.gz"
+$wireGuardSourceUrl = "https://github.com/WireGuard/wireguard-windows/archive/refs/tags/v$WireGuardVersion.tar.gz"
+$wireGuardSource = Join-Path $sources $wireGuardSourceName
+Invoke-WebRequest -Uri $wireGuardSourceUrl -OutFile $wireGuardSource
+$wireGuardLicense = Join-Path $licenses "wireguard-windows-COPYING"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/WireGuard/wireguard-windows/v$WireGuardVersion/COPYING" -OutFile $wireGuardLicense
 
 $manifest = [ordered]@{
     schema_version = 1
@@ -61,6 +77,15 @@ $manifest = [ordered]@{
             license_notice = "See THIRD_PARTY_NOTICES.md"
         },
         [ordered]@{
+            name = "wireguard-windows"
+            required_version = $WireGuardVersion
+            binary = "dependencies/installers/$wireGuardMsiName"
+            source = "dependencies/sources/$wireGuardSourceName"
+            license = "MIT"
+            license_notice = "See dependencies/licenses/wireguard-windows-COPYING"
+            binary_sha256 = (Get-FileHash $wireGuardMsi -Algorithm SHA256).Hash.ToLowerInvariant()
+        },
+        [ordered]@{
             name = "scp-proxy"
             required_version = $Version
             binary = "bin/scp"
@@ -73,6 +98,12 @@ $manifest = [ordered]@{
         "bin/mutagen-agents.tar.gz" = @{ sha256 = (Get-FileHash "$bin/mutagen-agents.tar.gz" -Algorithm SHA256).Hash.ToLowerInvariant() }
         "bin/scp.exe" = @{ sha256 = (Get-FileHash "$bin/scp.exe" -Algorithm SHA256).Hash.ToLowerInvariant() }
     }
+    source_archives = @(
+        [ordered]@{
+            file = "dependencies/sources/$wireGuardSourceName"
+            sha256 = (Get-FileHash $wireGuardSource -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    )
 }
 $manifestJson = $manifest | ConvertTo-Json -Depth 8
 $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)

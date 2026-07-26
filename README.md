@@ -73,7 +73,7 @@ Managed external dependencies are expected under:
 ~/.config/agent-remote/dependencies/manifest.json
 ```
 
-The four macOS/Linux release targets bundle managed `mutagen`, `tmux`, `wg`, and `wg-quick` binaries. macOS packages additionally bundle `wireguard-go`. Windows x64 and ARM64 packages bundle native CLI executables, Mutagen, and an `scp.exe` compatibility proxy; they use the official system-installed WireGuard for Windows tunnel service.
+The four macOS/Linux release targets bundle managed `mutagen`, `tmux`, `wg`, and `wg-quick` binaries. macOS packages additionally bundle `wireguard-go`. Windows x64 and ARM64 packages bundle native CLI executables, Mutagen, an `scp.exe` compatibility proxy, and the architecture-specific official WireGuard for Windows MSI. That MSI provides the Windows equivalents of `wg`, `wg-quick`, and the tunnel backend (the tunnel manager, `wg.exe`, and Wintun driver). `tmux` runs on the remote Linux node and has no native Windows client role.
 
 The current implementation records and checks the manifest for Mutagen and WireGuard helpers. Release packages include the managed Mutagen binary and WireGuard helper for each supported platform.
 
@@ -81,7 +81,7 @@ The current implementation records and checks the manifest for Mutagen and WireG
 
 `agent-remote wireguard config` creates or reuses a local X25519 private key, stores it in the platform credential store (with a `0600` file fallback), enrolls only its public key with the control plane, and writes `wireguard/agent-remote.conf` under the local agent-remote home with `0600` permissions. Running the command repairs devices that were registered without a WireGuard peer. The private key is never sent to the server.
 
-`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. On macOS and Linux, release packages provide the required managed WireGuard tools. On Windows, the helper controls the official WireGuard for Windows tunnel service with `/installtunnelservice` and `/uninstalltunnelservice`; run tunnel changes from an elevated terminal.
+`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. On macOS and Linux, release packages provide the required managed WireGuard tools. On Windows, the release includes the official WireGuard for Windows MSI and the helper controls its tunnel service with `/installtunnelservice` and `/uninstalltunnelservice`; run tunnel changes from an elevated terminal.
 
 `agent-remote attach <id>` asks the control plane for a session-specific SSH authorization, schedules SSH key synchronization on the node, and then uses local `ssh` to run the node-side forced command. Windows uses the built-in OpenSSH Client optional feature. The former `--session-id <id>` form remains supported for compatibility.
 
@@ -180,7 +180,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/Agent-Remote/agent-remote-cl
 .\install.ps1 -InstallPrerequisites
 ```
 
-`-InstallPrerequisites` installs the Windows OpenSSH Client optional feature and official WireGuard package when they are missing, and may require an elevated PowerShell. Omit it when both are already installed. The installer adds `%LOCALAPPDATA%\agent-remote\bin` to the user `PATH`; open a new terminal after installation.
+`-InstallPrerequisites` installs the Windows OpenSSH Client optional feature and the bundled official WireGuard package when they are missing, and may require an elevated PowerShell. WireGuard installation does not require `winget` or another network download. Omit the option when both are already installed. The installer adds `%LOCALAPPDATA%\agent-remote\bin` to the user `PATH`; open a new terminal after installation.
 
 The installer copies managed binaries into `AGENT_REMOTE_HOME/bin`, writes the dependency manifest, and links `agent-remote`, `fclaude`, and `agent-remote-wireguard` into `~/.local/bin` by default. It can also override the GitHub repository, version, target, OS, architecture, home directory, link directory, and symlink/copy behavior.
 

@@ -19,7 +19,7 @@ function Install-Package([string]$PackageDirectory) {
         if (-not (Test-Path $source -PathType Leaf)) { throw "Missing packaged file: $source" }
         Copy-Item $source (Join-Path $destinationBin $file) -Force
     }
-    Copy-Item (Join-Path $PackageDirectory "dependencies/manifest.json") (Join-Path $destinationDependencies "manifest.json") -Force
+    Copy-Item (Join-Path $PackageDirectory "dependencies/*") $destinationDependencies -Recurse -Force
 
     if (-not $NoPathUpdate) {
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -31,24 +31,27 @@ function Install-Package([string]$PackageDirectory) {
     }
 }
 
-function Install-SystemPrerequisites {
+function Install-SystemPrerequisites([string]$PackageDirectory) {
     if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue) -or -not (Get-Command scp.exe -ErrorAction SilentlyContinue)) {
         Write-Host "Installing the Windows OpenSSH Client capability..."
         Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 | Out-Null
     }
     if (-not (Test-Path (Join-Path $env:ProgramFiles "WireGuard/wireguard.exe"))) {
-        if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
-            throw "winget is required to install WireGuard automatically"
+        $installer = Get-ChildItem (Join-Path $PackageDirectory "dependencies/installers") -Filter "wireguard-*.msi" | Select-Object -First 1
+        if (-not $installer) {
+            throw "The packaged WireGuard for Windows installer is missing"
         }
-        winget.exe install --id WireGuard.WireGuard --exact --accept-package-agreements --accept-source-agreements
-        if ($LASTEXITCODE -ne 0) { throw "WireGuard installation failed" }
+        Write-Host "Installing the packaged WireGuard for Windows $($installer.Name)..."
+        $process = Start-Process msiexec.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
+            "/i", "`"$($installer.FullName)`"", "/qn", "/norestart"
+        )
+        if ($process.ExitCode -notin @(0, 3010)) { throw "WireGuard installation failed with exit code $($process.ExitCode)" }
     }
 }
 
-if ($InstallPrerequisites) { Install-SystemPrerequisites }
-
 $localPackage = $PSScriptRoot
 if ((Test-Path (Join-Path $localPackage "bin")) -and (Test-Path (Join-Path $localPackage "dependencies"))) {
+    if ($InstallPrerequisites) { Install-SystemPrerequisites $localPackage }
     Install-Package $localPackage
 } else {
     if ($Version -eq "latest") {
@@ -71,7 +74,9 @@ if ((Test-Path (Join-Path $localPackage "bin")) -and (Test-Path (Join-Path $loca
         Write-Host "Downloading $url"
         Invoke-WebRequest -Uri $url -OutFile $archive
         Expand-Archive $archive -DestinationPath $temporary
-        Install-Package (Join-Path $temporary $packageName)
+        $packageDirectory = Join-Path $temporary $packageName
+        if ($InstallPrerequisites) { Install-SystemPrerequisites $packageDirectory }
+        Install-Package $packageDirectory
     } finally {
         Remove-Item $temporary -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -82,6 +87,6 @@ if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) {
     Write-Warning "Windows OpenSSH Client is required. Re-run with -InstallPrerequisites from an elevated PowerShell."
 }
 if (-not (Test-Path (Join-Path $env:ProgramFiles "WireGuard/wireguard.exe"))) {
-    Write-Warning "WireGuard for Windows is required for tunnel commands. Re-run with -InstallPrerequisites."
+    Write-Warning "WireGuard for Windows is included in the release package. Re-run with -InstallPrerequisites to install it."
 }
 Write-Host "Open a new terminal, then run: agent-remote init"

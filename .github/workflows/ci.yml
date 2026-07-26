@@ -34,6 +34,29 @@ jobs:
             if ($errors.Count) { throw ($errors | Out-String) }
           }
           ./scripts/package-release.ps1 -Version "0.0.0-ci"
-          if (-not (Test-Path "dist/agent-remote-cli-0.0.0-ci-x86_64-pc-windows-msvc.zip")) {
+          $archive = "dist/agent-remote-cli-0.0.0-ci-x86_64-pc-windows-msvc.zip"
+          if (-not (Test-Path $archive)) {
             throw "Windows release archive was not created"
+          }
+          $expanded = Join-Path $env:RUNNER_TEMP "agent-remote-package"
+          Expand-Archive $archive -DestinationPath $expanded
+          $package = Join-Path $expanded "agent-remote-cli-0.0.0-ci-x86_64-pc-windows-msvc"
+          foreach ($file in @(
+            "dependencies/installers/wireguard-amd64-1.1.msi",
+            "dependencies/sources/wireguard-windows-1.1.tar.gz",
+            "dependencies/licenses/wireguard-windows-COPYING"
+          )) {
+            if (-not (Test-Path (Join-Path $package $file) -PathType Leaf)) {
+              throw "Windows package is missing $file"
+            }
+          }
+          $manifest = Get-Content (Join-Path $package "dependencies/manifest.json") -Raw | ConvertFrom-Json
+          $wireGuard = $manifest.dependencies | Where-Object name -eq "wireguard-windows"
+          if (-not $wireGuard) {
+            throw "Windows package manifest is missing wireguard-windows"
+          }
+          $wireGuardMsi = Join-Path $package $wireGuard.binary
+          $wireGuardHash = (Get-FileHash $wireGuardMsi -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($wireGuardHash -ne $wireGuard.binary_sha256) {
+            throw "Packaged WireGuard MSI does not match its manifest checksum"
           }
