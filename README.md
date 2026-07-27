@@ -133,13 +133,13 @@ scripts/run-quality-checks.sh
 Build macOS and Linux CLI archives:
 
 ```sh
-VERSION=0.0.4-fix.15 scripts/package-release.sh
+VERSION=0.0.4-fix.16 scripts/package-release.sh
 ```
 
 Build a Windows x64 archive from PowerShell on Windows (pass `-Target aarch64-pc-windows-msvc` for ARM64):
 
 ```powershell
-./scripts/package-release.ps1 -Version 0.0.4-fix.15
+./scripts/package-release.ps1 -Version 0.0.4-fix.16
 ```
 
 The release archive includes:
@@ -164,7 +164,7 @@ Install a specific version or customize paths:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.0.4-fix.15 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version 0.0.4-fix.16 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 Install a downloaded release archive:

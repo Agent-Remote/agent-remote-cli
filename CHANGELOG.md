@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.4-fix.16 - 2026-07-27
+
+- fix: allow WireGuard service to read config (a529cea)
+- fix: avoid GitHub API rate limit in Windows installer (9970c24)
+
 ## v0.0.4-fix.15 - 2026-07-26
 
 - fix: satisfy Windows clippy (851c140)
