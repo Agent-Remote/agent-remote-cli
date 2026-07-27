@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+message_file="$1"
+subject="$(sed -n '1p' "$message_file")"
+
+if [[ "$subject" =~ ^(Merge|Revert) ]]; then
+  exit 0
+fi
+
+pattern='^(feat|fix|refactor|chore|docs|perf|test|build|ci|style)(\([a-z0-9_-]+\))?: [a-z][a-z0-9 ,._/-]{0,118}[a-z0-9)]$'
+
+if [[ ! "$subject" =~ $pattern ]]; then
+  cat >&2 <<'EOF'
+Invalid commit message.
+
+Expected Conventional Commits:
+  feat(scope): add user login
+  docs: update contributor rules
+
+Allowed types:
+  feat, fix, refactor, chore, docs, perf, test, build, ci, style
+
+Rules:
+  - English subject
+  - Lowercase imperative subject
+  - No trailing period
+  - First line <= 120 characters
+EOF
+  exit 1
+fi
+
+if (( ${#subject} > 120 )); then
+  echo "Commit subject must be <= 120 characters." >&2
+  exit 1
+fi

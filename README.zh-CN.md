@@ -1,5 +1,7 @@
 # agent-remote-cli
 
+<p align="center"><img src="assets/agent-remote-icon.svg" alt="Agent Remote 图标" width="80" height="80"></p>
+
 [English](README.md) | 中文
 
 agent-remote 本地设备管理的 Rust CLI。
