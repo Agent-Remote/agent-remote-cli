@@ -49,14 +49,36 @@ function Install-SystemPrerequisites([string]$PackageDirectory) {
     }
 }
 
+function Resolve-LatestVersion([string]$Repository) {
+    $tag = $null
+    try {
+        $response = Invoke-WebRequest -Uri "https://github.com/$Repository/releases/latest" -UseBasicParsing
+        $responseUri = $response.BaseResponse.PSObject.Properties["ResponseUri"]
+        if ($responseUri -and $responseUri.Value) {
+            $finalUri = $responseUri.Value
+        } else {
+            $finalUri = $response.BaseResponse.RequestMessage.RequestUri
+        }
+        $tag = $finalUri.Segments[-1].TrimEnd("/")
+    } catch {
+        $tag = $null
+    }
+
+    if (-not $tag -or $tag -in @("latest", "releases")) {
+        $release = Invoke-RestMethod "https://api.github.com/repos/$Repository/releases/latest"
+        $tag = $release.tag_name
+    }
+    if (-not $tag) { throw "Failed to resolve the latest release for $Repository; retry with -Version 0.0.4" }
+    return $tag.TrimStart("v")
+}
+
 $localPackage = $PSScriptRoot
 if ((Test-Path (Join-Path $localPackage "bin")) -and (Test-Path (Join-Path $localPackage "dependencies"))) {
     if ($InstallPrerequisites) { Install-SystemPrerequisites $localPackage }
     Install-Package $localPackage
 } else {
     if ($Version -eq "latest") {
-        $release = Invoke-RestMethod "https://api.github.com/repos/$Repository/releases/latest"
-        $Version = $release.tag_name.TrimStart("v")
+        $Version = Resolve-LatestVersion $Repository
     } else {
         $Version = $Version.TrimStart("v")
     }
