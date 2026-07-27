@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.5 - 2026-07-27
+
+- feat: add branding and repository quality gates (a809a0b)
+
 ## v0.0.4-fix.16 - 2026-07-27
 
 - fix: allow WireGuard service to read config (a529cea)
