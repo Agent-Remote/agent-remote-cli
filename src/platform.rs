@@ -134,12 +134,7 @@ pub fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
 
 #[cfg(windows)]
 pub fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
-    let username = env::var("USERNAME").context("USERNAME is not set")?;
-    let principal = env::var("USERDOMAIN")
-        .ok()
-        .filter(|domain| !domain.is_empty())
-        .map(|domain| format!("{domain}\\{username}"))
-        .unwrap_or(username);
+    let principal = windows_current_principal()?;
     let status = Command::new("icacls.exe")
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
@@ -151,6 +146,38 @@ pub fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
     } else {
         bail!("icacls.exe exited with {status}")
     }
+}
+
+#[cfg(windows)]
+pub fn set_wireguard_config_permissions(path: &std::path::Path) -> Result<()> {
+    let principal = windows_current_principal()?;
+    let status = Command::new("icacls.exe")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(format!("{principal}:(F)"))
+        .arg("*S-1-5-18:(R)")
+        .status()
+        .context("failed to execute icacls.exe")?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("icacls.exe exited with {status}")
+    }
+}
+
+#[cfg(windows)]
+fn windows_current_principal() -> Result<String> {
+    let username = env::var("USERNAME").context("USERNAME is not set")?;
+    Ok(env::var("USERDOMAIN")
+        .ok()
+        .filter(|domain| !domain.is_empty())
+        .map(|domain| format!("{domain}\\{username}"))
+        .unwrap_or(username))
+}
+
+#[cfg(not(windows))]
+pub fn set_wireguard_config_permissions(path: &std::path::Path) -> Result<()> {
+    set_owner_only_permissions(path)
 }
 
 #[cfg(all(not(unix), not(windows)))]

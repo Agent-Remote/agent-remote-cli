@@ -79,7 +79,7 @@ The current implementation records and checks the manifest for Mutagen and WireG
 
 ## WireGuard and SSH
 
-`agent-remote wireguard config` creates or reuses a local X25519 private key, stores it in the platform credential store (with a `0600` file fallback), enrolls only its public key with the control plane, and writes `wireguard/agent-remote.conf` under the local agent-remote home with `0600` permissions. Running the command repairs devices that were registered without a WireGuard peer. The private key is never sent to the server.
+`agent-remote wireguard config` creates or reuses a local X25519 private key, stores it in the platform credential store (with a `0600` file fallback), enrolls only its public key with the control plane, and writes `wireguard/agent-remote.conf` under the local agent-remote home. The config uses `0600` permissions on Unix; on Windows, only the current user has full control and the WireGuard `LocalSystem` tunnel service has read access. Running the command repairs devices that were registered without a WireGuard peer. The private key is never sent to the server.
 
 `agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. On macOS and Linux, release packages provide the required managed WireGuard tools. On Windows, the release includes the official WireGuard for Windows MSI and the helper controls its tunnel service with `/installtunnelservice` and `/uninstalltunnelservice`; run tunnel changes from an elevated terminal.
 

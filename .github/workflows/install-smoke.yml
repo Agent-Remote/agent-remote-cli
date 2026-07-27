@@ -75,5 +75,12 @@ jobs:
           ./scripts/package-release.ps1 -Version $version -Target $target
           $package = Join-Path $PWD "dist/agent-remote-cli-$version-$target"
           $installHome = Join-Path $env:RUNNER_TEMP "agent-remote-home"
+          $wireGuardDirectory = Join-Path $installHome "wireguard"
+          $wireGuardConfig = Join-Path $wireGuardDirectory "agent-remote.conf"
+          New-Item -ItemType Directory -Force $wireGuardDirectory | Out-Null
+          Set-Content -Path $wireGuardConfig -Value "[Interface]`nPrivateKey = install-smoke-test" -Encoding ascii
+          $principal = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+          & icacls.exe $wireGuardConfig /inheritance:r /grant:r "${principal}:(F)" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Failed to prepare legacy WireGuard ACL" }
           & "$package/install.ps1" -AgentRemoteHome $installHome -NoPathUpdate -InstallPrerequisites
           ./tests/install_smoke_test.ps1 -PackageDirectory $package -InstallHome $installHome -ExpectedVersion $version

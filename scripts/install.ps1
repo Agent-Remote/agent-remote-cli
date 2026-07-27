@@ -10,6 +10,17 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+function Repair-WireGuardConfigPermissions {
+    $config = Join-Path $AgentRemoteHome "wireguard/agent-remote.conf"
+    if (-not (Test-Path $config -PathType Leaf)) { return }
+
+    $principal = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    & icacls.exe $config /inheritance:r /grant:r "${principal}:(F)" "*S-1-5-18:(R)" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to grant LocalSystem read access to WireGuard configuration: $config"
+    }
+}
+
 function Install-Package([string]$PackageDirectory) {
     $destinationBin = Join-Path $AgentRemoteHome "bin"
     $destinationDependencies = Join-Path $AgentRemoteHome "dependencies"
@@ -20,6 +31,7 @@ function Install-Package([string]$PackageDirectory) {
         Copy-Item $source (Join-Path $destinationBin $file) -Force
     }
     Copy-Item (Join-Path $PackageDirectory "dependencies/*") $destinationDependencies -Recurse -Force
+    Repair-WireGuardConfigPermissions
 
     if (-not $NoPathUpdate) {
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")

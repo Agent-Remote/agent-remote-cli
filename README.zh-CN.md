@@ -78,7 +78,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 
 ## WireGuard 和 SSH
 
-`agent-remote wireguard config` 会生成或复用本地 X25519 私钥，将其保存在系统凭据存储中（失败时回退到权限为 `0600` 的文件），只向控制平面登记公钥，并以 `0600` 权限写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。重复执行该命令可以自动修复注册时缺少 WireGuard peer 的设备；私钥绝不会发送到服务端。
+`agent-remote wireguard config` 会生成或复用本地 X25519 私钥，将其保存在系统凭据存储中（失败时回退到权限为 `0600` 的文件），只向控制平面登记公钥，并写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。该配置在 Unix 上使用 `0600` 权限；在 Windows 上仅允许当前用户完全控制，并允许 WireGuard 的 `LocalSystem` 隧道服务读取。重复执行该命令可以自动修复注册时缺少 WireGuard peer 的设备；私钥绝不会发送到服务端。
 
 `agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper，并支持用于诊断的 `--dry-run`。macOS 和 Linux 发布包提供所需的托管 WireGuard 工具；Windows 发布包内置官方 WireGuard for Windows MSI，helper 使用 `/installtunnelservice` 和 `/uninstalltunnelservice` 控制其 tunnel service，变更隧道时需要在管理员终端中运行。
 

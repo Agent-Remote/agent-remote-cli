@@ -103,6 +103,20 @@ foreach ($command in $commands) {
 & (Join-Path $InstallHome "bin/mutagen.exe") version
 if ($LASTEXITCODE -ne 0) { throw "Mutagen did not execute successfully" }
 
+$managedWireGuardConfig = Join-Path $InstallHome "wireguard/agent-remote.conf"
+Assert-File $managedWireGuardConfig
+$systemAccount = ([System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")).Translate(
+    [System.Security.Principal.NTAccount]
+)
+$systemCanRead = (Get-Acl $managedWireGuardConfig).Access | Where-Object {
+    $_.IdentityReference -eq $systemAccount -and
+    $_.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow -and
+    ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::ReadData)
+}
+if (-not $systemCanRead) {
+    throw "Installed WireGuard configuration is not readable by LocalSystem"
+}
+
 $wireGuard = Join-Path $env:ProgramFiles "WireGuard/wireguard.exe"
 Assert-File $wireGuard
 $installedWireGuardVersion = (Get-Item $wireGuard).VersionInfo.ProductVersion

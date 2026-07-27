@@ -65,7 +65,7 @@ pub fn write_config(path: &Path, config: &WireGuardConfigData, private_key: &str
         fs::create_dir_all(parent)?;
     }
     fs::write(path, render_config(config, private_key))?;
-    crate::platform::set_owner_only_permissions(path)?;
+    crate::platform::set_wireguard_config_permissions(path)?;
     Ok(())
 }
 
@@ -115,12 +115,12 @@ pub fn run_helper(paths: &AppPaths, action: &str, config_path: &Path, dry_run: b
 mod tests {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     use tempfile::tempdir;
 
     use crate::api::{WireGuardConfigData, WireGuardNodePeerData};
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     use super::write_config;
     use super::{generate_private_key, public_key_from_private, render_config};
 
@@ -180,5 +180,30 @@ mod tests {
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn writes_config_readable_by_local_system() {
+        use std::process::Command;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("agent-remote.conf");
+        let config = WireGuardConfigData {
+            device_id: "device-1".to_string(),
+            interface_address: "10.77.0.2".to_string(),
+            _private_key_ref: "local-secret".to_string(),
+            dns: vec![],
+            peers: vec![],
+        };
+        write_config(&path, &config, &STANDARD.encode([9_u8; 32])).unwrap();
+
+        let output = Command::new("icacls.exe")
+            .arg(&path)
+            .args(["/findsid", "*S-1-5-18"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("agent-remote.conf"));
     }
 }
