@@ -25,7 +25,7 @@ function Install-Package([string]$PackageDirectory) {
     $destinationBin = Join-Path $AgentRemoteHome "bin"
     $destinationDependencies = Join-Path $AgentRemoteHome "dependencies"
     New-Item -ItemType Directory -Force $destinationBin, $destinationDependencies | Out-Null
-    foreach ($file in @("agent-remote.exe", "fclaude.exe", "agent-remote-wireguard.exe", "mutagen.exe", "mutagen-agents.tar.gz", "scp.exe")) {
+    foreach ($file in @("agent-remote.exe", "fclaude.exe", "agent-remote-wireguard.exe", "mutagen.exe", "mutagen-agents.tar.gz", "scp.exe", "ssh.exe")) {
         $source = Join-Path $PackageDirectory "bin/$file"
         if (-not (Test-Path $source -PathType Leaf)) { throw "Missing packaged file: $source" }
         Copy-Item $source (Join-Path $destinationBin $file) -Force

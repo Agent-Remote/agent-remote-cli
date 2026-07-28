@@ -635,7 +635,9 @@ async fn ensure_workspace_sync(
     if should_create_mutagen {
         sync = wait_until_sync_active(&client, &token, sync).await?;
         persist_sync_session(&state, &server_url, &sync)?;
-        mutagen::create(paths, &sync, dry_run)?;
+    }
+    if sync.status == "active" {
+        mutagen::ensure(paths, &sync, dry_run)?;
     }
     Ok(sync)
 }
@@ -673,6 +675,15 @@ fn ensure_sync_ready(paths: &AppPaths, sync: &SyncSessionData) -> Result<()> {
         bail!("workspace sync has unresolved conflicts or failed state");
     }
     let status = mutagen::status(paths, sync)?;
+    if !status.installed {
+        bail!("Mutagen is missing; install the packaged CLI dependencies");
+    }
+    if !status.session_exists {
+        if status.session_missing {
+            bail!("workspace Mutagen session is missing; run agent-remote sync ensure");
+        }
+        bail!("unable to inspect the managed Mutagen session");
+    }
     if status.has_conflicts {
         bail!("workspace sync has unresolved Mutagen conflicts");
     }

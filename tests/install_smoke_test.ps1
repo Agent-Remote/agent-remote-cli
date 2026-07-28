@@ -27,7 +27,8 @@ $binFiles = @(
     "agent-remote-wireguard.exe",
     "mutagen.exe",
     "mutagen-agents.tar.gz",
-    "scp.exe"
+    "scp.exe",
+    "ssh.exe"
 )
 foreach ($file in $binFiles) {
     Assert-File (Join-Path $PackageDirectory "bin/$file")
@@ -40,7 +41,7 @@ $manifestPath = Join-Path $packageDependencies "manifest.json"
 Assert-File $manifestPath
 $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
 
-$requiredDependencies = @("mutagen", "wireguard-helper", "wireguard-windows", "scp-proxy")
+$requiredDependencies = @("mutagen", "wireguard-helper", "wireguard-windows", "scp-proxy", "ssh-proxy")
 foreach ($name in $requiredDependencies) {
     if (-not ($manifest.dependencies | Where-Object name -eq $name)) {
         throw "Manifest is missing dependency: $name"

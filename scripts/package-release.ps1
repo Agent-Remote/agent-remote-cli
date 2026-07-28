@@ -37,6 +37,7 @@ foreach ($name in @("agent-remote", "fclaude", "agent-remote-wireguard")) {
     Copy-Item "target/$Target/release/$name.exe" "$bin/$name.exe"
 }
 Copy-Item "target/$Target/release/agent-remote-scp.exe" "$bin/scp.exe"
+Copy-Item "target/$Target/release/agent-remote-ssh.exe" "$bin/ssh.exe"
 
 $download = Join-Path ([System.IO.Path]::GetTempPath()) "agent-remote-mutagen-$([guid]::NewGuid()).tar.gz"
 $mutagenUrl = "https://github.com/mutagen-io/mutagen/releases/download/v$MutagenVersion/mutagen_windows_$($architecture.Mutagen)_v$MutagenVersion.tar.gz"
@@ -92,11 +93,20 @@ $manifest = [ordered]@{
             source = "agent-remote-cli release artifact"
             license = "GPL-3.0-only"
             license_notice = "See THIRD_PARTY_NOTICES.md"
+        },
+        [ordered]@{
+            name = "ssh-proxy"
+            required_version = $Version
+            binary = "bin/ssh"
+            source = "agent-remote-cli release artifact"
+            license = "GPL-3.0-only"
+            license_notice = "See THIRD_PARTY_NOTICES.md"
         }
     )
     managed_files = [ordered]@{
         "bin/mutagen-agents.tar.gz" = @{ sha256 = (Get-FileHash "$bin/mutagen-agents.tar.gz" -Algorithm SHA256).Hash.ToLowerInvariant() }
         "bin/scp.exe" = @{ sha256 = (Get-FileHash "$bin/scp.exe" -Algorithm SHA256).Hash.ToLowerInvariant() }
+        "bin/ssh.exe" = @{ sha256 = (Get-FileHash "$bin/ssh.exe" -Algorithm SHA256).Hash.ToLowerInvariant() }
     }
     source_archives = @(
         [ordered]@{

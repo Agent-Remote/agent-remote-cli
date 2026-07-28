@@ -182,7 +182,7 @@ detect_target() {
 
 install_packaged() {
   local package_dir="$1"
-  for binary in agent-remote fclaude agent-remote-wireguard mutagen scp tmux wg wg-quick; do
+  for binary in agent-remote fclaude agent-remote-wireguard mutagen scp ssh tmux wg wg-quick; do
     require_file "$package_dir/bin/$binary"
   done
   require_file "$package_dir/bin/mutagen-agents.tar.gz"
@@ -198,6 +198,7 @@ install_packaged() {
   install -m 0755 "$package_dir/bin/mutagen" "$AGENT_REMOTE_HOME/bin/mutagen"
   install -m 0644 "$package_dir/bin/mutagen-agents.tar.gz" "$AGENT_REMOTE_HOME/bin/mutagen-agents.tar.gz"
   install -m 0755 "$package_dir/bin/scp" "$AGENT_REMOTE_HOME/bin/scp"
+  install -m 0755 "$package_dir/bin/ssh" "$AGENT_REMOTE_HOME/bin/ssh"
   install -m 0755 "$package_dir/bin/tmux" "$AGENT_REMOTE_HOME/bin/tmux"
   install -m 0755 "$package_dir/bin/wg" "$AGENT_REMOTE_HOME/bin/wg"
   install -m 0755 "$package_dir/bin/wg-quick" "$AGENT_REMOTE_HOME/bin/wg-quick"

@@ -47,6 +47,10 @@ impl AppPaths {
         self.home.join("wireguard")
     }
 
+    pub fn ssh_dir(&self) -> PathBuf {
+        self.home.join("ssh")
+    }
+
     pub fn wireguard_config_path(&self) -> PathBuf {
         self.wireguard_dir().join("agent-remote.conf")
     }
@@ -70,6 +74,7 @@ impl AppPaths {
         fs::create_dir_all(self.dependencies_dir())?;
         fs::create_dir_all(self.secrets_dir())?;
         fs::create_dir_all(self.wireguard_dir())?;
+        fs::create_dir_all(self.ssh_dir())?;
         Ok(())
     }
 }
