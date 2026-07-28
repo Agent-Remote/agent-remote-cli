@@ -132,6 +132,22 @@ impl DependencyManifest {
                     "See THIRD_PARTY_NOTICES.md and the exact packaged WireGuard artifact notice"
                         .to_string(),
             },
+            ManagedDependency {
+                name: "scp-proxy".to_string(),
+                required_version: "managed-by-agent-remote-release".to_string(),
+                binary: "bin/scp".to_string(),
+                source: "agent-remote-cli release artifact".to_string(),
+                license: "GPL-3.0-only".to_string(),
+                license_notice: "See THIRD_PARTY_NOTICES.md".to_string(),
+            },
+            ManagedDependency {
+                name: "ssh-proxy".to_string(),
+                required_version: "managed-by-agent-remote-release".to_string(),
+                binary: "bin/ssh".to_string(),
+                source: "agent-remote-cli release artifact".to_string(),
+                license: "GPL-3.0-only".to_string(),
+                license_notice: "See THIRD_PARTY_NOTICES.md".to_string(),
+            },
         ];
         if cfg!(windows) {
             dependencies.push(ManagedDependency {
@@ -142,14 +158,6 @@ impl DependencyManifest {
                 license: "MIT".to_string(),
                 license_notice: "See the packaged dependencies/licenses/wireguard-windows-COPYING"
                     .to_string(),
-            });
-            dependencies.push(ManagedDependency {
-                name: "scp-proxy".to_string(),
-                required_version: "managed-by-agent-remote-release".to_string(),
-                binary: "bin/scp".to_string(),
-                source: "agent-remote-cli release artifact".to_string(),
-                license: "GPL-3.0-only".to_string(),
-                license_notice: "See THIRD_PARTY_NOTICES.md".to_string(),
             });
         }
         if !cfg!(windows) {
@@ -234,11 +242,17 @@ mod tests {
         assert!(paths.dependency_manifest_path().exists());
 
         let statuses = manager.check_all().unwrap();
-        assert_eq!(
-            statuses.len(),
-            if cfg!(target_os = "macos") { 5 } else { 4 }
-        );
+        let expected_count = if cfg!(target_os = "macos") {
+            7
+        } else if cfg!(windows) {
+            5
+        } else {
+            6
+        };
+        assert_eq!(statuses.len(), expected_count);
         assert!(statuses.iter().all(|status| !status.installed));
         assert!(statuses.iter().any(|status| status.name == "mutagen"));
+        assert!(statuses.iter().any(|status| status.name == "scp-proxy"));
+        assert!(statuses.iter().any(|status| status.name == "ssh-proxy"));
     }
 }

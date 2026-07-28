@@ -52,7 +52,7 @@ manifest_path = package / "dependencies/manifest.json"
 with manifest_path.open(encoding="utf-8") as source:
     manifest = json.load(source)
 
-required = {"mutagen", "wireguard-helper", "tmux", "wireguard-tools"}
+required = {"mutagen", "wireguard-helper", "scp-proxy", "ssh-proxy", "tmux", "wireguard-tools"}
 names = {dependency["name"] for dependency in manifest["dependencies"]}
 missing = required - names
 if missing:

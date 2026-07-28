@@ -1,13 +1,17 @@
 use std::env;
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
 use crate::api::SyncSessionData;
 use crate::config::AppPaths;
 use crate::workspace::{ensure_git_ready, DEFAULT_EXCLUDES};
+
+const MANAGED_SSH_ENVIRONMENT_VERSION: &str = "1";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MutagenStatus {
@@ -223,11 +227,68 @@ fn run_binary(paths: &AppPaths, binary: &Path, args: &[String]) -> Result<String
 
 fn mutagen_command(paths: &AppPaths, binary: &Path) -> Result<Command> {
     paths.ensure_base_dirs()?;
+    let ssh_directory = prepare_managed_ssh_environment(paths, binary)?;
+    configured_mutagen_command(paths, binary, &ssh_directory)
+}
+
+fn configured_mutagen_command(
+    paths: &AppPaths,
+    binary: &Path,
+    ssh_directory: &Path,
+) -> Result<Command> {
     let mut command = Command::new(binary);
     command
         .env("PATH", mutagen_path(paths)?)
-        .env("AGENT_REMOTE_HOME", paths.home());
+        .env("AGENT_REMOTE_HOME", paths.home())
+        .env("MUTAGEN_SSH_PATH", ssh_directory);
     Ok(command)
+}
+
+fn prepare_managed_ssh_environment(paths: &AppPaths, binary: &Path) -> Result<PathBuf> {
+    let ssh_directory = binary
+        .parent()
+        .context("Mutagen binary has no parent directory")?;
+    for command in ["ssh", "scp"] {
+        let proxy = crate::platform::managed_binary(ssh_directory, command);
+        if !proxy.is_file() {
+            bail!(
+                "managed Mutagen {} proxy is missing at {}; reinstall the packaged CLI dependencies",
+                command.to_uppercase(),
+                proxy.display()
+            );
+        }
+    }
+
+    let marker = paths.ssh_dir().join("mutagen-environment");
+    let desired_marker = format!(
+        "{MANAGED_SSH_ENVIRONMENT_VERSION}\n{}\n",
+        ssh_directory.to_string_lossy()
+    );
+    if fs::read_to_string(&marker).ok().as_deref() == Some(desired_marker.as_str()) {
+        return Ok(ssh_directory.to_path_buf());
+    }
+
+    let output = configured_mutagen_command(paths, binary, ssh_directory)?
+        .args(["daemon", "stop"])
+        .output()
+        .context("failed to restart Mutagen for managed SSH configuration")?;
+    let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+    if !output.status.success() && !daemon_was_not_running(&stderr) {
+        bail!(
+            "unable to restart Mutagen for managed SSH configuration: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    if output.status.success() {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    fs::write(&marker, desired_marker)
+        .with_context(|| format!("failed to write {}", marker.display()))?;
+    Ok(ssh_directory.to_path_buf())
+}
+
+fn daemon_was_not_running(output: &str) -> bool {
+    output.contains("connection timed out (is the daemon running?)")
 }
 
 fn is_missing_session_output(output: &str) -> bool {
@@ -257,12 +318,14 @@ fn mutagen_path(paths: &AppPaths) -> Result<OsString> {
 #[cfg(test)]
 mod tests {
     use std::env;
+    use std::path::Path;
 
     use crate::api::SyncSessionData;
     use crate::config::AppPaths;
 
     use super::{
-        combine_output, create_args, is_missing_session_output, mutagen_path, session_name,
+        combine_output, configured_mutagen_command, create_args, daemon_was_not_running,
+        is_missing_session_output, mutagen_path, session_name,
     };
 
     fn sync_session() -> SyncSessionData {
@@ -335,5 +398,32 @@ mod tests {
             ),
             "Started Mutagen daemon\nunable to locate requested sessions"
         );
+    }
+
+    #[test]
+    fn configures_mutagen_to_use_managed_ssh_commands() {
+        let paths = AppPaths::from_home("/tmp/agent-remote-test".into());
+        let command = configured_mutagen_command(
+            &paths,
+            Path::new("/opt/agent-remote/bin/mutagen"),
+            Path::new("/opt/agent-remote/bin"),
+        )
+        .unwrap();
+        let environment: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key, value)))
+            .collect();
+        assert_eq!(
+            environment.get(std::ffi::OsStr::new("MUTAGEN_SSH_PATH")),
+            Some(&std::ffi::OsStr::new("/opt/agent-remote/bin"))
+        );
+    }
+
+    #[test]
+    fn recognizes_an_absent_daemon_during_environment_migration() {
+        assert!(daemon_was_not_running(
+            "error: unable to connect to daemon: connection timed out (is the daemon running?)"
+        ));
+        assert!(!daemon_was_not_running("error: access denied"));
     }
 }

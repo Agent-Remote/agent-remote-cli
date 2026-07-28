@@ -328,7 +328,7 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
         }
     };
     let session = wait_until_attachable(&client, &token, session).await?;
-    attach_with_client(&client, &token, &session.id, args.print_only).await
+    attach_with_client(paths, &client, &token, &session.id, args.print_only).await
 }
 
 async fn list_sessions(paths: &AppPaths, args: &SessionListArgs) -> Result<()> {
@@ -390,7 +390,7 @@ async fn attach_session(paths: &AppPaths, session_id: &str, print_only: bool) ->
     let (server_url, _device_id, token) = load_device_token(paths).await?;
     let client = ApiClient::new(server_url)?;
     let session_id = resolve_session_id(&client, &token, session_id).await?;
-    attach_with_client(&client, &token, &session_id, print_only).await
+    attach_with_client(paths, &client, &token, &session_id, print_only).await
 }
 
 async fn stop_session(paths: &AppPaths, session_id: &str) -> Result<()> {
@@ -437,6 +437,7 @@ async fn resolve_session_id(client: &ApiClient, token: &str, reference: &str) ->
 }
 
 async fn attach_with_client(
+    paths: &AppPaths,
     client: &ApiClient,
     token: &str,
     session_id: &str,
@@ -452,7 +453,7 @@ async fn attach_with_client(
         return Ok(());
     }
     let attach = client.wait_for_attach_authorization(token, attach).await?;
-    ssh::execute_attach(&attach)
+    ssh::execute_attach(paths, &attach)
 }
 
 async fn choose_account(
