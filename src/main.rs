@@ -548,6 +548,7 @@ async fn attach(paths: AppPaths, args: crate::cli::AttachArgs) -> Result<()> {
     if args.print_only {
         return Ok(());
     }
+    let attach = client.wait_for_attach_authorization(&token, attach).await?;
     ssh::execute_attach(&attach)
 }
 

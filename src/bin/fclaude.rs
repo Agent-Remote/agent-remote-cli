@@ -401,6 +401,7 @@ async fn attach_with_client(
     if print_only {
         return Ok(());
     }
+    let attach = client.wait_for_attach_authorization(token, attach).await?;
     ssh::execute_attach(&attach)
 }
 

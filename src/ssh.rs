@@ -43,11 +43,19 @@ pub fn execute_attach(attach: &AttachSessionData) -> Result<()> {
 }
 
 fn attach_args(attach: &AttachSessionData, remote_command: Vec<String>) -> Vec<String> {
-    let mut args = Vec::with_capacity(remote_command.len() + 5);
+    let mut args = Vec::with_capacity(remote_command.len() + 15);
     if attach.forward_ssh_agent {
         args.push("-A".to_string());
     }
     args.extend([
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ConnectTimeout=10".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=10".to_string(),
+        "-o".to_string(),
+        "ServerAliveCountMax=2".to_string(),
         "-tt".to_string(),
         "-p".to_string(),
         attach.ssh_port.to_string(),
@@ -74,6 +82,7 @@ mod tests {
             ssh_command: String::new(),
             forward_ssh_agent,
             authorization_task_id: "task_1".to_string(),
+            authorization_task_status: "succeeded".to_string(),
             expires_in: 300,
         }
     }
@@ -86,5 +95,13 @@ mod tests {
 
         let restricted = attach_args(&attach(false), remote_command);
         assert!(!restricted.iter().any(|argument| argument == "-A"));
+        for option in [
+            "BatchMode=yes",
+            "ConnectTimeout=10",
+            "ServerAliveInterval=10",
+            "ServerAliveCountMax=2",
+        ] {
+            assert!(restricted.iter().any(|argument| argument == option));
+        }
     }
 }

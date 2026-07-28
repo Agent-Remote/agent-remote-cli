@@ -1,8 +1,10 @@
 use std::fmt;
+use std::time::Duration;
 
 use anyhow::{bail, Result};
 use reqwest::StatusCode;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::time::{sleep, Instant};
 
 #[derive(Clone)]
 pub struct ApiClient {
@@ -127,6 +129,43 @@ impl ApiClient {
             )
             .await?;
         Ok(response.data)
+    }
+
+    pub async fn wait_for_attach_authorization(
+        &self,
+        token: &str,
+        mut attach: AttachSessionData,
+    ) -> Result<AttachSessionData, ApiError> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match attach.authorization_task_status.as_str() {
+                "succeeded" => return Ok(attach),
+                "failed" | "cancelled" | "expired" => {
+                    return Err(ApiError {
+                        status: None,
+                        code: Some("SSH_KEY_SYNC_FAILED".to_string()),
+                        message: format!(
+                            "SSH key synchronization task {} became {}",
+                            attach.authorization_task_id, attach.authorization_task_status
+                        ),
+                    });
+                }
+                _ if Instant::now() >= deadline => {
+                    return Err(ApiError {
+                        status: None,
+                        code: Some("SSH_KEY_SYNC_TIMEOUT".to_string()),
+                        message: format!(
+                            "SSH key synchronization task {} did not complete within 30 seconds",
+                            attach.authorization_task_id
+                        ),
+                    });
+                }
+                _ => {
+                    sleep(Duration::from_secs(1)).await;
+                    attach = self.attach_session(token, &attach.session_id).await?;
+                }
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -620,7 +659,13 @@ pub struct AttachSessionData {
     #[serde(default)]
     pub forward_ssh_agent: bool,
     pub authorization_task_id: String,
+    #[serde(default = "default_authorization_task_status")]
+    pub authorization_task_status: String,
     pub expires_in: u64,
+}
+
+fn default_authorization_task_status() -> String {
+    "succeeded".to_string()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -972,4 +1017,30 @@ struct ErrorEnvelope {
 struct ErrorPayload {
     code: String,
     message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AttachSessionData;
+
+    #[test]
+    fn attach_authorization_defaults_to_ready_for_older_servers() {
+        let attach: AttachSessionData = serde_json::from_str(
+            r#"{
+                "session_id":"session_1",
+                "node_id":"node_1",
+                "node_wireguard_ip":"10.77.0.1",
+                "ssh_host":"10.77.0.1",
+                "ssh_port":22,
+                "ssh_user":"agent-remote",
+                "tmux_session_name":"claude-test",
+                "command_args":[],
+                "ssh_command":"ssh agent-remote@10.77.0.1",
+                "authorization_task_id":"task_1",
+                "expires_in":300
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(attach.authorization_task_status, "succeeded");
+    }
 }
