@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   rust:
     name: rust (${{ matrix.os }})
@@ -19,3 +23,17 @@ jobs:
           components: rustfmt, clippy
       - shell: bash
         run: scripts/run-quality-checks.sh
+      - name: Install cargo-llvm-cov
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage report
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v7.0.0
+        with:
+          disable_search: true
+          fail_ci_if_error: true
+          files: ./lcov.info
+          use_oidc: true

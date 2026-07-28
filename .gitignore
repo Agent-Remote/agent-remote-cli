@@ -1,4 +1,5 @@
 /target/
+/lcov.info
 /.idea/
 /.vscode/
 .DS_Store
