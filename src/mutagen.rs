@@ -41,6 +41,17 @@ pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
         .as_deref()
         .context("sync session has no remote endpoint")?;
     let name = session_name(sync)?;
+    let args = create_args(sync, remote, name);
+    run(paths, &args, dry_run)?;
+    run(
+        paths,
+        &["sync".to_string(), "flush".to_string(), name.to_string()],
+        dry_run,
+    )?;
+    Ok(())
+}
+
+fn create_args(sync: &SyncSessionData, remote: &str, name: &str) -> Vec<String> {
     let mut args = vec![
         "sync".to_string(),
         "create".to_string(),
@@ -59,7 +70,7 @@ pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
     }
     args.push(sync.local_path.clone());
     args.push(remote.to_string());
-    run(paths, &args, dry_run).map(|_| ())
+    args
 }
 
 pub fn status(paths: &AppPaths, sync: &SyncSessionData) -> Result<MutagenStatus> {
@@ -193,11 +204,10 @@ mod tests {
     use crate::api::SyncSessionData;
     use crate::config::AppPaths;
 
-    use super::{mutagen_path, session_name};
+    use super::{create_args, mutagen_path, session_name};
 
-    #[test]
-    fn uses_control_plane_session_name() {
-        let sync = SyncSessionData {
+    fn sync_session() -> SyncSessionData {
+        SyncSessionData {
             id: "sync_1".to_string(),
             user_id: "user_1".to_string(),
             workspace_id: "workspace_1".to_string(),
@@ -217,8 +227,26 @@ mod tests {
             prepare_task_id: Some("prepare_workspace:sync_1".to_string()),
             created_at: "2026-07-04T00:00:00Z".to_string(),
             updated_at: "2026-07-04T00:00:00Z".to_string(),
-        };
+        }
+    }
+
+    #[test]
+    fn uses_control_plane_session_name() {
+        let sync = sync_session();
         assert_eq!(session_name(&sync).unwrap(), "agent-remote-sync");
+    }
+
+    #[test]
+    fn isolates_git_index_from_two_way_sync() {
+        let sync = sync_session();
+        let args = create_args(
+            &sync,
+            sync.remote_endpoint.as_deref().unwrap(),
+            sync.mutagen_session_id.as_deref().unwrap(),
+        );
+        assert!(args
+            .windows(2)
+            .any(|values| values == ["--ignore", ".git/index"]));
     }
 
     #[test]

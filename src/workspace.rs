@@ -8,6 +8,7 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
     ".agent-remote-workspace.json",
     ".git/**/*.lock",
     ".git/hooks",
+    ".git/index",
     ".git/logs",
     ".git/worktrees",
     "node_modules",
@@ -156,6 +157,7 @@ mod tests {
     #[test]
     fn excludes_agent_remote_workspace_marker() {
         assert!(DEFAULT_EXCLUDES.contains(&".agent-remote-workspace.json"));
+        assert!(DEFAULT_EXCLUDES.contains(&".git/index"));
         assert!(DEFAULT_EXCLUDES.contains(&".git/logs"));
     }
 

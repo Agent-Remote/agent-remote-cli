@@ -104,7 +104,7 @@ agent-remote sync resolve
 agent-remote sync reset
 ```
 
-The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. `.git` sync is enabled by default for project workspaces, while lock files, hooks, worktrees, and common build/cache directories are excluded.
+The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. `.git` sync is enabled by default for project workspaces, while the machine-local Git index, lock files, hooks, worktrees, and common build/cache directories are excluded. Mutagen creation includes an initial flush so the remote runtime can build its own Git index from a complete workspace snapshot.
 
 ## Tool Accounts
 

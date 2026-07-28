@@ -103,7 +103,7 @@ agent-remote sync resolve
 agent-remote sync reset
 ```
 
-CLI 会使用 agent-remote home 中托管的 `bin/mutagen`，或使用同级打包二进制。项目 workspace 默认启用 `.git` 同步，同时排除 lock 文件、hooks、worktrees 以及常见构建/缓存目录。
+CLI 会使用 agent-remote home 中托管的 `bin/mutagen`，或使用同级打包二进制。项目 workspace 默认启用 `.git` 同步，同时排除各端独立的 Git index、lock 文件、hooks、worktrees 以及常见构建/缓存目录。Mutagen 创建后会先完成一次初始 flush，远端 runtime 再基于完整 workspace 建立自己的 Git index。
 
 ## 工具账户
 
