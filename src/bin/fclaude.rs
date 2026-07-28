@@ -359,7 +359,7 @@ async fn list_sessions(paths: &AppPaths, args: &SessionListArgs) -> Result<()> {
             vec![
                 short_id(&session.id),
                 display_cell(&session.status),
-                truncate_left(&display_cell(working_directory), 44),
+                compact_workdir(&display_cell(working_directory), 44),
                 short_id(&session.node_id),
                 display_cell(&session.runtime_backend),
             ]
@@ -373,10 +373,68 @@ fn display_cell(value: &str) -> String {
     value.replace(['\t', '\n', '\r'], " ")
 }
 
-fn truncate_left(value: &str, max_chars: usize) -> String {
+fn compact_workdir(value: &str, max_chars: usize) -> String {
     let characters: Vec<_> = value.chars().collect();
     if characters.len() <= max_chars {
         return value.to_string();
+    }
+
+    let (prefix, separator, remainder) = path_parts(value);
+    let marker = if prefix.is_empty() {
+        format!("...{separator}")
+    } else {
+        format!("{prefix}...{separator}")
+    };
+    let components: Vec<_> = remainder
+        .split(separator)
+        .filter(|component| !component.is_empty())
+        .collect();
+    let mut suffix = String::new();
+    for component in components.iter().rev() {
+        let candidate = if suffix.is_empty() {
+            (*component).to_string()
+        } else {
+            format!("{component}{separator}{suffix}")
+        };
+        if marker.chars().count() + candidate.chars().count() > max_chars {
+            break;
+        }
+        suffix = candidate;
+    }
+    if !suffix.is_empty() {
+        return format!("{marker}{suffix}");
+    }
+
+    truncate_left(value, max_chars)
+}
+
+fn path_parts(value: &str) -> (&str, char, &str) {
+    let mut characters = value.char_indices();
+    if let (Some((_, drive)), Some((_, ':')), Some((separator_index, separator))) =
+        (characters.next(), characters.next(), characters.next())
+    {
+        if drive.is_ascii_alphabetic() && matches!(separator, '\\' | '/') {
+            let remainder_index = separator_index + separator.len_utf8();
+            return (
+                &value[..remainder_index],
+                separator,
+                &value[remainder_index..],
+            );
+        }
+    }
+    if let Some(remainder) = value.strip_prefix(r"\\") {
+        return (r"\\", '\\', remainder);
+    }
+    if value.contains('\\') {
+        return ("", '\\', value.trim_start_matches('\\'));
+    }
+    ("", '/', value.trim_start_matches('/'))
+}
+
+fn truncate_left(value: &str, max_chars: usize) -> String {
+    let characters: Vec<_> = value.chars().collect();
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
     }
     format!(
         "...{}",
@@ -740,7 +798,7 @@ fn default_account_key() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{truncate_left, DeleteTarget, FClaudeCli, Mode, SessionListArgs};
+    use super::{compact_workdir, DeleteTarget, FClaudeCli, Mode, SessionListArgs};
     use clap::{Command, CommandFactory, Parser};
 
     fn parse_args(values: &[&str]) -> super::FClaudeArgs {
@@ -845,10 +903,52 @@ mod tests {
     }
 
     #[test]
-    fn keeps_workdir_suffix_when_truncated() {
+    fn keeps_unix_workdir_components_when_compacted() {
+        assert_eq!(compact_workdir("/one/two/three/project", 16), ".../project");
+    }
+
+    #[test]
+    fn keeps_windows_drive_and_workdir_components_when_compacted() {
         assert_eq!(
-            truncate_left("/one/two/three/project", 16),
-            "...three/project"
+            compact_workdir(r"D:\Coding\Code\Project\BilibiliShowOrder\FuckBili", 44),
+            r"D:\...\Project\BilibiliShowOrder\FuckBili"
         );
+    }
+
+    #[test]
+    fn leaves_short_windows_workdir_unchanged() {
+        assert_eq!(
+            compact_workdir(r"C:\Users\rem\project", 44),
+            r"C:\Users\rem\project"
+        );
+    }
+
+    #[test]
+    fn keeps_unc_marker_and_components_when_compacted() {
+        assert_eq!(
+            compact_workdir(
+                r"\\build-server\workspace\Project\BilibiliShowOrder\FuckBili",
+                44
+            ),
+            r"\\...\Project\BilibiliShowOrder\FuckBili"
+        );
+    }
+
+    #[test]
+    fn keeps_relative_windows_workdir_components_when_compacted() {
+        assert_eq!(
+            compact_workdir(r"workspace\Code\Project\BilibiliShowOrder\FuckBili", 40),
+            r"...\Project\BilibiliShowOrder\FuckBili"
+        );
+    }
+
+    #[test]
+    fn bounds_a_workdir_with_a_long_final_component() {
+        let compacted = compact_workdir(
+            r"C:\Users\rem\this-project-name-is-longer-than-the-column",
+            20,
+        );
+        assert_eq!(compacted.chars().count(), 20);
+        assert!(compacted.starts_with("..."));
     }
 }
