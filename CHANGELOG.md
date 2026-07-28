@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.5-fix.6 - 2026-07-28
+
+- fix: enforce managed ssh host verification (c49173f)
+
 ## v0.0.5-fix.5 - 2026-07-28
 
 - fix: recover managed Mutagen sessions (aafa4c7)
