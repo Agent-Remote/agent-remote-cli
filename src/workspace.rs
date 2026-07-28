@@ -16,6 +16,14 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
     "dist",
     ".venv",
     "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    ".coverage",
+    ".coverage.*",
+    "htmlcov",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,6 +167,18 @@ mod tests {
         assert!(DEFAULT_EXCLUDES.contains(&".agent-remote-workspace.json"));
         assert!(DEFAULT_EXCLUDES.contains(&".git/index"));
         assert!(DEFAULT_EXCLUDES.contains(&".git/logs"));
+        for generated in [
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".tox",
+            ".nox",
+            ".coverage",
+            ".coverage.*",
+            "htmlcov",
+        ] {
+            assert!(DEFAULT_EXCLUDES.contains(&generated));
+        }
     }
 
     #[test]
