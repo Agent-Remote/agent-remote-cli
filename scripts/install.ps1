@@ -21,16 +21,98 @@ function Repair-WireGuardConfigPermissions {
     }
 }
 
+function Get-ManagedMutagenProcesses([string]$MutagenPath) {
+    $expectedPath = [System.IO.Path]::GetFullPath($MutagenPath)
+    foreach ($process in @(Get-Process -Name "mutagen" -ErrorAction SilentlyContinue)) {
+        try {
+            $processPath = $process.Path
+        } catch {
+            continue
+        }
+        if ($processPath -and [System.StringComparer]::OrdinalIgnoreCase.Equals(
+            [System.IO.Path]::GetFullPath($processPath),
+            $expectedPath
+        )) {
+            $process
+        }
+    }
+}
+
+function Stop-ManagedMutagen([string]$MutagenPath) {
+    $processes = @(Get-ManagedMutagenProcesses $MutagenPath)
+    if ($processes.Count -eq 0) { return $false }
+
+    Write-Host "Stopping the managed Mutagen daemon for the upgrade..."
+    & $MutagenPath daemon stop 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Mutagen did not stop cleanly; terminating only processes running from $MutagenPath"
+    }
+    Start-Sleep -Milliseconds 250
+
+    $remaining = @(Get-ManagedMutagenProcesses $MutagenPath)
+    foreach ($process in $remaining) {
+        Stop-Process -Id $process.Id -Force
+        if (-not $process.WaitForExit(5000)) {
+            throw "Timed out stopping managed Mutagen process $($process.Id)"
+        }
+    }
+    if (@(Get-ManagedMutagenProcesses $MutagenPath).Count -ne 0) {
+        throw "Managed Mutagen processes are still running from $MutagenPath"
+    }
+    return $true
+}
+
+function Start-ManagedMutagen([string]$MutagenPath) {
+    Write-Host "Restarting the managed Mutagen daemon..."
+    $managedBin = Split-Path $MutagenPath -Parent
+    $previousAgentRemoteHome = $env:AGENT_REMOTE_HOME
+    $previousMutagenSshPath = $env:MUTAGEN_SSH_PATH
+    $previousPath = $env:Path
+    try {
+        $env:AGENT_REMOTE_HOME = $AgentRemoteHome
+        $env:MUTAGEN_SSH_PATH = $managedBin
+        if (($env:Path -split ";") -notcontains $managedBin) {
+            $env:Path = "$managedBin;$env:Path"
+        }
+        & $MutagenPath daemon start | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to restart the managed Mutagen daemon"
+        }
+    } finally {
+        $env:AGENT_REMOTE_HOME = $previousAgentRemoteHome
+        $env:MUTAGEN_SSH_PATH = $previousMutagenSshPath
+        $env:Path = $previousPath
+    }
+}
+
 function Install-Package([string]$PackageDirectory) {
     $destinationBin = Join-Path $AgentRemoteHome "bin"
     $destinationDependencies = Join-Path $AgentRemoteHome "dependencies"
     New-Item -ItemType Directory -Force $destinationBin, $destinationDependencies | Out-Null
-    foreach ($file in @("agent-remote.exe", "fclaude.exe", "agent-remote-wireguard.exe", "mutagen.exe", "mutagen-agents.tar.gz", "scp.exe", "ssh.exe")) {
+    $packageFiles = @("agent-remote.exe", "fclaude.exe", "agent-remote-wireguard.exe", "mutagen.exe", "mutagen-agents.tar.gz", "scp.exe", "ssh.exe")
+    foreach ($file in $packageFiles) {
         $source = Join-Path $PackageDirectory "bin/$file"
         if (-not (Test-Path $source -PathType Leaf)) { throw "Missing packaged file: $source" }
-        Copy-Item $source (Join-Path $destinationBin $file) -Force
     }
-    Copy-Item (Join-Path $PackageDirectory "dependencies/*") $destinationDependencies -Recurse -Force
+    $destinationMutagen = Join-Path $destinationBin "mutagen.exe"
+    $mutagenWasRunning = (Test-Path $destinationMutagen -PathType Leaf) -and (Stop-ManagedMutagen $destinationMutagen)
+    $installCompleted = $false
+    try {
+        foreach ($file in $packageFiles) {
+            Copy-Item (Join-Path $PackageDirectory "bin/$file") (Join-Path $destinationBin $file) -Force
+        }
+        Copy-Item (Join-Path $PackageDirectory "dependencies/*") $destinationDependencies -Recurse -Force
+        $installCompleted = $true
+    } finally {
+        if ($mutagenWasRunning) {
+            try {
+                Start-ManagedMutagen $destinationMutagen
+            } catch {
+                if ($installCompleted) { throw }
+                Write-Warning "The install failed and the managed Mutagen daemon could not be restarted: $_"
+            }
+        }
+    }
     Repair-WireGuardConfigPermissions
 
     if (-not $NoPathUpdate) {

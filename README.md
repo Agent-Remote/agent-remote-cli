@@ -182,7 +182,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/Agent-Remote/agent-remote-cl
 .\install.ps1 -InstallPrerequisites
 ```
 
-`-InstallPrerequisites` installs the Windows OpenSSH Client optional feature and the bundled official WireGuard package when they are missing, and may require an elevated PowerShell. WireGuard installation does not require `winget` or another network download. Omit the option when both are already installed. The installer adds `%LOCALAPPDATA%\agent-remote\bin` to the user `PATH`; open a new terminal after installation.
+`-InstallPrerequisites` installs the Windows OpenSSH Client optional feature and the bundled official WireGuard package when they are missing, and may require an elevated PowerShell. WireGuard installation does not require `winget` or another network download. Omit the option when both are already installed. During an upgrade, the installer detects a Mutagen daemon running from the managed installation, stops it before replacing the locked executable, and restarts it afterward; unrelated Mutagen installations are not stopped. The installer adds `%LOCALAPPDATA%\agent-remote\bin` to the user `PATH`; open a new terminal after installation.
 
 The installer copies managed binaries into `AGENT_REMOTE_HOME/bin`, writes the dependency manifest, and links `agent-remote`, `fclaude`, and `agent-remote-wireguard` into `~/.local/bin` by default. It can also override the GitHub repository, version, target, OS, architecture, home directory, link directory, and symlink/copy behavior.
 

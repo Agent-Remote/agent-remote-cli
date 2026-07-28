@@ -21,6 +21,23 @@ function Resolve-PackageBinary([string]$RelativePath) {
     return $RelativePath
 }
 
+function Get-ProcessesAtPath([string]$Name, [string]$Path) {
+    $expectedPath = [System.IO.Path]::GetFullPath($Path)
+    foreach ($process in @(Get-Process -Name $Name -ErrorAction SilentlyContinue)) {
+        try {
+            $processPath = $process.Path
+        } catch {
+            continue
+        }
+        if ($processPath -and [System.StringComparer]::OrdinalIgnoreCase.Equals(
+            [System.IO.Path]::GetFullPath($processPath),
+            $expectedPath
+        )) {
+            $process
+        }
+    }
+}
+
 $binFiles = @(
     "agent-remote.exe",
     "fclaude.exe",
@@ -101,8 +118,25 @@ foreach ($command in $commands) {
         throw "$command did not report version $ExpectedVersion"
     }
 }
-& (Join-Path $InstallHome "bin/mutagen.exe") version
+$installedMutagen = Join-Path $InstallHome "bin/mutagen.exe"
+& $installedMutagen version
 if ($LASTEXITCODE -ne 0) { throw "Mutagen did not execute successfully" }
+
+try {
+    & $installedMutagen daemon start
+    if ($LASTEXITCODE -ne 0) { throw "Mutagen daemon did not start successfully" }
+    Start-Sleep -Milliseconds 250
+    if (@(Get-ProcessesAtPath "mutagen" $installedMutagen).Count -eq 0) {
+        throw "Mutagen daemon is not running from the managed installation"
+    }
+
+    & (Join-Path $PackageDirectory "install.ps1") -AgentRemoteHome $InstallHome -NoPathUpdate
+    if (@(Get-ProcessesAtPath "mutagen" $installedMutagen).Count -eq 0) {
+        throw "The Windows installer did not restore the managed Mutagen daemon"
+    }
+} finally {
+    & $installedMutagen daemon stop 2>$null | Out-Null
+}
 
 $managedWireGuardConfig = Join-Path $InstallHome "wireguard/agent-remote.conf"
 Assert-File $managedWireGuardConfig

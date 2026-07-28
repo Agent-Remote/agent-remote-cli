@@ -181,7 +181,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/Agent-Remote/agent-remote-cl
 .\install.ps1 -InstallPrerequisites
 ```
 
-`-InstallPrerequisites` 会在缺失时安装 Windows OpenSSH Client 可选功能和发布包内置的官方 WireGuard，可能需要管理员 PowerShell。WireGuard 安装不再依赖 `winget` 或额外联网下载；两者已经安装时可省略。安装器会把 `%LOCALAPPDATA%\agent-remote\bin` 加入用户 `PATH`，安装后请打开新终端。
+`-InstallPrerequisites` 会在缺失时安装 Windows OpenSSH Client 可选功能和发布包内置的官方 WireGuard，可能需要管理员 PowerShell。WireGuard 安装不再依赖 `winget` 或额外联网下载；两者已经安装时可省略。升级时，安装器会检测从受管安装目录运行的 Mutagen daemon，在替换被锁定的可执行文件前停止它，并在完成后重新启动；其他 Mutagen 安装不会被停止。安装器会把 `%LOCALAPPDATA%\agent-remote\bin` 加入用户 `PATH`，安装后请打开新终端。
 
 安装器会把托管二进制复制到 `AGENT_REMOTE_HOME/bin`，写入 dependency manifest，并默认把 `agent-remote`、`fclaude` 和 `agent-remote-wireguard` 链接到 `~/.local/bin`。它也可以覆盖 GitHub 仓库、版本、target、OS、架构、home 目录、链接目录，以及 symlink/copy 行为。
 
