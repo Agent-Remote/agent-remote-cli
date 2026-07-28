@@ -111,7 +111,7 @@ CLI 会使用 agent-remote home 中托管的 `bin/mutagen`，或使用同级打�
 
 `fclaude` 在创建或恢复 session 时会显示选定的 runtime backend。如果控制平面把丢失的 Native Runtime session 对账为 `interrupted`，`fclaude` 会创建有关联关系的 replacement session，而不会 attach 到失效资源或重放之前的命令。
 
-`fclaude list` 默认输出按空格对齐的紧凑表格，session 和 node ID 缩短为 12 位，并从左侧省略过长的工作目录以保留项目名。使用 `fclaude list --no-trunc` 可查看完整值。列表中的短 session ID 可直接传给 `fclaude attach <id>` 或 `fclaude stop <id>`；如果前缀不唯一，命令会拒绝执行。
+`fclaude list` 默认输出按空格对齐的紧凑表格，session 和 node ID 缩短为 12 位，并从左侧省略过长的工作目录以保留项目名。使用 `fclaude list --no-trunc` 可查看完整值。列表中的短 session ID 可直接传给 `fclaude attach <id>`、`fclaude stop <id>` 或 `fclaude delete <id>`；如果前缀不唯一，命令会拒绝执行。删除仅允许用于 stopped 或 interrupted session；`fclaude delete --all` 会一键删除当前用户处于这两种状态的全部 session。
 
 `agent-remote account list` 和 `agent-remote credentials list` 使用相同的紧凑 ID 规则，并支持 `--no-trunc`。显示出的 account 和 credential profile 短 ID 可直接用于账户绑定、状态查询、配置导入、默认账户选择和凭据绑定等操作。`fclaude --account-id <id>` 同样接受账户短 ID。前缀至少需要 4 个十六进制字符，并且必须唯一匹配一条记录。
 

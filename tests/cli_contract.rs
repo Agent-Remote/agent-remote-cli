@@ -82,6 +82,7 @@ fn every_command_path_executes_help_successfully() {
         &["list"],
         &["attach"],
         &["stop"],
+        &["delete"],
     ] {
         assert_help(FCLAUDE, path);
     }

@@ -112,7 +112,7 @@ The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a si
 
 `fclaude` displays the selected runtime backend when it creates or resumes a session. If the control plane reconciles a lost Native Runtime session as `interrupted`, `fclaude` creates a linked replacement session instead of attaching to the stale resource or replaying the previous command.
 
-`fclaude list` prints a compact, space-aligned table with 12-character session and node IDs and a suffix-preserving working directory. Use `fclaude list --no-trunc` for complete values. The displayed short session ID can be passed directly to `fclaude attach <id>` or `fclaude stop <id>`; ambiguous prefixes are rejected.
+`fclaude list` prints a compact, space-aligned table with 12-character session and node IDs and a suffix-preserving working directory. Use `fclaude list --no-trunc` for complete values. The displayed short session ID can be passed directly to `fclaude attach <id>`, `fclaude stop <id>`, or `fclaude delete <id>`; ambiguous prefixes are rejected. Deletion is restricted to stopped or interrupted sessions. `fclaude delete --all` deletes all sessions in those two states for the current user.
 
 `agent-remote account list` and `agent-remote credentials list` use the same compact ID convention and support `--no-trunc`. Displayed account and credential profile IDs can be used anywhere those IDs are accepted, including account binding, status, configuration import, default selection, and credential binding. `fclaude --account-id <id>` accepts the same account prefixes. Prefixes must contain at least four hexadecimal characters and must uniquely identify one item.
 

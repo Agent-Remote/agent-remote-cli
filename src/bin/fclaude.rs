@@ -25,6 +25,13 @@ enum Mode {
     List(SessionListArgs),
     Attach(String),
     Stop(String),
+    Delete(DeleteTarget),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DeleteTarget {
+    Session(String),
+    AllInactive,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -49,8 +56,8 @@ struct FClaudeArgs {
     name = "fclaude",
     version = VERSION,
     about = "Run and manage remote Claude Code sessions",
-    long_about = "Start Claude Code in the synchronized current workspace, resume the matching remote session, or explicitly list, attach, and stop sessions.",
-    after_help = "Examples:\n  fclaude\n  fclaude --model opus\n  fclaude new -- --model sonnet\n  fclaude list --running\n  fclaude attach b68873d48e07\n  fclaude stop b68873d48e07",
+    long_about = "Start Claude Code in the synchronized current workspace, resume the matching remote session, or explicitly list, attach, stop, and delete sessions.",
+    after_help = "Examples:\n  fclaude\n  fclaude --model opus\n  fclaude new -- --model sonnet\n  fclaude list --running\n  fclaude attach b68873d48e07\n  fclaude stop b68873d48e07\n  fclaude delete b68873d48e07\n  fclaude delete --all",
     trailing_var_arg = true,
     args_conflicts_with_subcommands = true
 )]
@@ -101,6 +108,8 @@ enum FClaudeCommand {
     Attach(AttachArgs),
     /// Stop a session using its displayed short ID or full UUID.
     Stop(SessionReferenceArgs),
+    /// Delete a stopped/interrupted session, or delete all sessions in those states.
+    Delete(DeleteArgs),
 }
 
 #[derive(Debug, Default, ClapArgs)]
@@ -168,6 +177,21 @@ struct SessionReferenceArgs {
     session_id: String,
 }
 
+#[derive(Debug, ClapArgs)]
+struct DeleteArgs {
+    /// Unique stopped/interrupted session ID prefix or full UUID.
+    #[arg(
+        value_name = "SESSION",
+        required_unless_present = "all",
+        conflicts_with = "all"
+    )]
+    session_id: Option<String>,
+
+    /// Delete all stopped and interrupted Claude sessions.
+    #[arg(long)]
+    all: bool,
+}
+
 #[tokio::main]
 async fn main() {
     let cli = FClaudeCli::parse();
@@ -195,6 +219,13 @@ impl FClaudeCli {
                 (Mode::Attach(args.session_id), Vec::new(), args.print_only)
             }
             Some(FClaudeCommand::Stop(args)) => (Mode::Stop(args.session_id), Vec::new(), false),
+            Some(FClaudeCommand::Delete(args)) => {
+                let target = match args.session_id {
+                    Some(session_id) => DeleteTarget::Session(session_id),
+                    None => DeleteTarget::AllInactive,
+                };
+                (Mode::Delete(target), Vec::new(), false)
+            }
             None => (Mode::Run, self.claude_args, false),
         };
         FClaudeArgs {
@@ -235,6 +266,7 @@ async fn run(args: FClaudeArgs) -> Result<()> {
         Mode::List(list_args) => list_sessions(&paths, list_args).await,
         Mode::Attach(session_id) => attach_session(&paths, session_id, args.print_only).await,
         Mode::Stop(session_id) => stop_session(&paths, session_id).await,
+        Mode::Delete(target) => delete_sessions(&paths, target).await,
         Mode::Run | Mode::New => run_or_create_session(&paths, args).await,
     }
 }
@@ -374,6 +406,24 @@ async fn stop_session(paths: &AppPaths, session_id: &str) -> Result<()> {
         details = details.field("Stop task", task_id);
     }
     details.render();
+    Ok(())
+}
+
+async fn delete_sessions(paths: &AppPaths, target: &DeleteTarget) -> Result<()> {
+    let (server_url, _device_id, token) = load_device_token(paths).await?;
+    let client = ApiClient::new(server_url)?;
+    match target {
+        DeleteTarget::Session(reference) => {
+            let session_id = resolve_session_id(&client, &token, reference).await?;
+            client.delete_tool_session(&token, &session_id).await?;
+            terminal::success_line("Claude session deleted");
+            Details::new().field("Session", session_id).render();
+        }
+        DeleteTarget::AllInactive => {
+            client.delete_inactive_tool_sessions(&token).await?;
+            terminal::success_line("Stopped and interrupted Claude sessions deleted");
+        }
+    }
     Ok(())
 }
 
@@ -678,7 +728,7 @@ fn default_account_key() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{truncate_left, FClaudeCli, Mode, SessionListArgs};
+    use super::{truncate_left, DeleteTarget, FClaudeCli, Mode, SessionListArgs};
     use clap::{Command, CommandFactory, Parser};
 
     fn parse_args(values: &[&str]) -> super::FClaudeArgs {
@@ -732,6 +782,18 @@ mod tests {
     fn parses_attach_mode() {
         let args = parse_args(&["attach", "01234567"]);
         assert_eq!(args.mode, Mode::Attach("01234567".into()));
+    }
+
+    #[test]
+    fn parses_single_and_bulk_delete_modes() {
+        let single = parse_args(&["delete", "01234567"]);
+        assert_eq!(
+            single.mode,
+            Mode::Delete(DeleteTarget::Session("01234567".into()))
+        );
+
+        let bulk = parse_args(&["delete", "--all"]);
+        assert_eq!(bulk.mode, Mode::Delete(DeleteTarget::AllInactive));
     }
 
     #[test]

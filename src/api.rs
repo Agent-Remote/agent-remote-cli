@@ -244,6 +244,17 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    #[allow(dead_code)]
+    pub async fn delete_tool_session(&self, token: &str, session_id: &str) -> Result<(), ApiError> {
+        self.delete_empty(&format!("/api/v1/sessions/{session_id}"), Some(token))
+            .await
+    }
+
+    #[allow(dead_code)]
+    pub async fn delete_inactive_tool_sessions(&self, token: &str) -> Result<(), ApiError> {
+        self.delete_empty("/api/v1/sessions", Some(token)).await
+    }
+
     pub async fn create_workspace(
         &self,
         token: &str,
