@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.5-fix.5 - 2026-07-28
+
+- fix: recover managed Mutagen sessions (aafa4c7)
+
 ## v0.0.5-fix.4 - 2026-07-28
 
 - feat: add session deletion commands (5cc4dcd)
