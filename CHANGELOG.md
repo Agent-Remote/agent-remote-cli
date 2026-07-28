@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.5-fix.7 - 2026-07-28
+
+- fix: upgrade Windows with running Mutagen (44aaeb9)
+- fix: improve Windows workdir display (f3631fa)
+
 ## v0.0.5-fix.6 - 2026-07-28
 
 - fix: enforce managed ssh host verification (c49173f)
