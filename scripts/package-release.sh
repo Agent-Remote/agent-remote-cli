@@ -86,6 +86,22 @@ for target in $TARGETS; do
       "license_notice": "See THIRD_PARTY_NOTICES.md"
     },
     {
+      "name": "scp-proxy",
+      "required_version": "${VERSION}",
+      "binary": "bin/scp",
+      "source": "agent-remote-cli release artifact",
+      "license": "GPL-3.0-only",
+      "license_notice": "See THIRD_PARTY_NOTICES.md"
+    },
+    {
+      "name": "ssh-proxy",
+      "required_version": "${VERSION}",
+      "binary": "bin/ssh",
+      "source": "agent-remote-cli release artifact",
+      "license": "GPL-3.0-only",
+      "license_notice": "See THIRD_PARTY_NOTICES.md"
+    },
+    {
       "name": "tmux",
       "required_version": "${TMUX_VERSION}",
       "binary": "bin/tmux",

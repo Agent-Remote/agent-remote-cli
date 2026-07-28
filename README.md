@@ -104,7 +104,7 @@ agent-remote sync resolve
 agent-remote sync reset
 ```
 
-The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. Mutagen SSH connections use an agent-remote-managed `known_hosts` file and automatically trust new WireGuard endpoint keys while continuing to reject changed keys. `.git` sync is enabled by default for project workspaces, while the machine-local Git index, lock files, hooks, worktrees, and common build/cache directories are excluded. Mutagen creation includes an initial flush so the remote runtime can build its own Git index from a complete workspace snapshot. `sync ensure` recreates a missing local Mutagen session when the control-plane relationship is still active.
+The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. Mutagen and direct attach SSH connections use an agent-remote-managed `known_hosts` file and automatically trust new WireGuard endpoint keys while continuing to reject changed keys. After an upgrade introduces a new managed SSH environment, the CLI restarts the Mutagen daemon once so that it inherits the managed proxy path. `.git` sync is enabled by default for project workspaces, while the machine-local Git index, lock files, hooks, worktrees, and common build/cache directories are excluded. Mutagen creation includes an initial flush so the remote runtime can build its own Git index from a complete workspace snapshot. `sync ensure` recreates a missing local Mutagen session when the control-plane relationship is still active.
 
 ## Tool Accounts
 

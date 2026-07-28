@@ -3,6 +3,7 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 
 use crate::api::AttachSessionData;
+use crate::config::AppPaths;
 
 pub fn check_ssh_available() -> Result<String> {
     let ssh = crate::platform::ssh_binary();
@@ -21,7 +22,9 @@ pub fn check_ssh_available() -> Result<String> {
     Ok(version)
 }
 
-pub fn execute_attach(attach: &AttachSessionData) -> Result<()> {
+pub fn execute_attach(paths: &AppPaths, attach: &AttachSessionData) -> Result<()> {
+    paths.ensure_base_dirs()?;
+    let known_hosts = paths.ssh_dir().join("known_hosts");
     let remote_command = if attach.command_args.is_empty() {
         vec![
             "agent-remote-attach".to_string(),
@@ -33,7 +36,7 @@ pub fn execute_attach(attach: &AttachSessionData) -> Result<()> {
     };
     let ssh = crate::platform::ssh_binary();
     let status = Command::new(&ssh)
-        .args(attach_args(attach, remote_command))
+        .args(attach_args(attach, remote_command, &known_hosts))
         .status()
         .with_context(|| format!("failed to execute SSH attach with {}", ssh.display()))?;
     if !status.success() {
@@ -42,12 +45,20 @@ pub fn execute_attach(attach: &AttachSessionData) -> Result<()> {
     Ok(())
 }
 
-fn attach_args(attach: &AttachSessionData, remote_command: Vec<String>) -> Vec<String> {
-    let mut args = Vec::with_capacity(remote_command.len() + 15);
+fn attach_args(
+    attach: &AttachSessionData,
+    remote_command: Vec<String>,
+    known_hosts: &std::path::Path,
+) -> Vec<String> {
+    let mut args = Vec::with_capacity(remote_command.len() + 19);
     if attach.forward_ssh_agent {
         args.push("-A".to_string());
     }
     args.extend([
+        "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+        "-o".to_string(),
+        format!("UserKnownHostsFile={}", known_hosts.to_string_lossy()),
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
@@ -90,16 +101,19 @@ mod tests {
     #[test]
     fn attach_args_forward_agent_only_when_authorized() {
         let remote_command = vec!["agent-remote-attach".to_string()];
-        let forwarded = attach_args(&attach(true), remote_command.clone());
+        let known_hosts = std::path::Path::new("/tmp/agent-remote/ssh/known_hosts");
+        let forwarded = attach_args(&attach(true), remote_command.clone(), known_hosts);
         assert_eq!(forwarded.first().map(String::as_str), Some("-A"));
 
-        let restricted = attach_args(&attach(false), remote_command);
+        let restricted = attach_args(&attach(false), remote_command, known_hosts);
         assert!(!restricted.iter().any(|argument| argument == "-A"));
         for option in [
             "BatchMode=yes",
             "ConnectTimeout=10",
             "ServerAliveInterval=10",
             "ServerAliveCountMax=2",
+            "StrictHostKeyChecking=accept-new",
+            "UserKnownHostsFile=/tmp/agent-remote/ssh/known_hosts",
         ] {
             assert!(restricted.iter().any(|argument| argument == option));
         }
