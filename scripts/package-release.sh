@@ -60,6 +60,7 @@ for target in $TARGETS; do
   install -m 0755 "target/$target/release/fclaude" "$work/bin/fclaude"
   install -m 0755 "target/$target/release/agent-remote-wireguard" "$work/bin/agent-remote-wireguard"
   install -m 0755 scripts/mutagen-scp "$work/bin/scp"
+  install -m 0755 scripts/mutagen-ssh "$work/bin/ssh"
   download_mutagen "$target" "$work/bin/mutagen"
   scripts/build-managed-tools.sh "$target" "$work/bin" "$work/dependencies/sources" "$work/dependencies/licenses"
   cp README.md README.zh-CN.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "$work/"
@@ -105,7 +106,7 @@ for target in $TARGETS; do
   ]
 }
 EOF
-  python3 - "$work/dependencies/manifest.json" "$work/dependencies/sources" "$work/bin/wg-quick" "$work/bin/mutagen-agents.tar.gz" "$work/bin/scp" <<'PY'
+  python3 - "$work/dependencies/manifest.json" "$work/dependencies/sources" "$work/bin/wg-quick" "$work/bin/mutagen-agents.tar.gz" "$work/bin/scp" "$work/bin/ssh" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -116,6 +117,7 @@ source_dir = pathlib.Path(sys.argv[2])
 wg_quick_path = pathlib.Path(sys.argv[3])
 mutagen_agents_path = pathlib.Path(sys.argv[4])
 scp_wrapper_path = pathlib.Path(sys.argv[5])
+ssh_wrapper_path = pathlib.Path(sys.argv[6])
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -130,6 +132,7 @@ manifest["managed_files"] = {
     "bin/wg-quick": {"sha256": sha256(wg_quick_path)},
     "bin/mutagen-agents.tar.gz": {"sha256": sha256(mutagen_agents_path)},
     "bin/scp": {"sha256": sha256(scp_wrapper_path)},
+    "bin/ssh": {"sha256": sha256(ssh_wrapper_path)},
 }
 manifest["source_archives"] = [
     {"file": f"dependencies/sources/{path.name}", "sha256": sha256(path)}

@@ -14,8 +14,7 @@ chmod 700 "$ssh_dir"
 touch "$known_hosts"
 chmod 600 "$known_hosts"
 
-exec /usr/bin/scp \
-  -O \
+exec /usr/bin/ssh \
   -o StrictHostKeyChecking=accept-new \
   -o "UserKnownHostsFile=$known_hosts" \
   "$@"

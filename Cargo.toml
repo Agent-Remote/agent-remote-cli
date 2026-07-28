@@ -22,6 +22,10 @@ path = "src/bin/fclaude.rs"
 name = "agent-remote-scp"
 path = "src/bin/agent-remote-scp.rs"
 
+[[bin]]
+name = "agent-remote-ssh"
+path = "src/bin/agent-remote-ssh.rs"
+
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"

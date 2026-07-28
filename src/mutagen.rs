@@ -12,6 +12,8 @@ use crate::workspace::{ensure_git_ready, DEFAULT_EXCLUDES};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MutagenStatus {
     pub installed: bool,
+    pub session_exists: bool,
+    pub session_missing: bool,
     pub has_conflicts: bool,
     pub output: String,
 }
@@ -78,28 +80,59 @@ pub fn status(paths: &AppPaths, sync: &SyncSessionData) -> Result<MutagenStatus>
     if !binary.exists() {
         return Ok(MutagenStatus {
             installed: false,
+            session_exists: false,
+            session_missing: false,
             has_conflicts: false,
             output: format!("mutagen binary missing at {}", binary.display()),
         });
     }
     let name = session_name(sync)?;
-    let output = Command::new(binary)
+    let output = mutagen_command(paths, &binary)?
         .args(["sync", "list", name])
         .output()
         .context("failed to execute mutagen sync list")?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let combined = if stdout.is_empty() { stderr } else { stdout };
+    let combined = combine_output(stdout, stderr);
     let lowered = combined.to_lowercase();
+    let session_exists = output.status.success();
+    let session_missing = !session_exists && is_missing_session_output(&lowered);
     let has_conflicts = lowered.contains("conflict") && !lowered.contains("0 conflicts");
     Ok(MutagenStatus {
         installed: true,
+        session_exists,
+        session_missing,
         has_conflicts,
         output: combined,
     })
 }
 
+pub fn ensure(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<bool> {
+    let status = status(paths, sync)?;
+    if !status.installed {
+        bail!("Mutagen is missing; install the packaged CLI dependencies");
+    }
+    if status.session_exists {
+        return Ok(false);
+    }
+    if !status.session_missing {
+        bail!("unable to inspect the managed Mutagen session");
+    }
+    create(paths, sync, dry_run)?;
+    Ok(true)
+}
+
 pub fn pause(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<()> {
+    let status = status(paths, sync)?;
+    if !status.installed {
+        bail!("Mutagen is missing; install the packaged CLI dependencies");
+    }
+    if status.session_missing {
+        return Ok(());
+    }
+    if !status.session_exists {
+        bail!("unable to inspect the managed Mutagen session");
+    }
     let name = session_name(sync)?;
     run(
         paths,
@@ -110,6 +143,9 @@ pub fn pause(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<
 }
 
 pub fn resume(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<()> {
+    if ensure(paths, sync, dry_run)? {
+        return Ok(());
+    }
     let name = session_name(sync)?;
     run(
         paths,
@@ -169,9 +205,8 @@ fn run(paths: &AppPaths, args: &[String], dry_run: bool) -> Result<String> {
 }
 
 fn run_binary(paths: &AppPaths, binary: &Path, args: &[String]) -> Result<String> {
-    let output = Command::new(binary)
+    let output = mutagen_command(paths, binary)?
         .args(args)
-        .env("PATH", mutagen_path(paths)?)
         .output()
         .context("failed to execute Mutagen")?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -183,6 +218,28 @@ fn run_binary(paths: &AppPaths, binary: &Path, args: &[String]) -> Result<String
         Ok(stderr)
     } else {
         Ok(stdout)
+    }
+}
+
+fn mutagen_command(paths: &AppPaths, binary: &Path) -> Result<Command> {
+    paths.ensure_base_dirs()?;
+    let mut command = Command::new(binary);
+    command
+        .env("PATH", mutagen_path(paths)?)
+        .env("AGENT_REMOTE_HOME", paths.home());
+    Ok(command)
+}
+
+fn is_missing_session_output(output: &str) -> bool {
+    output.contains("unable to locate requested sessions")
+        || output.contains("did not match any sessions")
+}
+
+fn combine_output(stdout: String, stderr: String) -> String {
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, _) => stderr,
+        (_, true) => stdout,
+        (false, false) => format!("{stdout}\n{stderr}"),
     }
 }
 
@@ -204,7 +261,9 @@ mod tests {
     use crate::api::SyncSessionData;
     use crate::config::AppPaths;
 
-    use super::{create_args, mutagen_path, session_name};
+    use super::{
+        combine_output, create_args, is_missing_session_output, mutagen_path, session_name,
+    };
 
     fn sync_session() -> SyncSessionData {
         SyncSessionData {
@@ -255,5 +314,26 @@ mod tests {
         let path = mutagen_path(&paths).unwrap();
         let entries: Vec<_> = env::split_paths(&path).collect();
         assert_eq!(entries.first(), Some(&paths.bin_dir()));
+    }
+
+    #[test]
+    fn recognizes_missing_session_errors() {
+        assert!(is_missing_session_output(
+            "error: unable to locate requested sessions: specification did not match any sessions"
+        ));
+        assert!(!is_missing_session_output(
+            "error: unable to connect to daemon"
+        ));
+    }
+
+    #[test]
+    fn preserves_stdout_and_stderr_for_status_diagnostics() {
+        assert_eq!(
+            combine_output(
+                "Started Mutagen daemon".to_string(),
+                "unable to locate requested sessions".to_string()
+            ),
+            "Started Mutagen daemon\nunable to locate requested sessions"
+        );
     }
 }

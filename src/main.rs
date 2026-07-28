@@ -1178,10 +1178,14 @@ async fn sync_status(paths: AppPaths, args: crate::cli::SyncStatusArgs) -> Resul
         .status("Conflicts", sync.conflict_status.clone())
         .status(
             "Mutagen",
-            if mutagen_status.installed {
-                "present"
-            } else {
+            if !mutagen_status.installed {
                 "missing"
+            } else if mutagen_status.session_exists {
+                "active"
+            } else if mutagen_status.session_missing {
+                "session missing"
+            } else {
+                "unavailable"
             },
         )
         .render();
@@ -1329,7 +1333,9 @@ async fn ensure_workspace_sync(
     if should_create_mutagen {
         sync = wait_until_sync_active(&client, &token, sync).await?;
         persist_sync_session(&state, &server_url, &sync)?;
-        mutagen::create(paths, &sync, dry_run)?;
+    }
+    if sync.status == "active" {
+        mutagen::ensure(paths, &sync, dry_run)?;
     }
     Ok(sync)
 }

@@ -74,7 +74,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 ~/.config/agent-remote/dependencies/manifest.json
 ```
 
-四个 macOS/Linux 发行目标都会内置托管的 `mutagen`、`tmux`、`wg` 和 `wg-quick`；macOS 包还会内置 `wireguard-go`。Windows x64 和 ARM64 包内置原生 CLI、Mutagen、兼容用的 `scp.exe` 代理，以及对应架构的官方 WireGuard for Windows MSI。该 MSI 提供 Windows 上与 `wg`、`wg-quick` 和隧道后端等价的 tunnel manager、`wg.exe` 与 Wintun 驱动。`tmux` 运行在远端 Linux 节点上，在 Windows 客户端没有原生用途。
+四个 macOS/Linux 发行目标都会内置托管的 `mutagen`、`tmux`、`wg`、`wg-quick`，以及负责受管主机验证的 SSH/SCP 包装器；macOS 包还会内置 `wireguard-go`。Windows x64 和 ARM64 包内置原生 CLI、Mutagen、兼容用的 `ssh.exe` 和 `scp.exe` 代理，以及对应架构的官方 WireGuard for Windows MSI。该 MSI 提供 Windows 上与 `wg`、`wg-quick` 和隧道后端等价的 tunnel manager、`wg.exe` 与 Wintun 驱动。`tmux` 运行在远端 Linux 节点上，在 Windows 客户端没有原生用途。
 
 当前实现会记录并检查 Mutagen 和 WireGuard helper 的 manifest。发布包会为每个支持的平台包含托管 Mutagen 二进制和 WireGuard helper。
 
@@ -103,7 +103,7 @@ agent-remote sync resolve
 agent-remote sync reset
 ```
 
-CLI 会使用 agent-remote home 中托管的 `bin/mutagen`，或使用同级打包二进制。项目 workspace 默认启用 `.git` 同步，同时排除各端独立的 Git index、lock 文件、hooks、worktrees 以及常见构建/缓存目录。Mutagen 创建后会先完成一次初始 flush，远端 runtime 再基于完整 workspace 建立自己的 Git index。
+CLI 会使用 agent-remote home 中托管的 `bin/mutagen`，或使用同级打包二进制。Mutagen SSH 连接使用 agent-remote 独立管理的 `known_hosts`；新的 WireGuard 节点密钥会被自动信任，已记录密钥发生变化时仍会拒绝连接。项目 workspace 默认启用 `.git` 同步，同时排除各端独立的 Git index、lock 文件、hooks、worktrees 以及常见构建/缓存目录。Mutagen 创建后会先完成一次初始 flush，远端 runtime 再基于完整 workspace 建立自己的 Git index。当控制面同步关系仍为 active、但本地 Mutagen session 已丢失时，`sync ensure` 会自动重建本地 session。
 
 ## 工具账户
 

@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
@@ -7,45 +8,44 @@ use anyhow::{bail, Context, Result};
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("agent-remote scp proxy: {error:#}");
+        eprintln!("agent-remote ssh proxy: {error:#}");
         process::exit(1);
     }
 }
 
 fn run() -> Result<()> {
-    let scp = system_scp().context(
-        "OpenSSH scp was not found; install the Windows OpenSSH Client optional feature",
+    let ssh = system_ssh().context(
+        "OpenSSH ssh was not found; install the Windows OpenSSH Client optional feature",
     )?;
     let paths = AppPaths::new(None)?;
     paths.ensure_base_dirs()?;
     let known_hosts = paths.home().join("ssh").join("known_hosts");
-    let status = Command::new(&scp)
+    let status = Command::new(&ssh)
         .args(proxy_args(&known_hosts, env::args_os().skip(1)))
         .status()
-        .with_context(|| format!("failed to execute {}", scp.display()))?;
+        .with_context(|| format!("failed to execute {}", ssh.display()))?;
     match status.code() {
         Some(code) => process::exit(code),
-        None => bail!("system scp terminated without an exit code"),
+        None => bail!("system ssh terminated without an exit code"),
     }
 }
 
-fn proxy_args(
-    known_hosts: &Path,
-    arguments: impl IntoIterator<Item = std::ffi::OsString>,
-) -> Vec<std::ffi::OsString> {
+fn proxy_args(known_hosts: &Path, arguments: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
     let mut result = vec![
-        "-O".into(),
-        "-o".into(),
-        "StrictHostKeyChecking=accept-new".into(),
-        "-o".into(),
-        format!("UserKnownHostsFile={}", known_hosts.to_string_lossy()).into(),
+        OsString::from("-o"),
+        OsString::from("StrictHostKeyChecking=accept-new"),
+        OsString::from("-o"),
+        OsString::from(format!(
+            "UserKnownHostsFile={}",
+            known_hosts.to_string_lossy()
+        )),
     ];
     result.extend(arguments);
     result
 }
 
-fn system_scp() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("AGENT_REMOTE_SYSTEM_SCP") {
+fn system_ssh() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("AGENT_REMOTE_SYSTEM_SSH") {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Some(path);
@@ -56,14 +56,14 @@ fn system_scp() -> Option<PathBuf> {
         let path = PathBuf::from(windows)
             .join("System32")
             .join("OpenSSH")
-            .join("scp.exe");
+            .join("ssh.exe");
         if path.is_file() {
             return Some(path);
         }
     }
     let current = env::current_exe().ok();
     for directory in env::split_paths(&env::var_os("PATH")?) {
-        let candidate = directory.join(if cfg!(windows) { "scp.exe" } else { "scp" });
+        let candidate = directory.join(if cfg!(windows) { "ssh.exe" } else { "ssh" });
         if candidate.is_file() && !same_file_path(current.as_deref(), &candidate) {
             return Some(candidate);
         }
@@ -83,19 +83,17 @@ mod tests {
     use super::proxy_args;
 
     #[test]
-    fn proxy_uses_legacy_scp_and_managed_known_hosts() {
+    fn proxy_uses_managed_known_hosts_and_accepts_only_new_keys() {
         let arguments = proxy_args(
             Path::new("C:/Agent Remote/ssh/known_hosts"),
-            [OsString::from("source"), OsString::from("destination")],
+            [OsString::from("example.test")],
         );
         let expected = [
-            "-O",
             "-o",
             "StrictHostKeyChecking=accept-new",
             "-o",
             "UserKnownHostsFile=C:/Agent Remote/ssh/known_hosts",
-            "source",
-            "destination",
+            "example.test",
         ];
         assert_eq!(
             arguments

@@ -21,7 +21,7 @@ require_executable() {
   fi
 }
 
-for binary in agent-remote fclaude agent-remote-wireguard mutagen scp tmux wg wg-quick; do
+for binary in agent-remote fclaude agent-remote-wireguard mutagen scp ssh tmux wg wg-quick; do
   require_executable "$PACKAGE_DIR/bin/$binary"
   require_executable "$INSTALL_HOME/bin/$binary"
 done
