@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.5-fix.1 - 2026-07-28
+
+- fix: harden remote attach networking (806f65a)
+
 ## v0.0.5 - 2026-07-27
 
 - feat: add branding and repository quality gates (a809a0b)
