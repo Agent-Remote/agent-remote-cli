@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.5-fix.2 - 2026-07-28
+
+- fix: isolate workspace git indexes (8ad38bb)
+
 ## v0.0.5-fix.1 - 2026-07-28
 
 - fix: harden remote attach networking (806f65a)
