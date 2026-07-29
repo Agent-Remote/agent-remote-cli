@@ -114,6 +114,24 @@ pub fn run_helper(paths: &AppPaths, action: &str, config_path: &Path, dry_run: b
     Ok(())
 }
 
+pub fn show_status(paths: &AppPaths) -> Result<()> {
+    let helper = helper_path(paths);
+    if !helper.exists() {
+        bail!(
+            "WireGuard helper is missing at {}; run agent-remote doctor --fix after installing the packaged CLI",
+            helper.display()
+        );
+    }
+    let status = Command::new(helper)
+        .arg("status")
+        .status()
+        .context("failed to execute WireGuard helper")?;
+    if !status.success() {
+        bail!("WireGuard helper exited with {status}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use base64::engine::general_purpose::STANDARD;

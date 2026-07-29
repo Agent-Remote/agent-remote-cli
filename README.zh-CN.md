@@ -26,6 +26,7 @@ agent-remote doctor --fix
 agent-remote deps status
 agent-remote wireguard config
 agent-remote wireguard check
+agent-remote wireguard status
 agent-remote sync ensure
 agent-remote sync status
 agent-remote account create --tool claude --name "Claude US" --region US --timezone America/Los_Angeles --tag us
@@ -90,7 +91,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 
 `agent-remote wireguard config` 会生成或复用本地 X25519 私钥，将其保存在系统凭据存储中（失败时回退到权限为 `0600` 的文件），只向控制平面登记公钥，并写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。生成的隧道固定使用 `1380` MTU，避免实际路径 MTU 低于 WireGuard 平台默认值时 SSH 密钥交换被静默卡住。该配置在 Unix 上使用 `0600` 权限；在 Windows 上仅允许当前用户完全控制，并允许 WireGuard 的 `LocalSystem` 隧道服务读取。重复执行该命令可以自动修复注册时缺少 WireGuard peer 的设备；私钥绝不会发送到服务端。
 
-`agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper，并支持用于诊断的 `--dry-run`。macOS 和 Linux 发布包提供所需的托管 WireGuard 工具；Windows 发布包内置官方 WireGuard for Windows MSI，helper 使用 `/installtunnelservice` 和 `/uninstalltunnelservice` 控制其 tunnel service，变更隧道时需要在管理员终端中运行。
+`agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper，并支持用于诊断的 `--dry-run`。`agent-remote wireguard status` 会显示 `wg show` 报告的活动接口和 peer 运行状态，包括 endpoint、最近握手、传输计数和 keepalive 设置。macOS 和 Linux 发布包提供所需的托管 WireGuard 工具；Windows 发布包内置官方 WireGuard for Windows MSI，helper 使用 `/installtunnelservice` 和 `/uninstalltunnelservice` 控制其 tunnel service，变更隧道时需要在管理员终端中运行。
 
 `agent-remote attach <id>` 会向控制平面请求会话级 SSH 授权，等待节点完成设备级 SSH key 同步（最长 30 秒），然后使用本地 `ssh` 执行节点侧 forced command。Windows 使用系统的 OpenSSH Client 可选功能。旧的 `--session-id <id>` 写法仍然兼容。
 
@@ -122,6 +123,8 @@ CLI 会使用 agent-remote home 中托管的 `bin/mutagen`，或使用同级打�
 `fclaude list` 默认输出按空格对齐的紧凑表格，session 和 node ID 缩短为 12 位，并从左侧省略过长的工作目录以保留项目名。使用 `fclaude list --no-trunc` 可查看完整值。列表中的短 session ID 可直接传给 `fclaude attach <id>`、`fclaude stop <id>` 或 `fclaude delete <id>`；如果前缀不唯一，命令会拒绝执行。删除仅允许用于 stopped 或 interrupted session；`fclaude delete --all` 会一键删除当前用户处于这两种状态的全部 session。
 
 `agent-remote account list` 和 `agent-remote credentials list` 使用相同的紧凑 ID 规则，并支持 `--no-trunc`。显示出的 account 和 credential profile 短 ID 可直接用于账户绑定、状态查询、配置导入、默认账户选择和凭据绑定等操作。`fclaude --account-id <id>` 同样接受账户短 ID。前缀至少需要 4 个十六进制字符，并且必须唯一匹配一条记录。
+
+`agent-remote account import-config --account <id>` 会等待目标节点完成已接受 Claude 配置的写入；任务失败、取消、过期或 120 秒内未进入终态时，命令以非零状态退出。超时信息会保留 task ID，因为本地停止等待后远端任务仍可能继续完成。可先用 `--dry-run` 预览路径；只有明确需要导入提示词、transcript 和本地路径时才使用 `--include-resume-history`。
 
 ## 开发
 

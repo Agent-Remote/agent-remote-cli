@@ -427,6 +427,21 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    pub async fn get_tool_account_config_import_status(
+        &self,
+        token: &str,
+        account_id: &str,
+        task_id: &str,
+    ) -> Result<ToolAccountConfigImportStatusData, ApiError> {
+        let response: Envelope<ToolAccountConfigImportStatusData> = self
+            .get(
+                &format!("/api/v1/tool-accounts/{account_id}/config-imports/{task_id}"),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
+    }
+
     pub async fn list_developer_credential_profiles(
         &self,
         token: &str,
@@ -603,6 +618,7 @@ pub struct CliLoginStart {
 pub struct RegisterDeviceRequest {
     pub name: String,
     pub platform: String,
+    pub cli_version: String,
     pub ssh_public_key: String,
     pub wireguard_public_key: Option<String>,
 }
@@ -850,6 +866,15 @@ pub struct ToolAccountConfigImportData {
     pub dry_run: bool,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct ToolAccountConfigImportStatusData {
+    pub task_id: String,
+    pub status: String,
+    pub files_written: Vec<String>,
+    pub file_count: u32,
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct CreateDeveloperCredentialProfileRequest {
     pub display_name: String,
@@ -1032,7 +1057,7 @@ struct ErrorPayload {
 
 #[cfg(test)]
 mod tests {
-    use super::AttachSessionData;
+    use super::{AttachSessionData, RegisterDeviceRequest};
 
     #[test]
     fn attach_authorization_defaults_to_ready_for_older_servers() {
@@ -1053,5 +1078,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(attach.authorization_task_status, "succeeded");
+    }
+
+    #[test]
+    fn device_registration_reports_the_cli_version() {
+        let request = RegisterDeviceRequest {
+            name: "laptop".to_string(),
+            platform: "linux".to_string(),
+            cli_version: "0.0.5-fix.7".to_string(),
+            ssh_public_key: "ssh-ed25519 AAAA".to_string(),
+            wireguard_public_key: None,
+        };
+
+        let payload = serde_json::to_value(request).unwrap();
+        assert_eq!(payload["cli_version"], "0.0.5-fix.7");
     }
 }

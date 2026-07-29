@@ -114,6 +114,19 @@ pub fn windows_wireguard_path() -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
+pub fn windows_wg_path() -> Option<PathBuf> {
+    if let Some(program_files) = env::var_os("ProgramFiles") {
+        let candidate = PathBuf::from(program_files)
+            .join("WireGuard")
+            .join("wg.exe");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    executable_on_path("wg.exe")
+}
+
+#[cfg(windows)]
 fn executable_on_path(name: &str) -> Option<PathBuf> {
     for directory in env::split_paths(&env::var_os("PATH")?) {
         let candidate = directory.join(name);

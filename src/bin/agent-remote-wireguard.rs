@@ -1,4 +1,5 @@
 use std::env;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -12,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
     name = "agent-remote-wireguard",
     version = VERSION,
     about = "Operate the WireGuard tunnel bundled with agent-remote",
-    after_help = "Examples:\n  agent-remote-wireguard check --config ~/.config/agent-remote/wireguard/agent-remote.conf\n  agent-remote-wireguard up --config ./agent-remote.conf --dry-run\n  agent-remote-wireguard down --config ./agent-remote.conf"
+    after_help = "Examples:\n  agent-remote-wireguard check --config ~/.config/agent-remote/wireguard/agent-remote.conf\n  agent-remote-wireguard status\n  agent-remote-wireguard up --config ./agent-remote.conf --dry-run\n  agent-remote-wireguard down --config ./agent-remote.conf"
 )]
 struct Cli {
     /// Control colored output.
@@ -33,6 +34,8 @@ struct Cli {
 enum WireGuardCommand {
     /// Validate a WireGuard configuration and locate the platform tunnel tool.
     Check(ConfigArgs),
+    /// Show active interfaces, peers, handshakes, and transfer counters.
+    Status,
     /// Bring a WireGuard interface up.
     Up(ActionArgs),
     /// Bring a WireGuard interface down.
@@ -67,10 +70,14 @@ fn main() {
 }
 
 fn run(command: WireGuardCommand) -> Result<()> {
+    if matches!(command, WireGuardCommand::Status) {
+        return show_status();
+    }
     let (action, config, dry_run) = match command {
         WireGuardCommand::Check(args) => ("check", args.config, false),
         WireGuardCommand::Up(args) => ("up", args.config, args.dry_run),
         WireGuardCommand::Down(args) => ("down", args.config, args.dry_run),
+        WireGuardCommand::Status => unreachable!(),
     };
     if !config.exists() {
         bail!("WireGuard config does not exist: {}", config.display());
@@ -91,6 +98,23 @@ fn run(command: WireGuardCommand) -> Result<()> {
         "up" | "down" => run_tunnel_tool(action, &config, dry_run),
         value => bail!("unknown action {value}"),
     }
+}
+
+fn show_status() -> Result<()> {
+    let wg = find_wg_tool().context("wg is missing from this release or system installation")?;
+    let output = Command::new(&wg)
+        .arg("show")
+        .output()
+        .with_context(|| format!("failed to execute {}", wg.display()))?;
+    io::stdout().write_all(&output.stdout)?;
+    io::stderr().write_all(&output.stderr)?;
+    if !output.status.success() {
+        bail!("wg show exited with {}", output.status);
+    }
+    if output.stdout.is_empty() {
+        terminal::note("No active WireGuard interfaces.");
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -222,6 +246,46 @@ fn find_tunnel_tool() -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(windows))]
+fn find_wg_tool() -> Option<PathBuf> {
+    find_executable(
+        "AGENT_REMOTE_WG",
+        "wg",
+        &["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"],
+    )
+}
+
+#[cfg(not(windows))]
+fn find_executable(env_name: &str, name: &str, fixed_dirs: &[&str]) -> Option<PathBuf> {
+    if let Some(path) = env::var_os(env_name) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let candidate = parent.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    for directory in fixed_dirs {
+        let candidate = Path::new(directory).join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    for directory in env::split_paths(&env::var_os("PATH")?) {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 #[cfg(windows)]
 fn find_tunnel_tool() -> Option<PathBuf> {
     if let Some(path) = env::var_os("AGENT_REMOTE_WIREGUARD") {
@@ -239,6 +303,25 @@ fn find_tunnel_tool() -> Option<PathBuf> {
         }
     }
     agent_remote_cli::platform::windows_wireguard_path()
+}
+
+#[cfg(windows)]
+fn find_wg_tool() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("AGENT_REMOTE_WG") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            let candidate = parent.join("wg.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    agent_remote_cli::platform::windows_wg_path()
 }
 
 fn install_hint() -> &'static str {

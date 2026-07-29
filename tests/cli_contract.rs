@@ -42,6 +42,7 @@ fn every_command_path_executes_help_successfully() {
         &["wireguard"],
         &["wireguard", "config"],
         &["wireguard", "check"],
+        &["wireguard", "status"],
         &["wireguard", "up"],
         &["wireguard", "down"],
         &["ssh"],
@@ -87,7 +88,7 @@ fn every_command_path_executes_help_successfully() {
         assert_help(FCLAUDE, path);
     }
 
-    for path in [&[][..], &["check"], &["up"], &["down"]] {
+    for path in [&[][..], &["check"], &["status"], &["up"], &["down"]] {
         assert_help(WIREGUARD, path);
     }
 }
@@ -152,4 +153,35 @@ fn auto_color_honors_no_color() {
     assert!(output.status.success());
     assert!(!output.stdout.contains(&0x1b));
     assert!(!output.stderr.contains(&0x1b));
+}
+
+#[cfg(unix)]
+#[test]
+fn wireguard_status_runs_wg_show_and_preserves_output() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let wg = temp.path().join("wg");
+    fs::write(
+        &wg,
+        "#!/bin/sh\n[ \"$1\" = show ] || exit 64\nprintf 'interface: agent-remote\\n  latest handshake: 8 seconds ago\\n'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&wg, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let output = Command::new(AGENT_REMOTE)
+        .args(["--color", "never", "wireguard", "status"])
+        .env("AGENT_REMOTE_HOME", temp.path())
+        .env("AGENT_REMOTE_WG", &wg)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "status failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("interface: agent-remote"));
+    assert!(stdout.contains("latest handshake: 8 seconds ago"));
 }

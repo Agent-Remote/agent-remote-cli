@@ -204,6 +204,8 @@ pub enum WireGuardCommand {
     Config(WireGuardConfigArgs),
     /// Validate the configuration and platform WireGuard tunnel tool.
     Check(WireGuardActionArgs),
+    /// Show active interfaces, peers, handshakes, and transfer counters.
+    Status,
     /// Bring the managed WireGuard tunnel up.
     Up(WireGuardActionArgs),
     /// Bring the managed WireGuard tunnel down.

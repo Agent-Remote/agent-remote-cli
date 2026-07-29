@@ -31,7 +31,7 @@ use crate::api::{
 use crate::auth::{clear_device_token_refresh, load_device_token, store_device_token};
 use crate::cli::{
     AccountCommand, AccountDefaultCommand, Cli, Command, CredentialsCommand, DepsCommand,
-    LoginMethod, SshCommand, SyncCommand, WireGuardCommand,
+    LoginMethod, SshCommand, SyncCommand, WireGuardCommand, VERSION,
 };
 use crate::config::{AppPaths, Config};
 use crate::dependencies::DependencyManager;
@@ -43,6 +43,7 @@ use agent_remote_cli::identifiers::{resolve_id, short_id};
 
 const CONFIG_IMPORT_MAX_FILE_BYTES: u64 = 1024 * 1024;
 const CONFIG_IMPORT_MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
+const CONFIG_IMPORT_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[tokio::main]
 async fn main() {
@@ -65,6 +66,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Deps(DepsCommand::Status(args)) => deps_status(paths, args.fix),
         Command::Wireguard(WireGuardCommand::Config(args)) => wireguard_config(paths, args).await,
         Command::Wireguard(WireGuardCommand::Check(args)) => wireguard_action(paths, "check", args),
+        Command::Wireguard(WireGuardCommand::Status) => wireguard::show_status(&paths),
         Command::Wireguard(WireGuardCommand::Up(args)) => wireguard_action(paths, "up", args),
         Command::Wireguard(WireGuardCommand::Down(args)) => wireguard_action(paths, "down", args),
         Command::Ssh(SshCommand::Check(args)) => ssh_check(paths, args).await,
@@ -272,6 +274,7 @@ async fn finalize_login(
     let request = RegisterDeviceRequest {
         name: device_name.clone(),
         platform,
+        cli_version: VERSION.to_string(),
         ssh_public_key,
         wireguard_public_key: options.wireguard_public_key,
     };
@@ -712,26 +715,74 @@ async fn account_import_config(
         .field("Dry run", result.dry_run)
         .render();
     println!("{}", terminal::label("Accepted"));
-    for path in result.accepted {
+    for path in &result.accepted {
         println!("  {path}");
     }
     println!("{}", terminal::label("Rejected"));
-    for path in result.rejected {
+    for path in &result.rejected {
         println!("  {path}");
     }
-    for warning in result.warnings {
+    for warning in &result.warnings {
         terminal::warning_line(warning);
     }
-    if let Some(task_id) = result.task_id {
+    if let Some(task_id) = &result.task_id {
         Details::new().field("Task", task_id).render();
     }
-    if let Some(path) = result.account_remote_path {
+    if let Some(path) = &result.account_remote_path {
         Details::new().field("Remote path", path).render();
     }
     if let Some(count) = result.imported_file_count {
         Details::new().field("Files queued", count).render();
     }
+    if let Some(task_id) = &result.task_id {
+        wait_for_config_import(&client, &token, &account_id, task_id).await?;
+    }
     Ok(())
+}
+
+async fn wait_for_config_import(
+    client: &ApiClient,
+    token: &str,
+    account_id: &str,
+    task_id: &str,
+) -> Result<()> {
+    terminal::note("Waiting for the remote node to finish the configuration import...");
+    let deadline = Instant::now() + CONFIG_IMPORT_WAIT_TIMEOUT;
+    loop {
+        let status = client
+            .get_tool_account_config_import_status(token, account_id, task_id)
+            .await?;
+        if config_import_complete(&status.status, status.error.as_deref(), task_id)? {
+            terminal::success_line("Configuration import completed");
+            Details::new()
+                .field("Files imported", status.file_count)
+                .field("Task", status.task_id)
+                .render();
+            for path in status.files_written {
+                println!("  {path}");
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "configuration import did not finish within {} seconds; the remote task may still continue (task {task_id})",
+                CONFIG_IMPORT_WAIT_TIMEOUT.as_secs()
+            );
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+}
+
+fn config_import_complete(status: &str, error: Option<&str>, task_id: &str) -> Result<bool> {
+    match status {
+        "succeeded" => Ok(true),
+        "pending" | "leased" | "running" => Ok(false),
+        "failed" | "cancelled" | "expired" => bail!(
+            "configuration import {status}: {} (task {task_id})",
+            error.unwrap_or("the remote node did not provide an error summary")
+        ),
+        value => bail!("configuration import returned unknown status {value} (task {task_id})"),
+    }
 }
 
 async fn account_verify(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
@@ -1531,7 +1582,7 @@ fn resolve_ssh_public_key(explicit: Option<&std::path::Path>) -> Result<String> 
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_server_url;
+    use super::{config_import_complete, normalize_server_url};
 
     #[test]
     fn trims_trailing_slashes_from_server_url() {
@@ -1539,5 +1590,19 @@ mod tests {
             normalize_server_url(" https://example.test/// "),
             "https://example.test"
         );
+    }
+
+    #[test]
+    fn config_import_completion_classifies_terminal_states() {
+        assert!(!config_import_complete("pending", None, "task-1").unwrap());
+        assert!(!config_import_complete("running", None, "task-1").unwrap());
+        assert!(config_import_complete("succeeded", None, "task-1").unwrap());
+
+        let failed = config_import_complete("failed", Some("write failed"), "task-1")
+            .unwrap_err()
+            .to_string();
+        assert!(failed.contains("write failed"));
+        assert!(failed.contains("task-1"));
+        assert!(config_import_complete("unexpected", None, "task-1").is_err());
     }
 }

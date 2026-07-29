@@ -26,6 +26,7 @@ agent-remote doctor --fix
 agent-remote deps status
 agent-remote wireguard config
 agent-remote wireguard check
+agent-remote wireguard status
 agent-remote sync ensure
 agent-remote sync status
 agent-remote account create --tool claude --name "Claude US" --region US --timezone America/Los_Angeles --tag us
@@ -91,7 +92,7 @@ The current implementation records and checks the manifest for Mutagen and WireG
 
 `agent-remote wireguard config` creates or reuses a local X25519 private key, stores it in the platform credential store (with a `0600` file fallback), enrolls only its public key with the control plane, and writes `wireguard/agent-remote.conf` under the local agent-remote home. The generated tunnel uses an MTU of `1380` to avoid silent SSH key-exchange stalls on paths whose effective MTU is lower than WireGuard's platform default. The config uses `0600` permissions on Unix; on Windows, only the current user has full control and the WireGuard `LocalSystem` tunnel service has read access. Running the command repairs devices that were registered without a WireGuard peer. The private key is never sent to the server.
 
-`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. On macOS and Linux, release packages provide the required managed WireGuard tools. On Windows, the release includes the official WireGuard for Windows MSI and the helper controls its tunnel service with `/installtunnelservice` and `/uninstalltunnelservice`; run tunnel changes from an elevated terminal.
+`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. `agent-remote wireguard status` displays the active interfaces and peer runtime state reported by `wg show`, including endpoints, latest handshakes, transfer counters, and keepalive settings. On macOS and Linux, release packages provide the required managed WireGuard tools. On Windows, the release includes the official WireGuard for Windows MSI and the helper controls its tunnel service with `/installtunnelservice` and `/uninstalltunnelservice`; run tunnel changes from an elevated terminal.
 
 `agent-remote attach <id>` asks the control plane for a session-specific SSH authorization, waits up to 30 seconds for device-scoped SSH key synchronization to finish on the node, and then uses local `ssh` to run the node-side forced command. Windows uses the built-in OpenSSH Client optional feature. The former `--session-id <id>` form remains supported for compatibility.
 
@@ -123,6 +124,8 @@ The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a si
 `fclaude list` prints a compact, space-aligned table with 12-character session and node IDs and a suffix-preserving working directory. Use `fclaude list --no-trunc` for complete values. The displayed short session ID can be passed directly to `fclaude attach <id>`, `fclaude stop <id>`, or `fclaude delete <id>`; ambiguous prefixes are rejected. Deletion is restricted to stopped or interrupted sessions. `fclaude delete --all` deletes all sessions in those two states for the current user.
 
 `agent-remote account list` and `agent-remote credentials list` use the same compact ID convention and support `--no-trunc`. Displayed account and credential profile IDs can be used anywhere those IDs are accepted, including account binding, status, configuration import, default selection, and credential binding. `fclaude --account-id <id>` accepts the same account prefixes. Prefixes must contain at least four hexadecimal characters and must uniquely identify one item.
+
+`agent-remote account import-config --account <id>` waits for the selected node to finish writing the accepted Claude configuration and exits non-zero when the task fails, is cancelled, expires, or does not reach a terminal state within 120 seconds. The timeout message preserves the task ID because the remote task may still complete after the local wait ends. Use `--dry-run` to preview paths and `--include-resume-history` only when prompts, transcripts, and local paths are intentionally included.
 
 ## Development
 
