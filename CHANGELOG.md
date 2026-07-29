@@ -4,6 +4,8 @@ All notable changes to this repository are recorded here.
 
 ## v0.0.6 - 2026-07-29
 
+- fix: compile tunnel process guards on windows (a5989bf)
+- chore: release v0.0.6 (913ae79)
 - feat: add secure session port forwarding (fcc9c7f)
 
 ## v0.0.5-fix.9 - 2026-07-29
