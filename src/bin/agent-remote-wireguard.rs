@@ -1,12 +1,16 @@
 use std::env;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use agent_remote_cli::cli::VERSION;
 use agent_remote_cli::terminal::{self, ColorChoice, Details};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
+
+#[cfg(windows)]
+#[path = "agent-remote-wireguard/windows.rs"]
+mod windows_elevation;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -82,6 +86,12 @@ fn run(command: WireGuardCommand) -> Result<()> {
     if !config.exists() {
         bail!("WireGuard config does not exist: {}", config.display());
     }
+    #[cfg(windows)]
+    if let Some(arguments) = windows_elevation::tunnel_arguments(action, &config, dry_run) {
+        if !windows_elevation::is_elevated()? {
+            return windows_elevation::relaunch(&arguments);
+        }
+    }
     match action {
         "check" => {
             terminal::success_line("WireGuard configuration is readable");
@@ -106,13 +116,50 @@ fn show_status() -> Result<()> {
         .arg("show")
         .output()
         .with_context(|| format!("failed to execute {}", wg.display()))?;
-    io::stdout().write_all(&output.stdout)?;
-    io::stderr().write_all(&output.stderr)?;
+
+    if !output.status.success() && wg_requires_elevation(&output.stderr) {
+        #[cfg(unix)]
+        return show_status_elevated(&wg);
+        #[cfg(windows)]
+        return windows_elevation::relaunch(&["status".into()]);
+    }
+
+    present_wg_output(&output)?;
     if !output.status.success() {
         bail!("wg show exited with {}", output.status);
     }
     if output.stdout.is_empty() {
         terminal::note("No active WireGuard interfaces.");
+    }
+    Ok(())
+}
+
+fn present_wg_output(output: &Output) -> Result<()> {
+    io::stdout().write_all(&output.stdout)?;
+    io::stderr().write_all(&output.stderr)?;
+    Ok(())
+}
+
+fn wg_requires_elevation(output: &[u8]) -> bool {
+    let stderr = String::from_utf8_lossy(output).to_ascii_lowercase();
+    stderr.contains("permission denied")
+        || stderr.contains("operation not permitted")
+        || stderr.contains("access is denied")
+}
+
+#[cfg(unix)]
+fn show_status_elevated(wg: &Path) -> Result<()> {
+    let sudo = find_sudo_tool().context(
+        "sudo is required to inspect WireGuard status; install sudo or run from a root shell",
+    )?;
+    let status = Command::new(&sudo)
+        .arg("--")
+        .arg(wg)
+        .arg("show")
+        .status()
+        .with_context(|| format!("failed to execute {}", sudo.display()))?;
+    if !status.success() {
+        bail!("elevated wg show exited with {status}");
     }
     Ok(())
 }
@@ -255,6 +302,11 @@ fn find_wg_tool() -> Option<PathBuf> {
     )
 }
 
+#[cfg(unix)]
+fn find_sudo_tool() -> Option<PathBuf> {
+    find_executable("AGENT_REMOTE_SUDO", "sudo", &["/usr/bin", "/bin"])
+}
+
 #[cfg(not(windows))]
 fn find_executable(env_name: &str, name: &str, fixed_dirs: &[&str]) -> Option<PathBuf> {
     if let Some(path) = env::var_os(env_name) {
@@ -349,7 +401,7 @@ mod tests {
 
     use super::Cli;
     #[cfg(unix)]
-    use super::{find_executable, run, WireGuardCommand};
+    use super::{find_executable, run, wg_requires_elevation, WireGuardCommand};
 
     #[cfg(unix)]
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -392,10 +444,39 @@ mod tests {
         env::set_var("AGENT_REMOTE_WG", &wg);
         run(WireGuardCommand::Status).unwrap();
 
+        let sudo = dir.path().join("sudo");
+        fs::write(
+            &wg,
+            "#!/bin/sh\nif [ \"$AGENT_REMOTE_TEST_ELEVATED\" = 1 ]; then echo 'interface: elevated'; exit 0; fi\necho 'Unable to access interface: Permission denied' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::write(
+            &sudo,
+            "#!/bin/sh\n[ \"$1\" = -- ] || exit 64\nshift\nAGENT_REMOTE_TEST_ELEVATED=1 exec \"$@\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&sudo, fs::Permissions::from_mode(0o700)).unwrap();
+        env::set_var("AGENT_REMOTE_SUDO", &sudo);
+        run(WireGuardCommand::Status).unwrap();
+
+        fs::write(&sudo, "#!/bin/sh\nexit 7\n").unwrap();
+        let error = run(WireGuardCommand::Status).unwrap_err().to_string();
+        assert!(error.contains("elevated wg show exited"));
+
         fs::write(&wg, "#!/bin/sh\nexit 9\n").unwrap();
         let error = run(WireGuardCommand::Status).unwrap_err().to_string();
         assert!(error.contains("wg show exited"));
         env::remove_var("AGENT_REMOTE_WG");
+        env::remove_var("AGENT_REMOTE_SUDO");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_recognizes_platform_permission_errors() {
+        assert!(wg_requires_elevation(b"Permission denied"));
+        assert!(wg_requires_elevation(b"Operation not permitted"));
+        assert!(wg_requires_elevation(b"Access is denied."));
+        assert!(!wg_requires_elevation(b"Invalid interface"));
     }
 
     #[cfg(unix)]

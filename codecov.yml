@@ -1,6 +1,11 @@
 codecov:
   require_ci_to_pass: true
 
+# UAC can only be exercised interactively on Windows; Windows CI still compiles
+# this module and runs its argument/selection unit tests.
+ignore:
+  - "src/bin/agent-remote-wireguard/windows.rs"
+
 coverage:
   precision: 2
   round: down

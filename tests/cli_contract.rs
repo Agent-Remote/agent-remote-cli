@@ -185,3 +185,42 @@ fn wireguard_status_runs_wg_show_and_preserves_output() {
     assert!(stdout.contains("interface: agent-remote"));
     assert!(stdout.contains("latest handshake: 8 seconds ago"));
 }
+
+#[cfg(unix)]
+#[test]
+fn wireguard_status_retries_with_sudo_after_permission_denied() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let wg = temp.path().join("wg");
+    let sudo = temp.path().join("sudo");
+    fs::write(
+        &wg,
+        "#!/bin/sh\nif [ \"$AGENT_REMOTE_TEST_ELEVATED\" = 1 ]; then printf 'interface: elevated-agent-remote\\n'; exit 0; fi\nprintf 'Unable to access interface: Permission denied\\n' >&2\nexit 1\n",
+    )
+    .unwrap();
+    fs::write(
+        &sudo,
+        "#!/bin/sh\n[ \"$1\" = -- ] || exit 64\nshift\nAGENT_REMOTE_TEST_ELEVATED=1 exec \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&wg, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::set_permissions(&sudo, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let output = Command::new(AGENT_REMOTE)
+        .args(["--color", "never", "wireguard", "status"])
+        .env("AGENT_REMOTE_HOME", temp.path())
+        .env("AGENT_REMOTE_WG", &wg)
+        .env("AGENT_REMOTE_SUDO", &sudo)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "status failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("interface: elevated-agent-remote"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Permission denied"));
+}
