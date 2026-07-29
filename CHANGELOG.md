@@ -2,6 +2,12 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.5-fix.9 - 2026-07-29
+
+- feat: elevate wireguard operations automatically (548dae1)
+- fix: keep WireGuard checks portable (511a61b)
+- test: cover WireGuard status paths (3af112b)
+
 ## v0.0.5-fix.8 - 2026-07-29
 
 - feat: improve remote operations and status (70a45b1)
