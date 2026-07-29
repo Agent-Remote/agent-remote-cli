@@ -523,7 +523,10 @@ fn assign_kill_on_close_job(child: &Child) -> Result<OwnedHandle> {
     if configured == 0 {
         return Err(io::Error::last_os_error()).context("failed to configure the SSH process job");
     }
-    let assigned = unsafe { AssignProcessToJobObject(job.as_raw_handle(), child.as_raw_handle()) };
+    let child_handle = child
+        .raw_handle()
+        .context("SSH process handle is unavailable")?;
+    let assigned = unsafe { AssignProcessToJobObject(job.as_raw_handle(), child_handle) };
     if assigned == 0 {
         return Err(io::Error::last_os_error()).context("failed to assign SSH to its process job");
     }
@@ -885,11 +888,14 @@ mod tests {
     #[cfg(windows)]
     use super::assign_kill_on_close_job;
     use super::{
-        bind_loopback_listeners, client_instance_id, connect_ssh_tunnel, parse_local_port,
-        proxy_stream, read_server_handshake, resolve_session, start_with_ssh, supervise_tunnel,
-        ServerHandshake,
+        bind_loopback_listeners, client_instance_id, parse_local_port, proxy_stream,
+        read_server_handshake, resolve_session, ServerHandshake,
     };
-    use crate::api::{ApiClient, CreatedPortForwardData, PortForwardConnectionData};
+    #[cfg(unix)]
+    use super::{connect_ssh_tunnel, start_with_ssh, supervise_tunnel};
+    use crate::api::ApiClient;
+    #[cfg(unix)]
+    use crate::api::{CreatedPortForwardData, PortForwardConnectionData};
     use crate::cli::{ForwardAction, ForwardArgs, ForwardStopArgs};
     use crate::config::{AppPaths, Config};
     use crate::local_state::{LocalDevice, LocalState};
