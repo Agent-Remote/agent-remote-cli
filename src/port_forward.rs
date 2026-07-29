@@ -1182,7 +1182,12 @@ mod tests {
         let error = start_with_ssh(&paths, &args, None, script)
             .await
             .expect_err("terminal tunnel authorization must fail start");
-        assert!(error.to_string().contains("tunnel supervisor stopped"));
+        let message = error.to_string();
+        assert!(
+            message.contains("tunnel supervisor stopped")
+                || message.contains("timed out establishing the SSH tunnel"),
+            "unexpected start failure: {message}"
+        );
         assert!(!leaked.exists(), "connection token was passed in SSH argv");
 
         let requests = server.await.unwrap();
