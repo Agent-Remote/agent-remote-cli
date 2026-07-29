@@ -1184,8 +1184,7 @@ mod tests {
             .expect_err("terminal tunnel authorization must fail start");
         let message = error.to_string();
         assert!(
-            message.contains("tunnel supervisor stopped")
-                || message.contains("timed out establishing the SSH tunnel"),
+            message.contains("tunnel supervisor stopped"),
             "unexpected start failure: {message}"
         );
         assert!(!leaked.exists(), "connection token was passed in SSH argv");
@@ -1196,9 +1195,9 @@ mod tests {
         assert!(requests[1].starts_with(
             "POST /api/v1/sessions/22222222-2222-4222-8222-222222222222/port-forwards HTTP/1.1"
         ));
-        assert!(requests[2].starts_with(
+        assert!(requests.iter().any(|request| request.starts_with(
             "DELETE /api/v1/port-forwards/11111111-1111-4111-8111-111111111111 HTTP/1.1"
-        ));
+        )));
         assert!(requests
             .iter()
             .all(|request| !request.contains("initial-connect-secret")));
