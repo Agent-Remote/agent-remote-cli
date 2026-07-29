@@ -336,9 +336,23 @@ fn install_hint() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::env;
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::sync::Mutex;
+
     use clap::{Command, CommandFactory};
 
     use super::Cli;
+    #[cfg(unix)]
+    use super::{find_executable, run, WireGuardCommand};
+
+    #[cfg(unix)]
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn assert_documented(command: &Command, path: &str) {
         assert!(
@@ -365,5 +379,59 @@ mod tests {
         let command = Cli::command();
         command.clone().debug_assert();
         assert_documented(&command, "agent-remote-wireguard");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_uses_the_configured_wg_and_propagates_failures() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let wg = dir.path().join("wg");
+        fs::write(&wg, "#!/bin/sh\n[ \"$1\" = show ]\n").unwrap();
+        fs::set_permissions(&wg, fs::Permissions::from_mode(0o700)).unwrap();
+        env::set_var("AGENT_REMOTE_WG", &wg);
+        run(WireGuardCommand::Status).unwrap();
+
+        fs::write(&wg, "#!/bin/sh\nexit 9\n").unwrap();
+        let error = run(WireGuardCommand::Status).unwrap_err().to_string();
+        assert!(error.contains("wg show exited"));
+        env::remove_var("AGENT_REMOTE_WG");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_lookup_supports_environment_fixed_and_path_locations() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("test-wg");
+        fs::write(&tool, "#!/bin/sh\n").unwrap();
+
+        env::set_var("TEST_AGENT_REMOTE_WG", &tool);
+        assert_eq!(
+            find_executable("TEST_AGENT_REMOTE_WG", "missing", &[]),
+            Some(tool.clone())
+        );
+        env::remove_var("TEST_AGENT_REMOTE_WG");
+
+        assert_eq!(
+            find_executable(
+                "TEST_AGENT_REMOTE_WG",
+                "test-wg",
+                &[dir.path().to_str().unwrap()]
+            ),
+            Some(tool.clone())
+        );
+
+        let previous_path = env::var_os("PATH");
+        env::set_var("PATH", dir.path());
+        assert_eq!(
+            find_executable("TEST_AGENT_REMOTE_WG", "test-wg", &[]),
+            Some(tool)
+        );
+        if let Some(path) = previous_path {
+            env::set_var("PATH", path);
+        } else {
+            env::remove_var("PATH");
+        }
     }
 }

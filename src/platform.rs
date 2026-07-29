@@ -114,6 +114,7 @@ pub fn windows_wireguard_path() -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)] // Used by the sibling agent-remote-wireguard binary via the library crate.
 pub fn windows_wg_path() -> Option<PathBuf> {
     if let Some(program_files) = env::var_os("ProgramFiles") {
         let candidate = PathBuf::from(program_files)

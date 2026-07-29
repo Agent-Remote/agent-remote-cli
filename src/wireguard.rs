@@ -143,7 +143,7 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     use super::write_config;
-    use super::{generate_private_key, public_key_from_private, render_config};
+    use super::{generate_private_key, public_key_from_private, render_config, show_status};
 
     #[test]
     fn renders_wireguard_config() {
@@ -202,6 +202,28 @@ mod tests {
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_helper_status_and_errors() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let paths = crate::config::AppPaths::from_home(dir.path().to_path_buf());
+        let missing = show_status(&paths).unwrap_err().to_string();
+        assert!(missing.contains("WireGuard helper is missing"));
+
+        fs::create_dir_all(paths.bin_dir()).unwrap();
+        let helper = paths.bin_dir().join("agent-remote-wireguard");
+        fs::write(&helper, "#!/bin/sh\n[ \"$1\" = status ]\n").unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+        show_status(&paths).unwrap();
+
+        fs::write(&helper, "#!/bin/sh\nexit 7\n").unwrap();
+        let failed = show_status(&paths).unwrap_err().to_string();
+        assert!(failed.contains("WireGuard helper exited"));
     }
 
     #[cfg(windows)]
