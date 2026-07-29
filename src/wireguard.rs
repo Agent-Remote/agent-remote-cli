@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
@@ -108,10 +108,7 @@ pub fn run_helper(paths: &AppPaths, action: &str, config_path: &Path, dry_run: b
     let status = command
         .status()
         .context("failed to execute WireGuard helper")?;
-    if !status.success() {
-        bail!("WireGuard helper exited with {status}");
-    }
-    Ok(())
+    ensure_helper_succeeded(status)
 }
 
 pub fn show_status(paths: &AppPaths) -> Result<()> {
@@ -126,6 +123,10 @@ pub fn show_status(paths: &AppPaths) -> Result<()> {
         .arg("status")
         .status()
         .context("failed to execute WireGuard helper")?;
+    ensure_helper_succeeded(status)
+}
+
+fn ensure_helper_succeeded(status: ExitStatus) -> Result<()> {
     if !status.success() {
         bail!("WireGuard helper exited with {status}");
     }
@@ -141,9 +142,11 @@ mod tests {
 
     use crate::api::{WireGuardConfigData, WireGuardNodePeerData};
 
+    #[cfg(unix)]
+    use super::show_status;
     #[cfg(any(unix, windows))]
     use super::write_config;
-    use super::{generate_private_key, public_key_from_private, render_config, show_status};
+    use super::{generate_private_key, public_key_from_private, render_config};
 
     #[test]
     fn renders_wireguard_config() {
