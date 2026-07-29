@@ -6,6 +6,7 @@ use agent_remote_cli::api::{
     GitSyncPolicy, SessionData, SyncSessionData, ToolAccountData, WorkspaceData,
 };
 use agent_remote_cli::auth::load_device_token;
+use agent_remote_cli::cli::ForwardArgs;
 use agent_remote_cli::cli::VERSION;
 use agent_remote_cli::config::AppPaths;
 use agent_remote_cli::identifiers::{resolve_id, short_id};
@@ -26,6 +27,7 @@ enum Mode {
     Attach(String),
     Stop(String),
     Delete(DeleteTarget),
+    Forward(ForwardArgs),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -110,6 +112,8 @@ enum FClaudeCommand {
     Stop(SessionReferenceArgs),
     /// Delete a stopped/interrupted session, or delete all sessions in those states.
     Delete(DeleteArgs),
+    /// Forward a local loopback port to this workspace's remote session.
+    Forward(ForwardArgs),
 }
 
 #[derive(Debug, Default, ClapArgs)]
@@ -226,6 +230,7 @@ impl FClaudeCli {
                 };
                 (Mode::Delete(target), Vec::new(), false)
             }
+            Some(FClaudeCommand::Forward(args)) => (Mode::Forward(args), Vec::new(), false),
             None => (Mode::Run, self.claude_args, false),
         };
         FClaudeArgs {
@@ -267,6 +272,9 @@ async fn run(args: FClaudeArgs) -> Result<()> {
         Mode::Attach(session_id) => attach_session(&paths, session_id, args.print_only).await,
         Mode::Stop(session_id) => stop_session(&paths, session_id).await,
         Mode::Delete(target) => delete_sessions(&paths, target).await,
+        Mode::Forward(forward_args) => {
+            agent_remote_cli::port_forward::run(&paths, forward_args, Some(TOOL_TYPE)).await
+        }
         Mode::Run | Mode::New => run_or_create_session(&paths, args).await,
     }
 }

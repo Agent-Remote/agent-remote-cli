@@ -68,6 +68,57 @@ pub enum Command {
     Credentials(CredentialsCommand),
     /// Attach to a remote session by a unique ID prefix or full UUID.
     Attach(AttachArgs),
+    /// Forward a local loopback port to one managed session loopback port.
+    Forward(ForwardArgs),
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct ForwardArgs {
+    /// Remote runtime loopback TCP port.
+    #[arg(value_name = "REMOTE_PORT")]
+    pub remote_port: Option<u16>,
+
+    /// Unique session ID prefix or full UUID; inferred only when unambiguous.
+    #[arg(long, value_name = "SESSION")]
+    pub session: Option<String>,
+
+    /// Local loopback port, or "auto" to select an available high port.
+    #[arg(long, value_name = "PORT", default_value = "same")]
+    pub local_port: String,
+
+    /// Open the local HTTP URL after the remote port accepts a connection.
+    #[arg(long)]
+    pub open: bool,
+
+    /// Absolute forward lifetime in seconds.
+    #[arg(long, value_name = "SECONDS")]
+    pub ttl_seconds: Option<u64>,
+
+    #[command(subcommand)]
+    pub action: Option<ForwardAction>,
+}
+
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum ForwardAction {
+    /// List visible port forwards.
+    List,
+    /// Stop one forward, or every forward for a session.
+    Stop(ForwardStopArgs),
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct ForwardStopArgs {
+    /// Unique forward ID prefix or full UUID.
+    #[arg(value_name = "FORWARD")]
+    pub forward_id: Option<String>,
+
+    /// Stop forwards belonging to this session.
+    #[arg(long, value_name = "SESSION", requires = "all")]
+    pub session: Option<String>,
+
+    /// Stop every visible forward for the selected session.
+    #[arg(long, requires = "session", conflicts_with = "forward_id")]
+    pub all: bool,
 }
 
 #[derive(Debug, Args)]
@@ -514,6 +565,30 @@ mod tests {
         let command = Cli::command();
         command.clone().debug_assert();
         assert_documented(&command, "agent-remote");
+    }
+
+    #[test]
+    fn forward_accepts_start_list_and_stop_forms() {
+        let start =
+            Cli::try_parse_from(["agent-remote", "forward", "5173", "--local-port", "auto"])
+                .unwrap();
+        let CliCommand::Forward(start) = start.command else {
+            panic!("expected forward command")
+        };
+        assert_eq!(start.remote_port, Some(5173));
+        assert_eq!(start.local_port, "auto");
+
+        let list = Cli::try_parse_from(["agent-remote", "forward", "list"]).unwrap();
+        let CliCommand::Forward(list) = list.command else {
+            panic!("expected forward list command")
+        };
+        assert!(matches!(list.action, Some(super::ForwardAction::List)));
+
+        let stop = Cli::try_parse_from(["agent-remote", "forward", "stop", "forward-1"]).unwrap();
+        let CliCommand::Forward(stop) = stop.command else {
+            panic!("expected forward stop command")
+        };
+        assert!(matches!(stop.action, Some(super::ForwardAction::Stop(_))));
     }
 
     #[test]

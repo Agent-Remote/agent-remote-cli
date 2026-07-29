@@ -76,6 +76,42 @@ fn attach_args(
     args
 }
 
+pub fn tunnel_args(
+    ssh_host: &str,
+    ssh_port: u16,
+    ssh_user: &str,
+    forward_id: &str,
+    known_hosts: &std::path::Path,
+) -> Vec<String> {
+    vec![
+        "-T".to_string(),
+        "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+        "-o".to_string(),
+        format!("UserKnownHostsFile={}", known_hosts.to_string_lossy()),
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ConnectTimeout=10".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=10".to_string(),
+        "-o".to_string(),
+        "ServerAliveCountMax=2".to_string(),
+        "-o".to_string(),
+        "ClearAllForwardings=yes".to_string(),
+        "-o".to_string(),
+        "PermitLocalCommand=no".to_string(),
+        "-p".to_string(),
+        ssh_port.to_string(),
+        format!("{ssh_user}@{ssh_host}"),
+        "agent-remote-tunnel".to_string(),
+        "--forward".to_string(),
+        forward_id.to_string(),
+        "--protocol".to_string(),
+        "1".to_string(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +152,32 @@ mod tests {
             "UserKnownHostsFile=/tmp/agent-remote/ssh/known_hosts",
         ] {
             assert!(restricted.iter().any(|argument| argument == option));
+        }
+    }
+
+    #[test]
+    fn tunnel_args_disable_standard_forwarding_and_use_fixed_command() {
+        let args = tunnel_args(
+            "10.77.0.2",
+            2222,
+            "agent-remote",
+            "forward-1",
+            std::path::Path::new("/tmp/known_hosts"),
+        );
+        for expected in [
+            "-T",
+            "ClearAllForwardings=yes",
+            "PermitLocalCommand=no",
+            "agent-remote-tunnel",
+            "--forward",
+            "forward-1",
+            "--protocol",
+            "1",
+        ] {
+            assert!(args.iter().any(|argument| argument == expected));
+        }
+        for forbidden in ["-L", "-R", "-D", "-W", "StrictHostKeyChecking=no"] {
+            assert!(!args.iter().any(|argument| argument == forbidden));
         }
     }
 }

@@ -72,6 +72,9 @@ fn every_command_path_executes_help_successfully() {
         &["credentials", "bind"],
         &["credentials", "unbind"],
         &["attach"],
+        &["forward"],
+        &["forward", "list"],
+        &["forward", "stop"],
     ] {
         assert_help(AGENT_REMOTE, path);
     }
@@ -84,6 +87,9 @@ fn every_command_path_executes_help_successfully() {
         &["attach"],
         &["stop"],
         &["delete"],
+        &["forward"],
+        &["forward", "list"],
+        &["forward", "stop"],
     ] {
         assert_help(FCLAUDE, path);
     }

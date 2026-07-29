@@ -115,6 +115,22 @@ agent-remote sync reset
 
 The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. Mutagen and direct attach SSH connections use an agent-remote-managed `known_hosts` file and automatically trust new WireGuard endpoint keys while continuing to reject changed keys. After an upgrade introduces a new managed SSH environment, the CLI restarts the Mutagen daemon once so that it inherits the managed proxy path. `.git` sync is enabled by default for project workspaces, while the machine-local Git index, lock files, hooks, worktrees, and common build/cache directories are excluded. Mutagen creation includes an initial flush so the remote runtime can build its own Git index from a complete workspace snapshot. `sync ensure` recreates a missing local Mutagen session when the control-plane relationship is still active.
 
+## Session Port Forwarding
+
+Forward one Native session loopback TCP port to this device without publishing a node or container port:
+
+```sh
+agent-remote forward 5173 --session <session-id> --local-port auto --open
+fclaude forward 3000
+agent-remote forward list
+agent-remote forward stop <forward-id>
+agent-remote forward stop --session <session-id> --all
+```
+
+The local listener binds only `127.0.0.1` and, when available, `::1`. The default local port matches the remote port; use `--local-port auto` when it is occupied. One restricted SSH stdio tunnel multiplexes HTTP, WebSocket/HMR, SSE, gRPC, and ordinary TCP connections. OpenSSH `-L/-R/-D/-W`, arbitrary targets, public binds, and token persistence remain disabled. A disconnected tunnel obtains a new one-time token and reconnects while preserving the local listener; existing streams are not replayed.
+
+Run the remote application on its runtime loopback, for example `npm run dev -- --host 127.0.0.1`. The current release supports Native Runtime sessions only and reports a clear capability error for Docker Sandbox sessions.
+
 ## Tool Accounts
 
 `agent-remote account create` creates a remote tool-account record with region, timezone, locale, and preferred node tags. The control plane pins each account to an available runtime backend; clients display that backend but cannot silently switch it. `agent-remote account bind` asks the control plane to create a temporary remote tmux login session on the selected node, and `agent-remote account verify` schedules the verifier task after login is complete. The CLI only stores the agent-remote device token; tool login state remains on the remote node account archive.

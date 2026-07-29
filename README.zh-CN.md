@@ -114,6 +114,22 @@ agent-remote sync reset
 
 CLI 会使用 agent-remote home 中托管的 `bin/mutagen`，或使用同级打包二进制。Mutagen 和直接 attach 的 SSH 连接都使用 agent-remote 独立管理的 `known_hosts`；新的 WireGuard 节点密钥会被自动信任，已记录密钥发生变化时仍会拒绝连接。升级引入新的受管 SSH 环境后，CLI 会重启一次 Mutagen daemon，使其继承受管代理路径。项目 workspace 默认启用 `.git` 同步，同时排除各端独立的 Git index、lock 文件、hooks、worktrees 以及常见构建/缓存目录。Mutagen 创建后会先完成一次初始 flush，远端 runtime 再基于完整 workspace 建立自己的 Git index。当控制面同步关系仍为 active、但本地 Mutagen session 已丢失时，`sync ensure` 会自动重建本地 session。
 
+## Session 端口转发
+
+把一个 Native session 的 loopback TCP 端口转发到当前设备，而不发布 Node 或容器端口：
+
+```sh
+agent-remote forward 5173 --session <session-id> --local-port auto --open
+fclaude forward 3000
+agent-remote forward list
+agent-remote forward stop <forward-id>
+agent-remote forward stop --session <session-id> --all
+```
+
+本地 listener 只绑定 `127.0.0.1`，系统支持时同时绑定 `::1`。默认本地端口与远端相同；端口占用时使用 `--local-port auto`。一条受限 SSH stdio 隧道可多路复用 HTTP、WebSocket/HMR、SSE、gRPC 和普通 TCP 连接。OpenSSH `-L/-R/-D/-W`、任意目标、公网 bind 和 token 持久化继续保持关闭。隧道断开后 CLI 会申请新的一次性 token 并在保留本地 listener 的同时重连，但不会重放已有 stream。
+
+远端应用应监听 runtime loopback，例如 `npm run dev -- --host 127.0.0.1`。当前发布只支持 Native Runtime session；Docker Sandbox session 会返回明确的 capability 错误。
+
 ## 工具账户
 
 `agent-remote account create` 会创建包含地区、时区、locale 和首选节点标签的远端工具账户记录。控制平面会把每个账户固定到可用 runtime backend；客户端会展示该 backend，但不能静默切换。`agent-remote account bind` 会请求控制平面在选定节点上创建临时远端 tmux 登录 session；登录完成后，`agent-remote account verify` 会调度 verifier 任务。CLI 只保存 agent-remote 设备 token；工具登录状态保留在远端节点账户归档中。

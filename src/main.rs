@@ -4,9 +4,11 @@ mod cli;
 mod config;
 mod dependencies;
 mod doctor;
+mod identifiers;
 mod local_state;
 mod mutagen;
 mod platform;
+mod port_forward;
 mod secrets;
 mod ssh;
 mod terminal;
@@ -70,6 +72,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Wireguard(WireGuardCommand::Up(args)) => wireguard_action(paths, "up", args),
         Command::Wireguard(WireGuardCommand::Down(args)) => wireguard_action(paths, "down", args),
         Command::Ssh(SshCommand::Check(args)) => ssh_check(paths, args).await,
+        Command::Forward(args) => port_forward::run(&paths, &args, None).await,
         Command::Sync(SyncCommand::Ensure(args)) => sync_ensure(paths, args).await,
         Command::Sync(SyncCommand::Status(args)) => sync_status(paths, args).await,
         Command::Sync(SyncCommand::Pause(args)) => sync_action(paths, "pause", args).await,

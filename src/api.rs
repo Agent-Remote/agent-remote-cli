@@ -6,6 +6,8 @@ use reqwest::StatusCode;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::time::{sleep, Instant};
 
+const MAX_API_RESPONSE_BYTES: usize = 1 << 20;
+
 #[derive(Clone)]
 pub struct ApiClient {
     base_url: String,
@@ -253,6 +255,59 @@ impl ApiClient {
     #[allow(dead_code)]
     pub async fn delete_inactive_tool_sessions(&self, token: &str) -> Result<(), ApiError> {
         self.delete_empty("/api/v1/sessions", Some(token)).await
+    }
+
+    pub async fn create_port_forward(
+        &self,
+        token: &str,
+        session_id: &str,
+        request: &CreatePortForwardRequest,
+    ) -> Result<CreatedPortForwardData, ApiError> {
+        let response: Envelope<CreatedPortForwardData> = self
+            .post(
+                &format!("/api/v1/sessions/{}/port-forwards", url_encode(session_id)),
+                Some(token),
+                request,
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn create_port_forward_connection(
+        &self,
+        token: &str,
+        forward_id: &str,
+    ) -> Result<PortForwardConnectionData, ApiError> {
+        let response: Envelope<PortForwardConnectionData> = self
+            .post_empty(
+                &format!(
+                    "/api/v1/port-forwards/{}/connections",
+                    url_encode(forward_id)
+                ),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn list_port_forwards(&self, token: &str) -> Result<Vec<PortForwardData>, ApiError> {
+        let response: Envelope<PortForwardListData> =
+            self.get("/api/v1/port-forwards", Some(token)).await?;
+        Ok(response.data.items)
+    }
+
+    pub async fn stop_port_forward(
+        &self,
+        token: &str,
+        forward_id: &str,
+    ) -> Result<PortForwardData, ApiError> {
+        let response: Envelope<PortForwardData> = self
+            .delete(
+                &format!("/api/v1/port-forwards/{}", url_encode(forward_id)),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
     }
 
     pub async fn create_workspace(
@@ -549,12 +604,21 @@ impl ApiClient {
         };
         let response = request.send().await.map_err(ApiError::transport)?;
         let status = response.status();
-        let body = response.text().await.map_err(ApiError::transport)?;
+        let body = read_response_body(response).await?;
         if status.is_success() {
             Ok(())
         } else {
             Err(ApiError::from_error_response(status, body))
         }
+    }
+
+    async fn delete<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        token: Option<&str>,
+    ) -> Result<T, ApiError> {
+        let request = self.client.delete(self.endpoint(path));
+        self.send(request, token).await
     }
 
     async fn send<T: DeserializeOwned>(
@@ -568,7 +632,7 @@ impl ApiClient {
         };
         let response = request.send().await.map_err(ApiError::transport)?;
         let status = response.status();
-        let body = response.text().await.map_err(ApiError::transport)?;
+        let body = read_response_body(response).await?;
         if status.is_success() {
             serde_json::from_str(&body).map_err(|error| ApiError::decode(status, body, error))
         } else {
@@ -579,6 +643,28 @@ impl ApiClient {
     fn endpoint(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
+}
+
+async fn read_response_body(mut response: reqwest::Response) -> Result<String, ApiError> {
+    let status = response.status();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_API_RESPONSE_BYTES as u64)
+    {
+        return Err(ApiError::response_too_large(status));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(ApiError::transport)? {
+        if body.len().saturating_add(chunk.len()) > MAX_API_RESPONSE_BYTES {
+            return Err(ApiError::response_too_large(status));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|_| ApiError {
+        status: Some(status),
+        code: None,
+        message: "API response is not valid UTF-8".to_string(),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -599,10 +685,20 @@ struct CliLoginCompleteRequest<'a> {
     device_code: &'a str,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct AuthToken {
     pub access_token: String,
     pub expires_in: u64,
+}
+
+impl fmt::Debug for AuthToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthToken")
+            .field("access_token", &"<redacted>")
+            .field("expires_in", &self.expires_in)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -734,6 +830,60 @@ pub struct SessionData {
     pub stop_task_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CreatePortForwardRequest {
+    pub remote_port: u16,
+    pub local_port: u16,
+    pub client_instance_id: String,
+    pub ttl_seconds: Option<u64>,
+}
+
+#[derive(Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct PortForwardConnectionData {
+    pub token: String,
+    pub expires_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct PortForwardData {
+    pub id: String,
+    pub user_id: String,
+    pub device_id: String,
+    pub session_id: String,
+    pub node_id: String,
+    pub remote_port: u16,
+    pub requested_local_port: u16,
+    pub client_instance_id: String,
+    pub status: String,
+    pub bytes_up: u64,
+    pub bytes_down: u64,
+    pub connection_count: u64,
+    pub last_connected_at: Option<String>,
+    pub lease_expires_at: Option<String>,
+    pub expires_at: String,
+    pub stopped_at: Option<String>,
+    pub stop_reason: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct CreatedPortForwardData {
+    #[serde(flatten)]
+    pub forward: PortForwardData,
+    pub node_wireguard_ip: String,
+    pub ssh_user: String,
+    pub ssh_port: u16,
+    pub connection: PortForwardConnectionData,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct PortForwardListData {
+    items: Vec<PortForwardData>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -985,6 +1135,12 @@ impl ApiError {
             && self.message.contains("not approved")
     }
 
+    pub fn is_port_forward_terminal(&self) -> bool {
+        self.status.is_some_and(|status| {
+            status.is_client_error() && status != StatusCode::TOO_MANY_REQUESTS
+        })
+    }
+
     fn transport(error: reqwest::Error) -> Self {
         Self {
             status: error.status(),
@@ -994,10 +1150,19 @@ impl ApiError {
     }
 
     fn decode(status: StatusCode, body: String, error: serde_json::Error) -> Self {
+        let _ = body;
         Self {
             status: Some(status),
             code: None,
-            message: format!("failed to decode API response: {error}; body: {body}"),
+            message: format!("failed to decode API response: {error}"),
+        }
+    }
+
+    fn response_too_large(status: StatusCode) -> Self {
+        Self {
+            status: Some(status),
+            code: None,
+            message: "API response exceeds the 1 MiB safety limit".to_string(),
         }
     }
 
@@ -1011,7 +1176,7 @@ impl ApiError {
             Err(_) => Self {
                 status: Some(status),
                 code: None,
-                message: body,
+                message: "server returned an invalid error response".to_string(),
             },
         }
     }

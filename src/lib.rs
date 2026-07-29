@@ -8,6 +8,7 @@ pub mod identifiers;
 pub mod local_state;
 pub mod mutagen;
 pub mod platform;
+pub mod port_forward;
 pub mod secrets;
 pub mod ssh;
 pub mod terminal;
