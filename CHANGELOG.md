@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.0.5-fix.8 - 2026-07-29
+
+- feat: improve remote operations and status (70a45b1)
+- ci: add codecov reporting (d079d81)
+
 ## v0.0.5-fix.7 - 2026-07-28
 
 - fix: upgrade Windows with running Mutagen (44aaeb9)
