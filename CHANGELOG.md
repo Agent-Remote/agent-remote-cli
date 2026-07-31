@@ -2,6 +2,14 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.1.3 - 2026-07-31
+
+- feat: install community-signed device app (8ef8d81)
+- feat: add local device management commands (f6695a2)
+- ci: run full cli checks on macos (0180e89)
+- test: stabilize tunnel cleanup coverage (da46507)
+- ci: isolate release tags from validation (812a4b8)
+
 ## v0.1.0 - 2026-07-31
 
 - feat: add device install, status, diagnose, revoke, and token rotation commands
