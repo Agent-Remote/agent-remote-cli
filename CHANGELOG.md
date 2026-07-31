@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.1.5 - 2026-07-31
+
+- Release metadata update.
+
 ## v0.1.4 - 2026-07-31
 
 - fix: build arm64 release on compatible runner (c45fc44)
