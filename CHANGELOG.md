@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.1.4 - 2026-07-31
+
+- fix: build arm64 release on compatible runner (c45fc44)
+
 ## v0.1.3 - 2026-07-31
 
 - feat: install community-signed device app (8ef8d81)
