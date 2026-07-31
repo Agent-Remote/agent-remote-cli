@@ -28,4 +28,8 @@ end
 
 raise "Unix release matrix is missing" unless workflow.dig("jobs", "release", "strategy", "matrix")
 raise "Windows release matrix is missing" unless workflow.dig("jobs", "release-windows", "strategy", "matrix")
+windows_matrix = workflow.dig("jobs", "release-windows", "strategy", "matrix", "include")
+windows_arm64 = windows_matrix.find { |entry| entry["target"] == "aarch64-pc-windows-msvc" }
+raise "Windows ARM64 release target is missing" unless windows_arm64
+raise "Windows ARM64 must use the cosign-compatible runner" unless windows_arm64["os"] == "windows-latest"
 raise "release publish does not depend on audit" unless workflow.dig("jobs", "publish", "needs").include?("audit")

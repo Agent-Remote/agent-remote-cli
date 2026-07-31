@@ -185,7 +185,7 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-          - os: windows-11-arm
+          - os: windows-latest
             target: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7.0.0
