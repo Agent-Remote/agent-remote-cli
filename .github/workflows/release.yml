@@ -65,7 +65,7 @@ jobs:
   release:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    environment: production-device-release
+    environment: production-community-release
     strategy:
       fail-fast: false
       matrix:
@@ -119,17 +119,18 @@ jobs:
       - name: Build release package
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          DEVICE_APP_TEAM_IDENTIFIER: ${{ vars.DEVICE_APP_TEAM_IDENTIFIER }}
+          DEVICE_APP_SIGNER_CERTIFICATE_SHA1: ${{ vars.COMMUNITY_SIGNER_CERTIFICATE_SHA1 }}
           TARGETS: ${{ matrix.target }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           set -euo pipefail
           if [[ "$TARGETS" == *-apple-darwin ]]; then
-            if ! [[ "$DEVICE_APP_TEAM_IDENTIFIER" =~ ^[A-Z0-9]{10}$ ]]; then
-              echo "protected DEVICE_APP_TEAM_IDENTIFIER is missing or invalid" >&2
+            if ! [[ "$DEVICE_APP_SIGNER_CERTIFICATE_SHA1" =~ ^[A-F0-9]{40}$ ]]; then
+              echo "protected COMMUNITY_SIGNER_CERTIFICATE_SHA1 is missing or invalid" >&2
               exit 2
             fi
-            export AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER="$DEVICE_APP_TEAM_IDENTIFIER"
+            export AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1="$DEVICE_APP_SIGNER_CERTIFICATE_SHA1"
+            export AGENT_REMOTE_DEVICE_CREDENTIAL_MODE="community-file"
           fi
           scripts/package-release.sh
       - name: Generate package SBOM

@@ -20,7 +20,7 @@ pub fn store_device_token(
     if broker_credential_storage_required() {
         let credential =
             BrokerCredential::new(server_url, device_id, &token.access_token, token.expires_in)?;
-        if !store_active_broker_credential(&credential)? {
+        if !store_active_broker_credential(paths, &credential)? {
             anyhow::bail!("production Network Broker credential storage is unavailable")
         }
         let store = SecretStore::new(paths.clone());
@@ -46,7 +46,7 @@ pub async fn load_device_token(paths: &AppPaths) -> Result<(String, String, Stri
         .active_device_id
         .context("not logged in with a registered device")?;
     let key = device_token_key(&server_url, &device_id);
-    let broker_credential = load_active_broker_credential()?;
+    let broker_credential = load_active_broker_credential(paths)?;
     let mut token = match broker_credential {
         Some(credential) => {
             if credential.server_url != server_url || credential.device_id != device_id {

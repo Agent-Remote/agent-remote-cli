@@ -5,6 +5,7 @@ use std::process::{Command, ExitStatus, Stdio};
 
 use anyhow::{bail, Context, Result};
 use semver::Version;
+use sha1::{Digest, Sha1};
 
 use crate::broker_credentials::delete_active_broker_credential;
 use crate::platform;
@@ -20,6 +21,8 @@ const GUI_EXECUTOR_BUNDLE_IDENTIFIER: &str = "dev.agentremote.device.gui-executo
 const NETWORK_BROKER_EXECUTABLE: &str = "AgentRemoteNetworkBroker";
 const GUI_EXECUTOR_EXECUTABLE: &str = "AgentRemoteGUIExecutor";
 const DEVICE_TEAM_IDENTIFIER: Option<&str> = option_env!("AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER");
+const DEVICE_SIGNER_CERTIFICATE_SHA1: Option<&str> =
+    option_env!("AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1");
 const DEVICE_BUNDLE_IDENTIFIERS: [&str; 3] = [
     APP_BUNDLE_IDENTIFIER,
     NETWORK_BROKER_BUNDLE_IDENTIFIER,
@@ -32,7 +35,8 @@ struct DeviceAppInspection {
     version: Option<String>,
     bundle_identifier_valid: bool,
     code_signature_valid: bool,
-    team_identifier_valid: bool,
+    signing_identity_valid: bool,
+    gatekeeper_required: bool,
     gatekeeper_accepted: bool,
     network_broker_present: bool,
     gui_executor_present: bool,
@@ -43,8 +47,8 @@ impl DeviceAppInspection {
     fn valid_for_install(&self) -> bool {
         self.bundle_identifier_valid
             && self.code_signature_valid
-            && self.team_identifier_valid
-            && self.gatekeeper_accepted
+            && self.signing_identity_valid
+            && (!self.gatekeeper_required || self.gatekeeper_accepted)
             && self.network_broker_present
             && self.gui_executor_present
     }
@@ -53,9 +57,9 @@ impl DeviceAppInspection {
 /// Verifies and atomically installs a signed device application bundle.
 pub fn install(source: &Path) -> Result<()> {
     ensure_macos()?;
-    let expected_team_identifier = expected_team_identifier()?;
+    let expected_identity = expected_signing_identity()?;
     let source = validated_bundle_path(source).context("invalid device app source")?;
-    let source_status = inspect(&source, expected_team_identifier)?;
+    let source_status = inspect(&source, &expected_identity)?;
     if !source_status.valid_for_install() {
         bail!("device app failed signature, Gatekeeper, bundle ID, or XPC validation")
     }
@@ -68,7 +72,7 @@ pub fn install(source: &Path) -> Result<()> {
         .with_context(|| format!("failed to create {}", applications.display()))?;
     reject_symbolic_link(&destination)?;
     if destination.exists() {
-        let installed_status = inspect(&destination, expected_team_identifier)?;
+        let installed_status = inspect(&destination, &expected_identity)?;
         ensure_not_downgrade(
             installed_status.version.as_deref(),
             source_status.version.as_deref(),
@@ -92,10 +96,24 @@ pub fn install(source: &Path) -> Result<()> {
         remove_known_temporary_bundle(&staging, applications)?;
         bail!("ditto failed while staging the device app")
     }
-    let staged_status = inspect(&staging, expected_team_identifier)?;
+    let staged_status = inspect(&staging, &expected_identity)?;
     if !staged_status.valid_for_install() {
         remove_known_temporary_bundle(&staging, applications)?;
         bail!("staged device app failed post-copy verification")
+    }
+    if matches!(
+        expected_identity,
+        DeviceSigningIdentity::CommunityCertificateSHA1(_)
+    ) && !command_success(
+        "xattr",
+        &[
+            OsStr::new("-dr"),
+            OsStr::new("com.apple.quarantine"),
+            staging.as_os_str(),
+        ],
+    )? {
+        remove_known_temporary_bundle(&staging, applications)?;
+        bail!("failed to remove quarantine from the verified community app")
     }
 
     let had_existing = destination.exists();
@@ -131,6 +149,7 @@ pub fn install(source: &Path) -> Result<()> {
 /// Removes the fixed local app and all device-bridge-only local state.
 pub fn uninstall() -> Result<()> {
     ensure_macos()?;
+    let paths = crate::config::AppPaths::new(None)?;
     let destination = default_app_path()?;
     let home = platform::user_home_dir().context("HOME is not set")?;
     ensure_no_visibility_journal(&home)?;
@@ -146,7 +165,8 @@ pub fn uninstall() -> Result<()> {
         Err(error) => return Err(error).context("failed to inspect device app destination"),
     }
 
-    delete_active_broker_credential().context("failed to delete Network Broker credential")?;
+    delete_active_broker_credential(&paths)
+        .context("failed to delete Network Broker credential")?;
     reset_device_permissions()?;
     remove_device_bundle(&destination)?;
     remove_device_state(&home)?;
@@ -158,7 +178,7 @@ pub fn uninstall() -> Result<()> {
 /// Displays the installed device application's verification and process status.
 pub fn status() -> Result<()> {
     ensure_macos()?;
-    let expected_team_identifier = expected_team_identifier()?;
+    let expected_identity = expected_signing_identity()?;
     terminal::section("Device App Status");
     let destination = default_app_path()?;
     if !destination.exists() {
@@ -168,14 +188,14 @@ pub fn status() -> Result<()> {
             .render();
         return Ok(());
     }
-    render_inspection(&inspect(&destination, expected_team_identifier)?);
+    render_inspection(&inspect(&destination, &expected_identity)?);
     Ok(())
 }
 
 /// Runs strict platform, signature, and installation diagnostics.
 pub fn diagnose() -> Result<()> {
     ensure_macos()?;
-    let expected_team_identifier = expected_team_identifier()?;
+    let expected_identity = expected_signing_identity()?;
     terminal::section("Device App Diagnostics");
     let destination = default_app_path()?;
     if !destination.exists() {
@@ -185,7 +205,7 @@ pub fn diagnose() -> Result<()> {
         ));
         bail!("install a signed app with agent-remote device install --source <APP>")
     }
-    let inspection = inspect(&destination, expected_team_identifier)?;
+    let inspection = inspect(&destination, &expected_identity)?;
     render_inspection(&inspection);
     let macos_version = command_stdout("sw_vers", &[OsStr::new("-productVersion")])?;
     Details::new().field("macOS", macos_version).render();
@@ -220,8 +240,8 @@ fn render_inspection(inspection: &DeviceAppInspection) {
             },
         )
         .status(
-            "Signing Team ID",
-            if inspection.team_identifier_valid {
+            "Signing identity",
+            if inspection.signing_identity_valid {
                 "trusted"
             } else {
                 "untrusted"
@@ -229,7 +249,9 @@ fn render_inspection(inspection: &DeviceAppInspection) {
         )
         .status(
             "Gatekeeper",
-            if inspection.gatekeeper_accepted {
+            if !inspection.gatekeeper_required {
+                "manual trust"
+            } else if inspection.gatekeeper_accepted {
                 "accepted"
             } else {
                 "rejected"
@@ -262,7 +284,7 @@ fn render_inspection(inspection: &DeviceAppInspection) {
         .render();
 }
 
-fn inspect(path: &Path, expected_team_identifier: &str) -> Result<DeviceAppInspection> {
+fn inspect(path: &Path, expected_identity: &DeviceSigningIdentity) -> Result<DeviceAppInspection> {
     let metadata = fs::symlink_metadata(path)
         .with_context(|| format!("failed to inspect {}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -282,8 +304,7 @@ fn inspect(path: &Path, expected_team_identifier: &str) -> Result<DeviceAppInspe
             path.as_os_str(),
         ],
     )?;
-    let team_identifier_valid =
-        codesign_team_identifier(path)?.as_deref() == Some(expected_team_identifier);
+    let signing_identity_valid = expected_identity.matches(path)?;
     let gatekeeper_accepted = command_success(
         "spctl",
         &[
@@ -300,20 +321,21 @@ fn inspect(path: &Path, expected_team_identifier: &str) -> Result<DeviceAppInspe
         &xpc_root.join(NETWORK_BROKER_XPC),
         NETWORK_BROKER_BUNDLE_IDENTIFIER,
         NETWORK_BROKER_EXECUTABLE,
-        expected_team_identifier,
+        expected_identity,
     )?;
     let gui_executor_present = inspect_xpc_bundle(
         &xpc_root.join(GUI_EXECUTOR_XPC),
         GUI_EXECUTOR_BUNDLE_IDENTIFIER,
         GUI_EXECUTOR_EXECUTABLE,
-        expected_team_identifier,
+        expected_identity,
     )?;
     Ok(DeviceAppInspection {
         path: path.to_path_buf(),
         version,
         bundle_identifier_valid: bundle_identifier.as_deref() == Some(APP_BUNDLE_IDENTIFIER),
         code_signature_valid,
-        team_identifier_valid,
+        signing_identity_valid,
+        gatekeeper_required: matches!(expected_identity, DeviceSigningIdentity::AppleTeam(_)),
         gatekeeper_accepted,
         network_broker_present,
         gui_executor_present,
@@ -325,7 +347,7 @@ fn inspect_xpc_bundle(
     path: &Path,
     expected_identifier: &str,
     expected_executable: &str,
-    expected_team_identifier: &str,
+    expected_identity: &DeviceSigningIdentity,
 ) -> Result<bool> {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return Ok(false);
@@ -340,20 +362,84 @@ fn inspect_xpc_bundle(
             .is_ok_and(|value| value == expected_identifier)
         && plist_value(&info_plist, "CFBundleExecutable")
             .is_ok_and(|value| value == expected_executable)
-        && codesign_team_identifier(path)?.as_deref() == Some(expected_team_identifier))
+        && expected_identity.matches(path)?)
 }
 
-fn expected_team_identifier() -> Result<&'static str> {
-    let value = DEVICE_TEAM_IDENTIFIER
-        .context("this CLI build does not pin the Agent Remote Device Apple signing Team ID")?;
-    if value.len() != 10
-        || !value
-            .bytes()
-            .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit())
-    {
-        bail!("this CLI build contains an invalid Agent Remote Device Apple signing Team ID")
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DeviceSigningIdentity {
+    AppleTeam(String),
+    CommunityCertificateSHA1(String),
+}
+
+impl DeviceSigningIdentity {
+    fn matches(&self, path: &Path) -> Result<bool> {
+        match self {
+            Self::AppleTeam(expected) => {
+                Ok(codesign_team_identifier(path)?.as_deref() == Some(expected))
+            }
+            Self::CommunityCertificateSHA1(expected) => {
+                Ok(codesign_certificate_sha1(path)?.as_deref() == Some(expected))
+            }
+        }
     }
-    Ok(value)
+}
+
+fn expected_signing_identity() -> Result<DeviceSigningIdentity> {
+    match (DEVICE_TEAM_IDENTIFIER, DEVICE_SIGNER_CERTIFICATE_SHA1) {
+        (Some(team), None)
+            if team.len() == 10
+                && team.bytes().all(|character| {
+                    character.is_ascii_uppercase() || character.is_ascii_digit()
+                }) =>
+        {
+            Ok(DeviceSigningIdentity::AppleTeam(team.to_string()))
+        }
+        (None, Some(fingerprint))
+            if fingerprint.len() == 40
+                && fingerprint.bytes().all(|character| {
+                    character.is_ascii_digit() || (b'A'..=b'F').contains(&character)
+                }) =>
+        {
+            Ok(DeviceSigningIdentity::CommunityCertificateSHA1(
+                fingerprint.to_string(),
+            ))
+        }
+        _ => bail!("this CLI build does not pin exactly one valid device signing identity"),
+    }
+}
+
+fn codesign_certificate_sha1(path: &Path) -> Result<Option<String>> {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "agent-remote-codesign-certificate-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir(&directory)
+        .with_context(|| format!("failed to create {}", directory.display()))?;
+    let result = (|| -> Result<Option<String>> {
+        let output = Command::new("codesign")
+            .args(["--display", "--extract-certificates"])
+            .arg(path)
+            .current_dir(&directory)
+            .output()
+            .context("failed to extract the device signing certificate")?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let certificate = fs::read(directory.join("codesign0"))
+            .context("device signature did not contain a leaf certificate")?;
+        Ok(Some(format!("{:X}", Sha1::digest(certificate))))
+    })();
+    let cleanup = fs::remove_dir_all(&directory)
+        .with_context(|| format!("failed to remove {}", directory.display()));
+    match (result, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
 }
 
 fn codesign_team_identifier(path: &Path) -> Result<Option<String>> {

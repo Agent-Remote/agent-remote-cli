@@ -16,10 +16,12 @@ text = File.read(File.join(root, ".github/workflows/release.yml"))
   "cargo-audit@0.22.2",
   "cargo-audit.json.sha256",
   "cargo-audit.json.sigstore.json",
-  "environment: production-device-release",
-  "DEVICE_APP_TEAM_IDENTIFIER",
-  "AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER",
-  "^[A-Z0-9]{10}$",
+  "environment: production-community-release",
+  "COMMUNITY_SIGNER_CERTIFICATE_SHA1",
+  "AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1",
+  "AGENT_REMOTE_DEVICE_CREDENTIAL_MODE",
+  "community-file",
+  "^[A-F0-9]{40}$",
 ].each do |fragment|
   raise "release workflow is missing #{fragment}" unless text.include?(fragment)
 end

@@ -162,7 +162,7 @@ async fn device_revoke(paths: AppPaths, args: DeviceRevokeArgs) -> Result<()> {
         .context("failed to revoke device")?;
 
     let mut cleanup_errors = Vec::new();
-    if let Err(error) = delete_broker_credential_if_matches(&server_url, &device_id) {
+    if let Err(error) = delete_broker_credential_if_matches(&paths, &server_url, &device_id) {
         cleanup_errors.push(format!("Network Broker credential: {error}"));
     }
     if let Err(error) = secret_store.delete_secret(&device_token_key(&server_url, &device_id)) {
@@ -498,7 +498,7 @@ async fn logout(paths: AppPaths, revoke_remote: bool) -> Result<()> {
             .await
             .ok()
             .map(|(_, _, token)| token);
-        let _ = delete_broker_credential_if_matches(&server_url, &device_id);
+        let _ = delete_broker_credential_if_matches(&paths, &server_url, &device_id);
         let _ = secret_store.delete_secret(&key);
         let _ = clear_device_token_refresh(&paths, &server_url, &device_id);
     }

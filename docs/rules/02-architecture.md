@@ -20,7 +20,9 @@ src/bin/            Auxiliary and tool-specific binaries
 
 Network calls belong in `api.rs`; persistent metadata belongs in `local_state.rs`; secrets belong behind `secrets.rs`. Keep platform-specific behavior isolated and testable. Entry points orchestrate modules but should not duplicate their domain logic.
 
-The device installer accepts only an explicit local `.app` bundle, verifies its fixed bundle ID,
-embedded XPC services, code signature, and Gatekeeper assessment, and installs it atomically into
-the current user's Applications directory. It must not execute an endpoint or installer path from
-project data or an unverified API response.
+The device installer accepts only an explicit local `.app` bundle and verifies its fixed bundle ID,
+embedded XPC services, complete code signature, and the signing identity pinned into the CLI. The
+Apple profile additionally requires Gatekeeper acceptance. The community-local-trust profile pins
+the project's self-signed leaf-certificate fingerprint, verifies it on the app and both XPC bundles,
+then removes quarantine from the already verified staging bundle before atomic installation. It must
+not execute an endpoint or installer path from project data or an unverified API response.
