@@ -45,7 +45,7 @@ jobs:
           mkdir -p dist
           report="dist/agent-remote-cli-${VERSION}.cargo-audit.json"
           cargo audit --json > "$report"
-          sha256sum "$report" > "$report.sha256"
+          (cd dist && sha256sum "$(basename "$report")" > "$(basename "$report").sha256")
           cosign sign-blob --yes --bundle "$report.sigstore.json" "$report"
           cosign verify-blob \
             --bundle "$report.sigstore.json" \
