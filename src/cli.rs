@@ -66,6 +66,9 @@ pub enum Command {
     /// Manage reusable developer Git, GitHub CLI, and SSH profiles.
     #[command(subcommand)]
     Credentials(CredentialsCommand),
+    /// Install, inspect, diagnose, or revoke the local macOS device bridge.
+    #[command(subcommand)]
+    Device(DeviceCommand),
     /// Attach to a remote session by a unique ID prefix or full UUID.
     Attach(AttachArgs),
     /// Forward a local loopback port to one managed session loopback port.
@@ -104,6 +107,59 @@ pub enum ForwardAction {
     List,
     /// Stop one forward, or every forward for a session.
     Stop(ForwardStopArgs),
+}
+
+#[derive(Debug, Subcommand)]
+/// Commands for managing the local macOS device bridge.
+pub enum DeviceCommand {
+    /// Verify and atomically install a signed Agent Remote Device app bundle.
+    Install(DeviceInstallArgs),
+    /// Remove the local device app, credentials, permissions, and sandbox data.
+    Uninstall(DeviceUninstallArgs),
+    /// Show the installed app version, signature, XPC services, and process status.
+    Status,
+    /// Run strict local installation and platform diagnostics.
+    Diagnose,
+    /// Revoke a device through the control plane and clear its local device credential.
+    Revoke(DeviceRevokeArgs),
+    /// Rotate the active device token and replace its local credential.
+    RotateToken(DeviceRotateTokenArgs),
+}
+
+#[derive(Debug, Args)]
+/// Arguments for installing a signed device application bundle.
+pub struct DeviceInstallArgs {
+    /// Signed and notarized Agent Remote Device.app bundle to install.
+    #[arg(long, value_name = "APP")]
+    pub source: PathBuf,
+}
+
+#[derive(Debug, Args)]
+/// Arguments for removing the local device application.
+pub struct DeviceUninstallArgs {
+    /// Confirm local removal without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args)]
+/// Arguments for revoking a registered device.
+pub struct DeviceRevokeArgs {
+    /// Device UUID to revoke; defaults to the active local device.
+    #[arg(long, value_name = "DEVICE")]
+    pub device: Option<String>,
+
+    /// Confirm revocation without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args)]
+/// Arguments for rotating the active device token.
+pub struct DeviceRotateTokenArgs {
+    /// Confirm token rotation without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -538,7 +594,7 @@ pub struct ListArgs {
 mod tests {
     use clap::{Command, CommandFactory, Parser};
 
-    use super::{AccountCommand, Cli, Command as CliCommand, CredentialsCommand};
+    use super::{AccountCommand, Cli, Command as CliCommand, CredentialsCommand, DeviceCommand};
 
     fn assert_documented(command: &Command, path: &str) {
         assert!(
@@ -589,6 +645,53 @@ mod tests {
             panic!("expected forward stop command")
         };
         assert!(matches!(stop.action, Some(super::ForwardAction::Stop(_))));
+    }
+
+    #[test]
+    fn device_commands_require_explicit_install_source_and_support_removal() {
+        let install = Cli::try_parse_from([
+            "agent-remote",
+            "device",
+            "install",
+            "--source",
+            "/tmp/Agent Remote Device.app",
+        ])
+        .unwrap();
+        assert!(matches!(
+            install.command,
+            CliCommand::Device(DeviceCommand::Install(args))
+                if args.source == std::path::Path::new("/tmp/Agent Remote Device.app")
+        ));
+        assert!(Cli::try_parse_from(["agent-remote", "device", "install"]).is_err());
+
+        let uninstall =
+            Cli::try_parse_from(["agent-remote", "device", "uninstall", "--yes"]).unwrap();
+        assert!(matches!(
+            uninstall.command,
+            CliCommand::Device(DeviceCommand::Uninstall(args)) if args.yes
+        ));
+
+        let revoke = Cli::try_parse_from([
+            "agent-remote",
+            "device",
+            "revoke",
+            "--device",
+            "device-id",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            revoke.command,
+            CliCommand::Device(DeviceCommand::Revoke(args))
+                if args.device.as_deref() == Some("device-id") && args.yes
+        ));
+
+        let rotate =
+            Cli::try_parse_from(["agent-remote", "device", "rotate-token", "--yes"]).unwrap();
+        assert!(matches!(
+            rotate.command,
+            CliCommand::Device(DeviceCommand::RotateToken(args)) if args.yes
+        ));
     }
 
     #[test]

@@ -36,6 +36,12 @@ agent-remote account verify <account-id>
 agent-remote account status <account-id>
 agent-remote ssh check --session-id <session-id>
 agent-remote attach <session-id> --print-only
+agent-remote device install --source "/path/to/Agent Remote Device.app"
+agent-remote device uninstall [--yes]
+agent-remote device status
+agent-remote device diagnose
+agent-remote device revoke [--device <device-id>] [--yes]
+agent-remote device rotate-token [--yes]
 agent-remote logout [--no-revoke-remote]
 ```
 
@@ -86,6 +92,12 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 四个 macOS/Linux 发行目标都会内置托管的 `mutagen`、`tmux`、`wg`、`wg-quick`，以及负责受管主机验证的 SSH/SCP 包装器；macOS 包还会内置 `wireguard-go`。Windows x64 和 ARM64 包内置原生 CLI、Mutagen、兼容用的 `ssh.exe` 和 `scp.exe` 代理，以及对应架构的官方 WireGuard for Windows MSI。该 MSI 提供 Windows 上与 `wg`、`wg-quick` 和隧道后端等价的 tunnel manager、`wg.exe` 与 Wintun 驱动。`tmux` 运行在远端 Linux 节点上，在 Windows 客户端没有原生用途。
 
 当前实现会记录并检查 Mutagen 和 WireGuard helper 的 manifest。发布包会为每个支持的平台包含托管 Mutagen 二进制和 WireGuard helper。
+
+## 本地设备控制
+
+`agent-remote device install` 只接受显式指定、名称固定为 `Agent Remote Device.app` 的本地 app bundle。macOS 上会在暂存前后验证固定 bundle identifier、编译进正式 CLI 的 Apple 签名 Team ID、由同一 Team 签名的 Network Broker 与 GUI Executor XPC service、完整代码签名和 Gatekeeper 结果，然后原子安装到 `~/Applications/Agent Remote Device.app`。允许重装相同语义版本和升级；拒绝降级，以及缺少版本或版本格式无效的 bundle。该命令不会下载或执行项目内容或 API 响应提供的安装地址。本地开发构建如果未设置有效的 `AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER`，安装会默认拒绝；正式构建只从受保护的 `production-device-release` 环境取得该值。
+
+`agent-remote device status` 显示已安装版本、签名、XPC 和进程状态；`agent-remote device diagnose` 执行相同的严格检查，安装不可信时返回非零状态。`agent-remote device uninstall` 要求 app 已停止，删除固定 app bundle、共享 Broker 凭据、TCC 授权及各 bundle 自有的沙盒数据，但不会撤销远端注册；存在隐藏应用恢复日志时会拒绝继续。`agent-remote device revoke` 要求本地已保存用户 token，未指定 `--yes` 时先确认，通过控制平面撤销指定或当前设备，并删除对应的本地设备凭据与刷新状态。`agent-remote device rotate-token` 只轮换当前 active device，通过控制面取得新令牌后不会打印令牌，并立即覆盖本机平台凭据和共享 Network Broker 凭据；执行前必须先停止活动的设备控制 session。
 
 ## WireGuard 和 SSH
 
@@ -161,13 +173,13 @@ scripts/run-quality-checks.sh
 构建 macOS 和 Linux CLI 归档：
 
 ```sh
-VERSION=0.0.6 scripts/package-release.sh
+VERSION=0.1.0 scripts/package-release.sh
 ```
 
 在 Windows PowerShell 中构建 Windows x64 归档（ARM64 可传入 `-Target aarch64-pc-windows-msvc`）：
 
 ```powershell
-./scripts/package-release.ps1 -Version 0.0.6
+./scripts/package-release.ps1 -Version 0.1.0
 ```
 
 发布归档包含：
@@ -192,7 +204,7 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.0.6 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version 0.1.0 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 安装已下载的发布归档：

@@ -10,6 +10,23 @@ permissions:
   id-token: write
 
 jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.2
+      - name: Audit locked Rust dependencies
+        run: cargo audit --json > cargo-audit.json
+      - name: Upload Rust vulnerability report
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: agent-remote-cli-cargo-audit
+          path: cargo-audit.json
+          if-no-files-found: error
+
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -29,7 +46,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage report
         if: matrix.os == 'ubuntu-latest'
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info -- --test-threads=1
+        run: cargo llvm-cov --workspace --fail-under-lines 45 --lcov --output-path lcov.info -- --test-threads=1
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v7.0.0

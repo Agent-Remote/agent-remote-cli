@@ -124,4 +124,11 @@ Copy-Item scripts/install.ps1 "$work/install.ps1"
 $archive = Join-Path $OutDir "$packageName.zip"
 if (Test-Path $archive) { Remove-Item $archive }
 Compress-Archive -Path $work -DestinationPath $archive
+$archiveHash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+$checksumPath = "$archive.sha256"
+[System.IO.File]::WriteAllText(
+    $checksumPath,
+    "$archiveHash  $([System.IO.Path]::GetFileName($archive))`n",
+    $utf8WithoutBom
+)
 Write-Host "Windows release artifact written to $archive"

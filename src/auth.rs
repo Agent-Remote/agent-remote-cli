@@ -3,6 +3,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 
 use crate::api::{ApiClient, AuthToken};
+use crate::broker_credentials::{
+    broker_credential_storage_required, load_active_broker_credential,
+    store_active_broker_credential, BrokerCredential,
+};
 use crate::config::{AppPaths, Config};
 use crate::local_state::LocalState;
 use crate::secrets::{device_token_key, SecretBackend, SecretStore};
@@ -13,6 +17,17 @@ pub fn store_device_token(
     device_id: &str,
     token: &AuthToken,
 ) -> Result<SecretBackend> {
+    if broker_credential_storage_required() {
+        let credential =
+            BrokerCredential::new(server_url, device_id, &token.access_token, token.expires_in)?;
+        if !store_active_broker_credential(&credential)? {
+            anyhow::bail!("production Network Broker credential storage is unavailable")
+        }
+        let store = SecretStore::new(paths.clone());
+        store.delete_secret(&device_token_key(server_url, device_id))?;
+        record_refresh_time(paths, server_url, device_id, token.expires_in)?;
+        return Ok(SecretBackend::System);
+    }
     let store = SecretStore::new(paths.clone());
     let backend = store.set_secret(
         &device_token_key(server_url, device_id),
@@ -30,11 +45,22 @@ pub async fn load_device_token(paths: &AppPaths) -> Result<(String, String, Stri
     let device_id = config
         .active_device_id
         .context("not logged in with a registered device")?;
-    let store = SecretStore::new(paths.clone());
     let key = device_token_key(&server_url, &device_id);
-    let mut token = store
-        .get_secret(&key)?
-        .context("device token is missing; run agent-remote login")?;
+    let broker_credential = load_active_broker_credential()?;
+    let mut token = match broker_credential {
+        Some(credential) => {
+            if credential.server_url != server_url || credential.device_id != device_id {
+                anyhow::bail!("shared Network Broker credential binding does not match login state")
+            }
+            credential.access_token
+        }
+        None if broker_credential_storage_required() => {
+            anyhow::bail!("shared Network Broker credential is missing; run agent-remote login")
+        }
+        None => SecretStore::new(paths.clone())
+            .get_secret(&key)?
+            .context("device token is missing; run agent-remote login")?,
+    };
 
     let state = LocalState::open(paths)?;
     state.init_schema()?;
@@ -47,8 +73,10 @@ pub async fn load_device_token(paths: &AppPaths) -> Result<(String, String, Stri
             .refresh_token(&token)
             .await
             .context("device token refresh failed; run agent-remote login")?;
-        store.set_secret(&key, &refreshed.access_token)?;
-        record_refresh_time(paths, &server_url, &device_id, refreshed.expires_in)?;
+        let backend = store_device_token(paths, &server_url, &device_id, &refreshed)?;
+        if backend == SecretBackend::File && broker_credential_storage_required() {
+            anyhow::bail!("production device credential unexpectedly used file storage")
+        }
         token = refreshed.access_token;
     }
 

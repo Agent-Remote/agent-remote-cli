@@ -2,6 +2,15 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.1.0 - 2026-07-31
+
+- feat: add device install, status, diagnose, revoke, and token rotation commands
+- feat: provision broker credentials without exposing device secrets
+- build: pin the expected Apple Team ID in release binaries
+- ci: run full cli checks on macos (0180e89)
+- test: stabilize tunnel cleanup coverage (da46507)
+- ci: isolate release tags from validation (812a4b8)
+
 ## v0.0.6 - 2026-07-29
 
 - fix: compile tunnel process guards on windows (a5989bf)
@@ -146,4 +155,3 @@ All notable changes to this repository are recorded here.
 - ci: allow manual release dispatch (075ea00)
 - chore: release v0.0.2 (05db10e)
 - build: add release version injection and installer (93fdc5a)
-

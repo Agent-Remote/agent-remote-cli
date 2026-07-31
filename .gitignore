@@ -1,4 +1,5 @@
 /target/
+/dist/
 /lcov.info
 /.idea/
 /.vscode/

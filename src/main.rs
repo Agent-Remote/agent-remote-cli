@@ -1,8 +1,10 @@
 mod api;
 mod auth;
+mod broker_credentials;
 mod cli;
 mod config;
 mod dependencies;
+mod device;
 mod doctor;
 mod identifiers;
 mod local_state;
@@ -31,9 +33,11 @@ use crate::api::{
     ToolAccountConfigImportFile, ToolAccountConfigImportRequest, ToolAccountData, WorkspaceData,
 };
 use crate::auth::{clear_device_token_refresh, load_device_token, store_device_token};
+use crate::broker_credentials::delete_broker_credential_if_matches;
 use crate::cli::{
     AccountCommand, AccountDefaultCommand, Cli, Command, CredentialsCommand, DepsCommand,
-    LoginMethod, SshCommand, SyncCommand, WireGuardCommand, VERSION,
+    DeviceCommand, DeviceRevokeArgs, DeviceRotateTokenArgs, DeviceUninstallArgs, LoginMethod,
+    SshCommand, SyncCommand, WireGuardCommand, VERSION,
 };
 use crate::config::{AppPaths, Config};
 use crate::dependencies::DependencyManager;
@@ -105,8 +109,128 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Credentials(CredentialsCommand::Unbind(args)) => {
             credentials_unbind(paths, args).await
         }
+        Command::Device(DeviceCommand::Install(args)) => device::install(&args.source),
+        Command::Device(DeviceCommand::Uninstall(args)) => device_uninstall(args),
+        Command::Device(DeviceCommand::Status) => device::status(),
+        Command::Device(DeviceCommand::Diagnose) => device::diagnose(),
+        Command::Device(DeviceCommand::Revoke(args)) => device_revoke(paths, args).await,
+        Command::Device(DeviceCommand::RotateToken(args)) => device_rotate_token(paths, args).await,
         Command::Attach(args) => attach(paths, args).await,
     }
+}
+
+fn device_uninstall(args: DeviceUninstallArgs) -> Result<()> {
+    if !args.yes
+        && !prompt_yes_no(
+            "Remove the local Agent Remote Device app, credentials, permissions, and data? [y/N] ",
+        )?
+    {
+        terminal::note("Device app removal cancelled.");
+        return Ok(());
+    }
+    device::uninstall()
+}
+
+async fn device_revoke(paths: AppPaths, args: DeviceRevokeArgs) -> Result<()> {
+    let mut config = Config::load(&paths)?;
+    let server_url = config
+        .server_url
+        .clone()
+        .context("server URL is not configured")?;
+    let device_id = args
+        .device
+        .or_else(|| config.active_device_id.clone())
+        .context("no device selected; pass --device or register an active device")?;
+    let secret_store = SecretStore::new(paths.clone());
+    let user_token = secret_store
+        .get_secret(&user_token_key(&server_url))?
+        .context(
+            "a user token is required; run agent-remote login --skip-device-registration first",
+        )?;
+    if !args.yes
+        && !prompt_yes_no(&format!(
+            "Revoke device {device_id} and invalidate its remote access? [y/N] "
+        ))?
+    {
+        terminal::note("Device revocation cancelled.");
+        return Ok(());
+    }
+
+    ApiClient::new(server_url.clone())?
+        .revoke_device(&user_token, &device_id)
+        .await
+        .context("failed to revoke device")?;
+
+    let mut cleanup_errors = Vec::new();
+    if let Err(error) = delete_broker_credential_if_matches(&server_url, &device_id) {
+        cleanup_errors.push(format!("Network Broker credential: {error}"));
+    }
+    if let Err(error) = secret_store.delete_secret(&device_token_key(&server_url, &device_id)) {
+        cleanup_errors.push(format!("device credential: {error}"));
+    }
+    if let Err(error) = clear_device_token_refresh(&paths, &server_url, &device_id) {
+        cleanup_errors.push(format!("device refresh state: {error}"));
+    }
+    if config.active_device_id.as_deref() == Some(device_id.as_str()) {
+        config.active_device_id = None;
+        if let Err(error) = config.save(&paths) {
+            cleanup_errors.push(format!("active device configuration: {error}"));
+        }
+    }
+    match LocalState::open(&paths).and_then(|state| {
+        state.init_schema()?;
+        if let Some(mut device) = state.get_device(&device_id)? {
+            device.status = "revoked".to_string();
+            state.upsert_device(&device)?;
+        }
+        Ok(())
+    }) {
+        Ok(()) => {}
+        Err(error) => cleanup_errors.push(format!("local device metadata: {error}")),
+    }
+
+    if !cleanup_errors.is_empty() {
+        bail!(
+            "device {device_id} was revoked remotely, but local cleanup is incomplete: {}",
+            cleanup_errors.join("; ")
+        )
+    }
+    terminal::success_line(format!("Revoked device {device_id}"));
+    Ok(())
+}
+
+async fn device_rotate_token(paths: AppPaths, args: DeviceRotateTokenArgs) -> Result<()> {
+    let config = Config::load(&paths)?;
+    let server_url = config.server_url.context("server URL is not configured")?;
+    let device_id = config
+        .active_device_id
+        .context("no active device is configured")?;
+    let user_token = SecretStore::new(paths.clone())
+        .get_secret(&user_token_key(&server_url))?
+        .context(
+            "a user token is required; run agent-remote login --skip-device-registration first",
+        )?;
+    if !args.yes
+        && !prompt_yes_no(
+            "Rotate the active device token and replace its local credential? [y/N] ",
+        )?
+    {
+        terminal::note("Device token rotation cancelled.");
+        return Ok(());
+    }
+
+    let rotated = ApiClient::new(server_url.clone())?
+        .rotate_device_token(&user_token, &device_id)
+        .await
+        .context("failed to rotate device token")?;
+    if let Err(error) = store_device_token(&paths, &server_url, &device_id, &rotated) {
+        bail!(
+            "device token was rotated remotely, but local credential replacement is incomplete: \
+             {error:#}"
+        )
+    }
+    terminal::success_line(format!("Rotated credential for device {device_id}"));
+    Ok(())
 }
 
 struct DeviceRegistrationOptions {
@@ -370,7 +494,11 @@ async fn logout(paths: AppPaths, revoke_remote: bool) -> Result<()> {
 
     if let Some(device_id) = config.active_device_id.clone() {
         let key = device_token_key(&server_url, &device_id);
-        token = secret_store.get_secret(&key)?;
+        token = load_device_token(&paths)
+            .await
+            .ok()
+            .map(|(_, _, token)| token);
+        let _ = delete_broker_credential_if_matches(&server_url, &device_id);
         let _ = secret_store.delete_secret(&key);
         let _ = clear_device_token_refresh(&paths, &server_url, &device_id);
     }

@@ -36,6 +36,12 @@ agent-remote account verify <account-id>
 agent-remote account status <account-id>
 agent-remote ssh check --session-id <session-id>
 agent-remote attach <session-id> --print-only
+agent-remote device install --source "/path/to/Agent Remote Device.app"
+agent-remote device uninstall [--yes]
+agent-remote device status
+agent-remote device diagnose
+agent-remote device revoke [--device <device-id>] [--yes]
+agent-remote device rotate-token [--yes]
 agent-remote logout [--no-revoke-remote]
 ```
 
@@ -87,6 +93,12 @@ Managed external dependencies are expected under:
 The four macOS/Linux release targets bundle managed `mutagen`, `tmux`, `wg`, and `wg-quick` binaries plus SSH/SCP wrappers for managed host verification. macOS packages additionally bundle `wireguard-go`. Windows x64 and ARM64 packages bundle native CLI executables, Mutagen, `ssh.exe` and `scp.exe` compatibility proxies, and the architecture-specific official WireGuard for Windows MSI. That MSI provides the Windows equivalents of `wg`, `wg-quick`, and the tunnel backend (the tunnel manager, `wg.exe`, and Wintun driver). `tmux` runs on the remote Linux node and has no native Windows client role.
 
 The current implementation records and checks the manifest for Mutagen and WireGuard helpers. Release packages include the managed Mutagen binary and WireGuard helper for each supported platform.
+
+## Local Device Control
+
+`agent-remote device install` accepts only an explicit local app bundle named `Agent Remote Device.app`. On macOS it verifies the fixed bundle identifier, the Apple signing Team ID pinned into the release CLI, embedded Network Broker and GUI Executor XPC services signed by that same team, the complete code signature, and Gatekeeper assessment before and after staging, then atomically installs the app at `~/Applications/Agent Remote Device.app`. Reinstalling the same semantic version and upgrading are allowed; downgrades and missing or malformed bundle versions are rejected. It never downloads or executes an installer URL supplied by a project or API response. Local development builds fail closed for installation unless compiled with a valid `AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER`; release builds obtain it only from the protected `production-device-release` environment.
+
+Use `agent-remote device status` for the installed version, signature, XPC, and process state. `agent-remote device diagnose` performs the same strict checks and exits non-zero when the installation is not trusted. `agent-remote device uninstall` requires the app to be stopped, removes its fixed app bundle, shared Broker credential, TCC grants, and bundle-owned sandbox data, but does not revoke the remote registration. It refuses to proceed while hidden-application recovery state remains. `agent-remote device revoke` requires a stored user token, asks for confirmation unless `--yes` is supplied, revokes the selected or active device through the control plane, and removes its local device credential and refresh state. `agent-remote device rotate-token` rotates only the active device through the control plane, never prints the returned token, and immediately replaces the local platform credential and shared Network Broker credential; stop active device-control sessions before using it.
 
 ## WireGuard and SSH
 
@@ -162,13 +174,13 @@ scripts/run-quality-checks.sh
 Build macOS and Linux CLI archives:
 
 ```sh
-VERSION=0.0.6 scripts/package-release.sh
+VERSION=0.1.0 scripts/package-release.sh
 ```
 
 Build a Windows x64 archive from PowerShell on Windows (pass `-Target aarch64-pc-windows-msvc` for ARM64):
 
 ```powershell
-./scripts/package-release.ps1 -Version 0.0.6
+./scripts/package-release.ps1 -Version 0.1.0
 ```
 
 The release archive includes:
@@ -193,7 +205,7 @@ Install a specific version or customize paths:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.0.6 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version 0.1.0 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 Install a downloaded release archive:

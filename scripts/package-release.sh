@@ -12,6 +12,7 @@ MUTAGEN_VERSION="${MUTAGEN_VERSION:-0.18.1}"
 TMUX_VERSION="${TMUX_VERSION:-3.5a}"
 WIREGUARD_TOOLS_VERSION="${WIREGUARD_TOOLS_VERSION:-1.0.20210914}"
 WIREGUARD_GO_VERSION="${WIREGUARD_GO_VERSION:-0.0.20250522}"
+ENABLE_DEVICE_BROKER_CREDENTIALS="${ENABLE_DEVICE_BROKER_CREDENTIALS:-0}"
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -52,7 +53,32 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 for target in $TARGETS; do
-  AGENT_REMOTE_VERSION="$VERSION" cargo build --release --target "$target"
+  if [[ "$target" == *apple-darwin && "$ENABLE_DEVICE_BROKER_CREDENTIALS" == "1" ]]; then
+    team_identifier=${TEAM_IDENTIFIER:?TEAM_IDENTIFIER is required for device Broker credentials}
+    signing_identity=${MACOS_SIGNING_IDENTITY:?MACOS_SIGNING_IDENTITY is required for device Broker credentials}
+    if ! [[ "$team_identifier" =~ ^[A-Z0-9]{10}$ ]]; then
+      echo "TEAM_IDENTIFIER must contain exactly 10 uppercase letters or digits" >&2
+      exit 1
+    fi
+    if [[ "$signing_identity" == "-" ]]; then
+      echo "device Broker credentials do not allow ad-hoc CLI signing" >&2
+      exit 1
+    fi
+    access_group="$team_identifier.dev.agentremote.device.credentials"
+    AGENT_REMOTE_VERSION="$VERSION" \
+      AGENT_REMOTE_KEYCHAIN_ACCESS_GROUP="$access_group" \
+      cargo build --release --target "$target"
+    resolved_entitlements=$(mktemp)
+    install -m 0644 packaging/macos/agent-remote.entitlements "$resolved_entitlements"
+    /usr/libexec/PlistBuddy -c \
+      "Set :keychain-access-groups:0 $access_group" "$resolved_entitlements"
+    codesign --force --sign "$signing_identity" --options runtime --timestamp \
+      --entitlements "$resolved_entitlements" "target/$target/release/agent-remote"
+    codesign --verify --strict --verbose=2 "target/$target/release/agent-remote"
+    rm -f "$resolved_entitlements"
+  else
+    AGENT_REMOTE_VERSION="$VERSION" cargo build --release --target "$target"
+  fi
   package="agent-remote-cli-${VERSION}-${target}"
   work="$OUT_DIR/$package"
   mkdir -p "$work/bin" "$work/dependencies/sources" "$work/dependencies/licenses"
@@ -185,6 +211,9 @@ with open(manifest_path, "w", encoding="utf-8") as destination:
 PY
   fi
   tar -C "$OUT_DIR" -czf "$OUT_DIR/$package.tar.gz" "$package"
+  printf '%s  %s\n' \
+    "$(sha256_file "$OUT_DIR/$package.tar.gz")" \
+    "$package.tar.gz" > "$OUT_DIR/$package.tar.gz.sha256"
 done
 
 echo "release artifacts written to $OUT_DIR"

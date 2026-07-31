@@ -1,5 +1,6 @@
 pub mod api;
 pub mod auth;
+pub mod broker_credentials;
 pub mod cli;
 pub mod config;
 pub mod dependencies;

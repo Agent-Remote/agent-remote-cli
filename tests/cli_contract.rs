@@ -71,6 +71,13 @@ fn every_command_path_executes_help_successfully() {
         &["credentials", "create"],
         &["credentials", "bind"],
         &["credentials", "unbind"],
+        &["device"],
+        &["device", "install"],
+        &["device", "uninstall"],
+        &["device", "status"],
+        &["device", "diagnose"],
+        &["device", "revoke"],
+        &["device", "rotate-token"],
         &["attach"],
         &["forward"],
         &["forward", "list"],
@@ -97,6 +104,58 @@ fn every_command_path_executes_help_successfully() {
     for path in [&[][..], &["check"], &["status"], &["up"], &["down"]] {
         assert_help(WIREGUARD, path);
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn device_uninstall_removes_fixed_residue_and_preserves_unrelated_data() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let tools = temp.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    for (name, body) in [
+        ("pgrep", "#!/bin/sh\nexit 1\n"),
+        ("tccutil", "#!/bin/sh\nexit 0\n"),
+        ("plutil", "#!/bin/sh\nprintf 'dev.agentremote.device\\n'\n"),
+    ] {
+        let path = tools.join(name);
+        fs::write(&path, body).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    let app = temp
+        .path()
+        .join("Applications/Agent Remote Device.app/Contents");
+    fs::create_dir_all(&app).unwrap();
+    fs::write(app.join("Info.plist"), b"test plist").unwrap();
+    let device_container = temp
+        .path()
+        .join("Library/Containers/dev.agentremote.device/Data");
+    fs::create_dir_all(&device_container).unwrap();
+    let unrelated = temp
+        .path()
+        .join("Library/Containers/com.example.unrelated/Data");
+    fs::create_dir_all(&unrelated).unwrap();
+
+    let output = Command::new(AGENT_REMOTE)
+        .args(["--color", "never", "device", "uninstall", "--yes"])
+        .env("HOME", temp.path())
+        .env("AGENT_REMOTE_HOME", temp.path().join("agent-remote-state"))
+        .env("PATH", &tools)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "uninstall failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!app.parent().unwrap().exists());
+    assert!(!device_container.parent().unwrap().exists());
+    assert!(unrelated.exists());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("was not revoked"));
 }
 
 fn assert_color_contract(binary: &str, args: &[&str], home: &Path) {

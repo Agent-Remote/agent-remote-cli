@@ -13,11 +13,59 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          version="${version#v}"
+          test "$GITHUB_REF" = "refs/tags/v${version}"
+          source_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          test "$source_version" = "$version"
+          echo "value=${version}" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.2
+      - uses: sigstore/cosign-installer@v4.0.0
+      - name: Audit locked Rust dependencies
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          report="dist/agent-remote-cli-${VERSION}.cargo-audit.json"
+          cargo audit --json > "$report"
+          sha256sum "$report" > "$report.sha256"
+          cosign sign-blob --yes --bundle "$report.sigstore.json" "$report"
+          cosign verify-blob \
+            --bundle "$report.sigstore.json" \
+            --certificate-identity \
+              "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$report"
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: agent-remote-cli-audit
+          path: |
+            dist/*.cargo-audit.json
+            dist/*.cargo-audit.json.sha256
+            dist/*.cargo-audit.json.sigstore.json
+          if-no-files-found: error
+
   release:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    environment: production-device-release
     strategy:
       fail-fast: false
       matrix:
@@ -60,17 +108,71 @@ jobs:
           set -euo pipefail
           version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
           version="${version#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid semantic version: $version" >&2
+            exit 2
+          fi
+          test "$GITHUB_REF" = "refs/tags/v${version}"
+          source_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          test "$source_version" = "$version"
           echo "value=${version}" >> "$GITHUB_OUTPUT"
       - name: Build release package
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          DEVICE_APP_TEAM_IDENTIFIER: ${{ vars.DEVICE_APP_TEAM_IDENTIFIER }}
           TARGETS: ${{ matrix.target }}
           VERSION: ${{ steps.version.outputs.value }}
-        run: scripts/package-release.sh
+        run: |
+          set -euo pipefail
+          if [[ "$TARGETS" == *-apple-darwin ]]; then
+            if ! [[ "$DEVICE_APP_TEAM_IDENTIFIER" =~ ^[A-Z0-9]{10}$ ]]; then
+              echo "protected DEVICE_APP_TEAM_IDENTIFIER is missing or invalid" >&2
+              exit 2
+            fi
+            export AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER="$DEVICE_APP_TEAM_IDENTIFIER"
+          fi
+          scripts/package-release.sh
+      - name: Generate package SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: dist/agent-remote-cli-${{ steps.version.outputs.value }}-${{ matrix.target }}
+          format: spdx-json
+          output-file: dist/agent-remote-cli-${{ steps.version.outputs.value }}-${{ matrix.target }}.spdx.json
+      - uses: sigstore/cosign-installer@v4.0.0
+      - name: Sign, attest, and verify package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          archive="dist/agent-remote-cli-${VERSION}-${TARGET}.tar.gz"
+          (cd dist && shasum -a 256 --check "$(basename "$archive").sha256")
+          cosign sign-blob --yes --bundle "$archive.sigstore.json" "$archive"
+          cosign verify-blob \
+            --bundle "$archive.sigstore.json" \
+            --certificate-identity \
+              "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+      - name: Attest package provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/agent-remote-cli-${{ steps.version.outputs.value }}-${{ matrix.target }}.tar.gz
+      - name: Verify package provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: gh attestation verify "dist/agent-remote-cli-${VERSION}-${TARGET}.tar.gz" --repo "$GITHUB_REPOSITORY"
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: agent-remote-cli-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.tar.gz.sigstore.json
+            dist/*.spdx.json
           if-no-files-found: error
 
   release-windows:
@@ -97,19 +199,58 @@ jobs:
         run: |
           $version = if ($env:INPUT_VERSION) { $env:INPUT_VERSION } else { $env:GITHUB_REF_NAME.TrimStart("v") }
           $version = $version.TrimStart("v")
+          if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$') { throw "invalid semantic version" }
+          if ($env:GITHUB_REF -ne "refs/tags/v$version") { throw "release must run from the exact version tag" }
+          $sourceVersion = [regex]::Match((Get-Content Cargo.toml -Raw), '(?m)^version = "([^"]+)"').Groups[1].Value
+          if ($sourceVersion -ne $version) { throw "source version does not match release version" }
           "value=$version" >> $env:GITHUB_OUTPUT
       - name: Build release package
         shell: pwsh
         run: ./scripts/package-release.ps1 -Version "${{ steps.version.outputs.value }}" -Target "${{ matrix.target }}"
+      - name: Generate package SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: dist/agent-remote-cli-${{ steps.version.outputs.value }}-${{ matrix.target }}
+          format: spdx-json
+          output-file: dist/agent-remote-cli-${{ steps.version.outputs.value }}-${{ matrix.target }}.spdx.json
+      - uses: sigstore/cosign-installer@v4.0.0
+      - name: Sign and verify package
+        shell: pwsh
+        run: |
+          $archive = "dist/agent-remote-cli-${{ steps.version.outputs.value }}-${{ matrix.target }}.zip"
+          $expected = ((Get-Content "$archive.sha256" -Raw) -split '\s+')[0]
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "package checksum mismatch" }
+          cosign sign-blob --yes --bundle "$archive.sigstore.json" "$archive"
+          if ($LASTEXITCODE -ne 0) { throw "package signing failed" }
+          cosign verify-blob `
+            --bundle "$archive.sigstore.json" `
+            --certificate-identity "https://github.com/$env:GITHUB_REPOSITORY/.github/workflows/release.yml@$env:GITHUB_REF" `
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" `
+            "$archive"
+          if ($LASTEXITCODE -ne 0) { throw "package signature verification failed" }
+      - name: Attest package provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/agent-remote-cli-${{ steps.version.outputs.value }}-${{ matrix.target }}.zip
+      - name: Verify package provenance
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify "dist/agent-remote-cli-${{ steps.version.outputs.value }}-${{ matrix.target }}.zip" --repo "$env:GITHUB_REPOSITORY"
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: agent-remote-cli-${{ matrix.target }}
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.zip.sha256
+            dist/*.zip.sigstore.json
+            dist/*.spdx.json
           if-no-files-found: error
 
   publish:
     runs-on: ubuntu-latest
-    needs: [release, release-windows]
+    needs: [audit, release, release-windows]
     steps:
       - name: Resolve release version
         id: version
@@ -128,6 +269,15 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.value }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.tar.gz.sigstore.json
             dist/*.zip
+            dist/*.zip.sha256
+            dist/*.zip.sigstore.json
+            dist/*.spdx.json
+            dist/*.cargo-audit.json
+            dist/*.cargo-audit.json.sha256
+            dist/*.cargo-audit.json.sigstore.json
