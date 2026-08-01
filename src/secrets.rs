@@ -179,10 +179,10 @@ fn get_system_secret(key: &str) -> Result<Option<String>> {
 
 #[cfg(target_os = "macos")]
 fn delete_system_secret(key: &str) -> Result<()> {
-    let status = Command::new("security")
+    let output = Command::new("security")
         .args(["delete-generic-password", "-s", SERVICE, "-a", key])
-        .status()?;
-    if status.success() {
+        .output()?;
+    if output.status.success() {
         Ok(())
     } else {
         Err(anyhow!("security delete-generic-password failed"))

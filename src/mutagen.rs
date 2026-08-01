@@ -187,6 +187,19 @@ pub fn reset(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<
     create(paths, sync, false)
 }
 
+pub fn terminate_session(paths: &AppPaths, name: &str, dry_run: bool) -> Result<()> {
+    run(
+        paths,
+        &[
+            "sync".to_string(),
+            "terminate".to_string(),
+            name.to_string(),
+        ],
+        dry_run,
+    )
+    .map(|_| ())
+}
+
 fn session_name(sync: &SyncSessionData) -> Result<&str> {
     sync.mutagen_session_id
         .as_deref()

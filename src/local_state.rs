@@ -235,6 +235,26 @@ impl LocalState {
         Ok(workspace)
     }
 
+    pub fn delete_workspace_mapping(&self, workspace_id: &str) -> Result<()> {
+        self.connection.execute(
+            "DELETE FROM sync_sessions WHERE workspace_id = ?1",
+            params![workspace_id],
+        )?;
+        self.connection.execute(
+            "DELETE FROM workspaces WHERE id = ?1",
+            params![workspace_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_sync_session(&self, sync_session_id: &str) -> Result<()> {
+        self.connection.execute(
+            "DELETE FROM sync_sessions WHERE id = ?1",
+            params![sync_session_id],
+        )?;
+        Ok(())
+    }
+
     pub fn upsert_sync_session(&self, sync_session: &LocalSyncSession) -> Result<()> {
         self.connection.execute(
             "INSERT INTO sync_sessions (
@@ -396,5 +416,57 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(sync.id, "sync_1");
+    }
+
+    #[test]
+    fn removes_stale_workspace_and_sync_mappings() {
+        let dir = tempdir().unwrap();
+        let paths = AppPaths::from_home(dir.path().join("agent-remote"));
+        let state = LocalState::open(&paths).unwrap();
+        state.init_schema().unwrap();
+
+        state
+            .upsert_workspace(&LocalWorkspace {
+                id: "workspace_1".to_string(),
+                server_url: "https://example.test".to_string(),
+                project_key: "sha256:test".to_string(),
+                local_path: "/tmp/project".to_string(),
+                display_name: "project".to_string(),
+                remote_path: None,
+            })
+            .unwrap();
+        for id in ["sync_1", "sync_2"] {
+            state
+                .upsert_sync_session(&LocalSyncSession {
+                    id: id.to_string(),
+                    server_url: "https://example.test".to_string(),
+                    workspace_id: "workspace_1".to_string(),
+                    node_id: None,
+                    status: "active".to_string(),
+                    conflict_status: "none".to_string(),
+                    mutagen_session_id: None,
+                    remote_endpoint: None,
+                })
+                .unwrap();
+        }
+
+        state.delete_sync_session("sync_1").unwrap();
+        assert_eq!(
+            state
+                .get_sync_session_for_workspace("workspace_1")
+                .unwrap()
+                .unwrap()
+                .id,
+            "sync_2"
+        );
+        state.delete_workspace_mapping("workspace_1").unwrap();
+        assert!(state
+            .get_workspace_by_project_key("https://example.test", "sha256:test")
+            .unwrap()
+            .is_none());
+        assert!(state
+            .get_sync_session_for_workspace("workspace_1")
+            .unwrap()
+            .is_none());
     }
 }
