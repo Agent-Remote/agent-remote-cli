@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.1.7 - 2026-08-01
+
+- fix: recover stale workspace sync state (132271a)
+
 ## v0.1.6 - 2026-08-01
 
 - fix: preserve device identity across login (b95bcd8)
