@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.1.6 - 2026-08-01
+
+- fix: preserve device identity across login (b95bcd8)
+
 ## v0.1.5 - 2026-07-31
 
 - Release metadata update.
