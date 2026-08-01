@@ -66,6 +66,11 @@ The CLI initialization flow does not create users. Administrators create regular
 - Linux: Secret Service through `secret-tool`
 - Windows: Windows Credential Manager through the native Win32 API
 
+When the configured server and active device registration are unchanged, logging in again reuses
+that device, refreshes its metadata and SSH public key, and replaces its device token. A new device
+is registered only when no active local registration is configured. This keeps existing workspaces
+bound to the same device across CLI upgrades.
+
 If the system credential store is unavailable, the CLI falls back to files under the agent-remote home directory with owner-only permissions. SQLite stores only local metadata and never stores access tokens or tool account login state.
 
 ## Local Paths

@@ -32,7 +32,9 @@ use crate::api::{
     DeveloperCredentialSsh, GitSyncPolicy, RegisterDeviceRequest, SyncSessionData,
     ToolAccountConfigImportFile, ToolAccountConfigImportRequest, ToolAccountData, WorkspaceData,
 };
-use crate::auth::{clear_device_token_refresh, load_device_token, store_device_token};
+use crate::auth::{
+    clear_device_token_refresh, has_device_token, load_device_token, store_device_token,
+};
 use crate::broker_credentials::delete_broker_credential_if_matches;
 use crate::cli::{
     AccountCommand, AccountDefaultCommand, Cli, Command, CredentialsCommand, DepsCommand,
@@ -327,16 +329,13 @@ async fn init(paths: AppPaths, args: crate::cli::InitArgs) -> Result<()> {
 
 async fn login(paths: AppPaths, args: crate::cli::LoginArgs) -> Result<()> {
     paths.ensure_base_dirs()?;
-    let mut config = Config::load(&paths)?;
+    let config = Config::load(&paths)?;
     let server_url = args
         .server_url
         .clone()
         .or_else(|| config.server_url.clone())
         .context("missing server URL; pass --server-url or set AGENT_REMOTE_SERVER_URL")?;
     let server_url = normalize_server_url(&server_url);
-    config.server_url = Some(server_url.clone());
-    config.save(&paths)?;
-
     let state = LocalState::open(&paths)?;
     state.init_schema()?;
     DependencyManager::new(paths.clone()).ensure_manifest()?;
@@ -370,6 +369,14 @@ async fn finalize_login(
 ) -> Result<Option<String>> {
     paths.ensure_base_dirs()?;
     let mut config = Config::load(&paths)?;
+    let existing_device_id = match config.server_url.as_deref() {
+        Some(configured_server_url)
+            if normalize_server_url(configured_server_url) == server_url =>
+        {
+            config.active_device_id.clone()
+        }
+        _ => None,
+    };
     config.server_url = Some(server_url.clone());
     config.save(&paths)?;
 
@@ -404,6 +411,7 @@ async fn finalize_login(
         cli_version: VERSION.to_string(),
         ssh_public_key,
         wireguard_public_key: options.wireguard_public_key,
+        existing_device_id,
     };
     let registration = ApiClient::new(server_url.clone())?
         .register_device(&user_token.access_token, &request)
@@ -554,21 +562,17 @@ async fn status(paths: AppPaths, online: bool) -> Result<()> {
         None => details.status("Login mode", "unknown"),
     };
 
-    let token_present = config
-        .server_url
-        .as_ref()
-        .and_then(|server_url| {
-            let store = SecretStore::new(paths.clone());
-            if let Some(device_id) = &config.active_device_id {
-                store
-                    .get_secret(&device_token_key(server_url, device_id))
-                    .ok()
-                    .flatten()
-            } else {
-                store.get_secret(&user_token_key(server_url)).ok().flatten()
-            }
-        })
-        .is_some();
+    let token_present = match (&config.server_url, &config.active_device_id) {
+        (Some(server_url), Some(device_id)) => {
+            has_device_token(&paths, server_url, device_id).unwrap_or(false)
+        }
+        (Some(server_url), None) => SecretStore::new(paths.clone())
+            .get_secret(&user_token_key(server_url))
+            .ok()
+            .flatten()
+            .is_some(),
+        (None, _) => false,
+    };
     details = details.status(
         "Credential",
         if token_present { "present" } else { "missing" },

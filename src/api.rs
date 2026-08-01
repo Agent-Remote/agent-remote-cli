@@ -735,6 +735,8 @@ pub struct RegisterDeviceRequest {
     pub cli_version: String,
     pub ssh_public_key: String,
     pub wireguard_public_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_device_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1267,17 +1269,30 @@ mod tests {
     }
 
     #[test]
-    fn device_registration_reports_the_cli_version() {
+    fn device_registration_reports_version_and_optional_existing_device() {
         let request = RegisterDeviceRequest {
             name: "laptop".to_string(),
             platform: "linux".to_string(),
             cli_version: "0.0.5-fix.7".to_string(),
             ssh_public_key: "ssh-ed25519 AAAA".to_string(),
             wireguard_public_key: None,
+            existing_device_id: None,
         };
 
         let payload = serde_json::to_value(request).unwrap();
         assert_eq!(payload["cli_version"], "0.0.5-fix.7");
+        assert!(payload.get("existing_device_id").is_none());
+
+        let existing_request = RegisterDeviceRequest {
+            name: "laptop".to_string(),
+            platform: "linux".to_string(),
+            cli_version: "0.1.5".to_string(),
+            ssh_public_key: "ssh-ed25519 AAAA".to_string(),
+            wireguard_public_key: None,
+            existing_device_id: Some("device-1".to_string()),
+        };
+        let existing_payload = serde_json::to_value(existing_request).unwrap();
+        assert_eq!(existing_payload["existing_device_id"], "device-1");
     }
 
     #[tokio::test]

@@ -37,6 +37,15 @@ pub fn store_device_token(
     Ok(backend)
 }
 
+pub fn has_device_token(paths: &AppPaths, server_url: &str, device_id: &str) -> Result<bool> {
+    if let Some(credential) = load_active_broker_credential(paths)? {
+        return Ok(credential.server_url == server_url && credential.device_id == device_id);
+    }
+    Ok(SecretStore::new(paths.clone())
+        .get_secret(&device_token_key(server_url, device_id))?
+        .is_some())
+}
+
 pub async fn load_device_token(paths: &AppPaths) -> Result<(String, String, String)> {
     let config = Config::load(paths)?;
     let server_url = config
@@ -126,7 +135,9 @@ mod tests {
     use crate::config::AppPaths;
     use crate::local_state::LocalState;
 
-    use super::{device_token_refresh_key, record_refresh_time};
+    use crate::secrets::{device_token_key, SecretStore};
+
+    use super::{device_token_refresh_key, has_device_token, record_refresh_time};
 
     #[test]
     fn stores_non_secret_refresh_time() {
@@ -143,5 +154,20 @@ mod tests {
             ))
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn detects_a_device_token_in_the_standard_secret_store() {
+        let dir = tempdir().unwrap();
+        let paths = AppPaths::from_home(dir.path().join("agent-remote"));
+        SecretStore::new(paths.clone())
+            .set_secret(
+                &device_token_key("https://example.test", "device-1"),
+                "device-token",
+            )
+            .unwrap();
+
+        assert!(has_device_token(&paths, "https://example.test", "device-1").unwrap());
+        assert!(!has_device_token(&paths, "https://example.test", "device-2").unwrap());
     }
 }

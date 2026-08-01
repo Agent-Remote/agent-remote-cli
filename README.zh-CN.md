@@ -65,6 +65,10 @@ CLI 初始化流程不会创建用户。服务器完成 bootstrap 后，管理�
 - Linux：通过 `secret-tool` 使用 Secret Service
 - Windows：通过原生 Win32 API 使用 Windows 凭据管理器
 
+当配置的服务器和当前设备注册均未变化时，重新执行 `agent-remote login` 会复用该设备，
+更新设备元数据和 SSH 公钥，并替换设备 token。只有本地未配置 active device 时才会注册新设备，
+从而保证 CLI 升级前后已有 workspace 仍绑定同一设备。
+
 如果系统凭据存储不可用，CLI 会回退到 agent-remote home 目录下仅所有者可访问的文件。SQLite 只保存本地元数据，绝不会保存 access token 或工具账户登录状态。
 
 ## 本地路径
