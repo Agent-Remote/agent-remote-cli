@@ -117,4 +117,18 @@ if [ "$(uname -s)" = "Darwin" ]; then
   "$INSTALL_HOME/bin/wireguard-go" --version
 fi
 
+managed_mutagen() {
+  AGENT_REMOTE_HOME="$INSTALL_HOME" \
+    MUTAGEN_SSH_PATH="$INSTALL_HOME/bin" \
+    PATH="$INSTALL_HOME/bin:$PATH" \
+    "$INSTALL_HOME/bin/mutagen" "$@"
+}
+
+managed_mutagen daemon start
+"$PACKAGE_DIR/install.sh" --home "$INSTALL_HOME" --bin-dir "$LINK_DIR"
+if ! managed_mutagen daemon stop; then
+  echo "installer did not restore the managed Mutagen daemon" >&2
+  exit 1
+fi
+
 echo "Unix install smoke test passed"

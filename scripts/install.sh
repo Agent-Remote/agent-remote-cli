@@ -128,6 +128,29 @@ require_file() {
   fi
 }
 
+stop_managed_mutagen() {
+  local mutagen="$AGENT_REMOTE_HOME/bin/mutagen"
+  if [ ! -x "$mutagen" ]; then
+    return 1
+  fi
+  if "$mutagen" daemon stop >/dev/null 2>&1; then
+    echo "Stopping the managed Mutagen daemon for the upgrade..."
+    sleep 0.25
+    return 0
+  fi
+  return 1
+}
+
+start_managed_mutagen() {
+  local managed_bin="$AGENT_REMOTE_HOME/bin"
+  echo "Restarting the managed Mutagen daemon..."
+  AGENT_REMOTE_HOME="$AGENT_REMOTE_HOME" \
+    MUTAGEN_SSH_PATH="$managed_bin" \
+    PATH="$managed_bin:$PATH" \
+    "$managed_bin/mutagen" daemon start
+  sleep 0.25
+}
+
 resolve_version() {
   if [ "$VERSION" != "latest" ]; then
     VERSION="${VERSION#v}"
@@ -182,6 +205,7 @@ detect_target() {
 
 install_packaged() {
   local package_dir="$1"
+  local mutagen_was_running=0
   for binary in agent-remote fclaude agent-remote-wireguard mutagen scp ssh tmux wg wg-quick; do
     require_file "$package_dir/bin/$binary"
   done
@@ -192,6 +216,9 @@ install_packaged() {
   require_file "$package_dir/dependencies/manifest.json"
 
   mkdir -p "$AGENT_REMOTE_HOME/bin" "$AGENT_REMOTE_HOME/dependencies"
+  if stop_managed_mutagen; then
+    mutagen_was_running=1
+  fi
   install -m 0755 "$package_dir/bin/agent-remote" "$AGENT_REMOTE_HOME/bin/agent-remote"
   install -m 0755 "$package_dir/bin/fclaude" "$AGENT_REMOTE_HOME/bin/fclaude"
   install -m 0755 "$package_dir/bin/agent-remote-wireguard" "$AGENT_REMOTE_HOME/bin/agent-remote-wireguard"
@@ -206,6 +233,10 @@ install_packaged() {
     install -m 0755 "$package_dir/bin/wireguard-go" "$AGENT_REMOTE_HOME/bin/wireguard-go"
   fi
   cp -R "$package_dir/dependencies/." "$AGENT_REMOTE_HOME/dependencies/"
+
+  if [ "$mutagen_was_running" = "1" ]; then
+    start_managed_mutagen
+  fi
 
   if [ -n "$INSTALL_BIN_DIR" ]; then
     mkdir -p "$INSTALL_BIN_DIR"
