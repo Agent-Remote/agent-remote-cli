@@ -114,6 +114,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Device(DeviceCommand::Install(args)) => device::install(&args.source),
         Command::Device(DeviceCommand::Uninstall(args)) => device_uninstall(args),
         Command::Device(DeviceCommand::Status) => device::status(),
+        Command::Device(DeviceCommand::Launch) => device::launch(&paths),
         Command::Device(DeviceCommand::Diagnose) => device::diagnose(),
         Command::Device(DeviceCommand::Revoke(args)) => device_revoke(paths, args).await,
         Command::Device(DeviceCommand::RotateToken(args)) => device_rotate_token(paths, args).await,

@@ -7,7 +7,8 @@ use anyhow::{bail, Context, Result};
 use semver::Version;
 use sha1::{Digest, Sha1};
 
-use crate::broker_credentials::delete_active_broker_credential;
+use crate::broker_credentials::{delete_active_broker_credential, load_active_broker_credential};
+use crate::config::AppPaths;
 use crate::platform;
 use crate::terminal::{self, Details};
 
@@ -189,6 +190,32 @@ pub fn status() -> Result<()> {
         return Ok(());
     }
     render_inspection(&inspect(&destination, &expected_identity)?);
+    Ok(())
+}
+
+/// Verifies local prerequisites and launches the installed device application.
+pub fn launch(paths: &AppPaths) -> Result<()> {
+    ensure_macos()?;
+    let expected_identity = expected_signing_identity()?;
+    let destination = default_app_path()?;
+    if !destination.exists() {
+        bail!("device app is not installed; run agent-remote device install --source <APP>")
+    }
+    let inspection = inspect(&destination, &expected_identity)?;
+    if !inspection.valid_for_install() {
+        bail!("installed device app failed signature, Gatekeeper, bundle ID, or XPC validation")
+    }
+    load_active_broker_credential(paths)?
+        .context("device credential is missing or expired; run agent-remote login")?;
+    let status = Command::new("open")
+        .arg("-a")
+        .arg(&destination)
+        .status()
+        .context("failed to execute macOS open")?;
+    if !status.success() {
+        bail!("macOS failed to launch Agent Remote Device")
+    }
+    terminal::success_line("Launched Agent Remote Device");
     Ok(())
 }
 

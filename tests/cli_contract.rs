@@ -75,6 +75,7 @@ fn every_command_path_executes_help_successfully() {
         &["device", "install"],
         &["device", "uninstall"],
         &["device", "status"],
+        &["device", "launch"],
         &["device", "diagnose"],
         &["device", "revoke"],
         &["device", "rotate-token"],

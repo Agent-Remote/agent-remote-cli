@@ -66,7 +66,7 @@ pub enum Command {
     /// Manage reusable developer Git, GitHub CLI, and SSH profiles.
     #[command(subcommand)]
     Credentials(CredentialsCommand),
-    /// Install, inspect, diagnose, or revoke the local macOS device bridge.
+    /// Install, launch, inspect, diagnose, or revoke the local macOS device bridge.
     #[command(subcommand)]
     Device(DeviceCommand),
     /// Attach to a remote session by a unique ID prefix or full UUID.
@@ -118,6 +118,8 @@ pub enum DeviceCommand {
     Uninstall(DeviceUninstallArgs),
     /// Show the installed app version, signature, XPC services, and process status.
     Status,
+    /// Verify credentials and launch the installed Agent Remote Device app.
+    Launch,
     /// Run strict local installation and platform diagnostics.
     Diagnose,
     /// Revoke a device through the control plane and clear its local device credential.
