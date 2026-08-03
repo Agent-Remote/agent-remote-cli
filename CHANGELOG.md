@@ -2,6 +2,12 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.1.8 - 2026-08-03
+
+- feat: add local device session binding (7523163)
+- fix: lower wireguard tunnel mtu to 1000 (7819e41)
+- fix: preserve managed sync daemon across upgrades (b699ae1)
+
 ## v0.1.7 - 2026-08-01
 
 - fix: recover stale workspace sync state (132271a)
