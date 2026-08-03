@@ -105,7 +105,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 
 ## WireGuard 和 SSH
 
-`agent-remote wireguard config` 会生成或复用本地 X25519 私钥，将其保存在系统凭据存储中（失败时回退到权限为 `0600` 的文件），只向控制平面登记公钥，并写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。生成的隧道固定使用 `1380` MTU，避免实际路径 MTU 低于 WireGuard 平台默认值时 SSH 密钥交换被静默卡住。该配置在 Unix 上使用 `0600` 权限；在 Windows 上仅允许当前用户完全控制，并允许 WireGuard 的 `LocalSystem` 隧道服务读取。重复执行该命令可以自动修复注册时缺少 WireGuard peer 的设备；私钥绝不会发送到服务端。
+`agent-remote wireguard config` 会生成或复用本地 X25519 私钥，将其保存在系统凭据存储中（失败时回退到权限为 `0600` 的文件），只向控制平面登记公钥，并写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。生成的隧道固定使用 `1000` MTU，避免实际路径 MTU 低于 WireGuard 平台默认值时 SSH 密钥交换被静默卡住。该配置在 Unix 上使用 `0600` 权限；在 Windows 上仅允许当前用户完全控制，并允许 WireGuard 的 `LocalSystem` 隧道服务读取。重复执行该命令可以自动修复注册时缺少 WireGuard peer 的设备；私钥绝不会发送到服务端。
 
 `agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper，并支持用于诊断的 `--dry-run`。`agent-remote wireguard status` 会显示 `wg show` 报告的活动接口和 peer 运行状态，包括 endpoint、最近握手、传输计数和 keepalive 设置；macOS 和 Linux 上的非特权查询被内核拒绝时，会自动通过 `sudo` 重试。macOS 和 Linux 发布包提供所需的托管 WireGuard 工具；Windows 发布包内置官方 WireGuard for Windows MSI，helper 使用 `/installtunnelservice` 和 `/uninstalltunnelservice` 控制其 tunnel service，`status`、`up` 和 `down` 会在需要时通过 UAC 确认框自动请求管理员权限。
 

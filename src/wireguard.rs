@@ -11,7 +11,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use crate::api::WireGuardConfigData;
 use crate::config::AppPaths;
 
-const DEFAULT_MTU: u16 = 1380;
+const DEFAULT_MTU: u16 = 1000;
 
 pub fn generate_private_key() -> String {
     STANDARD.encode(StaticSecret::random_from_rng(OsRng).to_bytes())
@@ -171,7 +171,7 @@ mod tests {
         );
         assert!(rendered.contains("[Interface]"));
         assert!(rendered.contains(&format!("PrivateKey = {private_key}")));
-        assert!(rendered.contains("MTU = 1380"));
+        assert!(rendered.contains("MTU = 1000"));
         assert!(!rendered.contains("# PrivateKey"));
         assert!(rendered.contains("PublicKey = node-public"));
         assert!(rendered.contains("AllowedIPs = 10.42.0.10/32"));
