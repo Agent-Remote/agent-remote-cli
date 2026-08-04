@@ -166,11 +166,13 @@ pub fn uninstall() -> Result<()> {
         Err(error) => return Err(error).context("failed to inspect device app destination"),
     }
 
+    // Remove user-owned state first so permission failures cannot leave the app
+    // and credential removed while the sandbox residue remains behind.
+    remove_device_state(&home)?;
     delete_active_broker_credential(&paths)
         .context("failed to delete Network Broker credential")?;
     reset_device_permissions()?;
     remove_device_bundle(&destination)?;
-    remove_device_state(&home)?;
     terminal::success_line("Removed the local Agent Remote Device installation");
     terminal::note("Remote device registration was not revoked; use `agent-remote device revoke`.");
     Ok(())
@@ -539,19 +541,34 @@ fn validate_installed_bundle_for_removal(path: &Path) -> Result<()> {
 fn reset_device_permissions() -> Result<()> {
     for service in ["Accessibility", "ScreenCapture"] {
         for bundle_identifier in DEVICE_BUNDLE_IDENTIFIERS {
-            if !command_success(
-                "tccutil",
-                &[
-                    OsStr::new("reset"),
-                    OsStr::new(service),
-                    OsStr::new(bundle_identifier),
-                ],
-            )? {
-                bail!("failed to reset {service} permission for {bundle_identifier}")
-            }
+            reset_tcc_permission(service, bundle_identifier)?;
         }
     }
     Ok(())
+}
+
+fn reset_tcc_permission(service: &str, bundle_identifier: &str) -> Result<()> {
+    let output = Command::new("tccutil")
+        .args(["reset", service, bundle_identifier])
+        .output()
+        .with_context(|| format!("failed to execute tccutil for {service} permission"))?;
+    if output.status.success() || tccutil_reports_missing_bundle(&output.stderr) {
+        return Ok(());
+    }
+
+    let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if detail.is_empty() {
+        bail!(
+            "failed to reset {service} permission for {bundle_identifier} (exit status {})",
+            output.status
+        )
+    }
+    bail!("failed to reset {service} permission for {bundle_identifier}: {detail}")
+}
+
+fn tccutil_reports_missing_bundle(stderr: &[u8]) -> bool {
+    let detail = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    detail.contains("no such bundle identifier") || detail.contains("osstatus error -10814")
 }
 
 fn ensure_no_visibility_journal(home: &Path) -> Result<()> {
@@ -628,14 +645,29 @@ fn remove_fixed_state_path(path: &Path, library: &Path) -> Result<()> {
         bail!("refusing to remove state outside the user Library directory")
     }
     reject_symbolic_link(path)?;
-    if metadata.is_dir() {
+    let removal = if metadata.is_dir() {
         fs::remove_dir_all(path)
     } else if metadata.is_file() {
         fs::remove_file(path)
     } else {
         bail!("refusing to remove an unsupported device state entry")
+    };
+    match removal {
+        Ok(()) => Ok(()),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                && path.starts_with(library.join("Containers")) =>
+        {
+            Err(error).with_context(|| {
+                format!(
+                    "failed to remove device state {}; macOS denied access to the sandbox container; grant the current terminal Full Disk Access and retry",
+                    path.display()
+                )
+            })
+        }
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to remove device state {}", path.display())),
     }
-    .with_context(|| format!("failed to remove device state {}", path.display()))
 }
 
 fn ensure_not_downgrade(installed: Option<&str>, candidate: Option<&str>) -> Result<()> {
@@ -736,7 +768,8 @@ mod tests {
     use super::{
         ensure_no_visibility_journal, ensure_not_downgrade, parse_team_identifier,
         remove_device_state, remove_fixed_state_path, remove_known_temporary_bundle,
-        validated_bundle_path, APP_NAME, GUI_EXECUTOR_BUNDLE_IDENTIFIER,
+        tccutil_reports_missing_bundle, validated_bundle_path, APP_NAME,
+        GUI_EXECUTOR_BUNDLE_IDENTIFIER,
     };
 
     #[test]
@@ -792,6 +825,17 @@ mod tests {
             parse_team_identifier("Identifier=dev.agentremote.device\n"),
             None
         );
+    }
+
+    #[test]
+    fn missing_tcc_bundle_is_already_reset_but_other_failures_are_not_ignored() {
+        assert!(tccutil_reports_missing_bundle(
+            b"tccutil: No such bundle identifier \"dev.agentremote.device.network-broker\""
+        ));
+        assert!(tccutil_reports_missing_bundle(b"OSStatus error -10814"));
+        assert!(!tccutil_reports_missing_bundle(
+            b"tccutil: operation not permitted"
+        ));
     }
 
     #[test]
