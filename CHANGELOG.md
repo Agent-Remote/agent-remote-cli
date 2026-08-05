@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.1 - 2026-08-05
+
+- Release metadata update.
+
 ## v0.2.0 - 2026-08-04
 
 - fix: harden macos device uninstall (3c5f2ff)
