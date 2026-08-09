@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.4 - 2026-08-09
+
+- Release metadata update.
+
 ## v0.2.3 - 2026-08-09
 
 - feat: allow deleting failed sessions (cb4e299)
