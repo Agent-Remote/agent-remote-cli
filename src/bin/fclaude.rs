@@ -110,7 +110,7 @@ enum FClaudeCommand {
     Attach(AttachArgs),
     /// Stop a session using its displayed short ID or full UUID.
     Stop(SessionReferenceArgs),
-    /// Delete a stopped/interrupted session, or delete all sessions in those states.
+    /// Delete a stopped, interrupted, or failed session, or all sessions in those states.
     Delete(DeleteArgs),
     /// Forward a local loopback port to this workspace's remote session.
     Forward(ForwardArgs),
@@ -183,7 +183,7 @@ struct SessionReferenceArgs {
 
 #[derive(Debug, ClapArgs)]
 struct DeleteArgs {
-    /// Unique stopped/interrupted session ID prefix or full UUID.
+    /// Unique stopped, interrupted, or failed session ID prefix or full UUID.
     #[arg(
         value_name = "SESSION",
         required_unless_present = "all",
@@ -191,7 +191,7 @@ struct DeleteArgs {
     )]
     session_id: Option<String>,
 
-    /// Delete all stopped and interrupted Claude sessions.
+    /// Delete all stopped, interrupted, and failed Claude sessions.
     #[arg(long)]
     all: bool,
 }
@@ -487,7 +487,7 @@ async fn delete_sessions(paths: &AppPaths, target: &DeleteTarget) -> Result<()> 
         }
         DeleteTarget::AllInactive => {
             client.delete_inactive_tool_sessions(&token).await?;
-            terminal::success_line("Stopped and interrupted Claude sessions deleted");
+            terminal::success_line("Stopped, interrupted, and failed Claude sessions deleted");
         }
     }
     Ok(())

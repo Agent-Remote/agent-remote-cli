@@ -8,7 +8,7 @@
   stale local SQLite mappings and their old managed Mutagen session when remote resources changed.
 - External dependency invocation uses resolved argument vectors, checks exit status, and never interpolates server text into a shell command.
 - Interrupted sessions are not attachable; replacement behavior must not replay commands.
-- Session deletion is limited by the control plane to `stopped` and `interrupted` sessions. The CLI may delete one resolved session ID or request collection cleanup, but it must not broaden the allowed states locally.
+- Session deletion is limited by the control plane to `stopped`, `interrupted`, and `failed` sessions. The CLI may delete one resolved session ID or request collection cleanup, but it must not broaden the allowed states locally.
 - `agent-remote device launch` verifies the fixed signed APP bundle and an unexpired shared device
   credential before launching it. Candidate listing, claim/rebind, local permission checks, and
   application approval remain inside the Device APP and control plane, not the CLI.

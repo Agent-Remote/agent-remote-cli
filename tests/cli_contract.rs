@@ -107,6 +107,20 @@ fn every_command_path_executes_help_successfully() {
     }
 }
 
+#[test]
+fn fclaude_delete_help_includes_failed_sessions() {
+    let output = run(FCLAUDE, &["delete", "--help"]);
+    assert!(
+        output.status.success(),
+        "delete help failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("stopped, interrupted, or failed"),
+        "delete help does not document failed sessions"
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn device_uninstall_removes_fixed_residue_and_preserves_unrelated_data() {
