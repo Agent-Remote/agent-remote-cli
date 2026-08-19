@@ -291,10 +291,24 @@ async fn serve_local_forward(
         initial_probe_tx,
     ));
     let outcome = async {
-        let remote_ready = timeout(Duration::from_secs(20), initial_probe_rx)
-            .await
-            .context("timed out establishing the SSH tunnel")?
-            .context("tunnel supervisor stopped before establishing the SSH tunnel")?;
+        let remote_ready = tokio::select! {
+            probe = timeout(Duration::from_secs(20), initial_probe_rx) => {
+                match probe {
+                    Err(_) => return Err(anyhow!("timed out establishing the SSH tunnel")),
+                    Ok(Ok(remote_ready)) => remote_ready,
+                    Ok(Err(_)) => {
+                        return status_rx.recv().await.unwrap_or_else(|| Err(anyhow!(
+                            "tunnel supervisor stopped before establishing the SSH tunnel"
+                        )));
+                    }
+                }
+            }
+            status = status_rx.recv() => {
+                return status.unwrap_or_else(|| Err(anyhow!(
+                    "tunnel supervisor stopped before establishing the SSH tunnel"
+                )));
+            }
+        };
 
         terminal::success_line("Forward active");
         terminal::Details::new()
@@ -1184,7 +1198,7 @@ mod tests {
             .expect_err("terminal tunnel authorization must fail start");
         let message = error.to_string();
         assert!(
-            message.contains("tunnel supervisor stopped"),
+            message.contains("AUTH_INVALID"),
             "unexpected start failure: {message}"
         );
         assert!(!leaked.exists(), "connection token was passed in SSH argv");
