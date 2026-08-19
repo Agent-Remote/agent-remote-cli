@@ -2,6 +2,12 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.9 - 2026-08-19
+
+- fix: propagate tunnel startup failures (48db7cc)
+- fix: quote release branch refspec (1b28823)
+- fix: update vulnerable h2 dependency (8de3f52)
+
 ## v0.2.8 - 2026-08-19
 
 - docs: define independent release policy (4624da7)
