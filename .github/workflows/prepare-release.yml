@@ -50,7 +50,7 @@ jobs:
             git commit -m "chore: release v${version}"
           fi
           git tag "v${version}"
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git push origin "HEAD:${GITHUB_REF_NAME}"
           git push origin "v${version}"
           gh workflow run release.yml --ref "v${version}" -f version="${version}"
         env:
