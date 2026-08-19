@@ -7,3 +7,7 @@ Commits follow Conventional Commits: `type(scope): subject` or `type: subject`. 
 Install hooks with `scripts/install-githooks.sh`. `pre-commit` and `pre-push` run the full quality gate; `commit-msg` validates the subject.
 
 Pull requests must describe CLI compatibility, platform impact, server contract assumptions, security-sensitive state changes, and test coverage. Do not bypass hooks or weaken CI to merge a change.
+
+The CLI version and release cadence belong only to this repository. Preparing a CLI release must
+not require or rewrite another component's version. Supported production combinations are selected
+and verified by the root `agent-remote` release manifest and cross-component tests.
