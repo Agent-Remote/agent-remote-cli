@@ -46,8 +46,8 @@ download_source "libevent-${LIBEVENT_VERSION}.tar.gz" \
   "https://github.com/libevent/libevent/releases/download/release-${LIBEVENT_VERSION}/libevent-${LIBEVENT_VERSION}.tar.gz"
 download_source "ncurses-${NCURSES_VERSION}.tar.gz" \
   "https://ftp.gnu.org/gnu/ncurses/ncurses-${NCURSES_VERSION}.tar.gz"
-download_source "wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.xz" \
-  "https://git.zx2c4.com/wireguard-tools/snapshot/wireguard-tools-v${WIREGUARD_TOOLS_VERSION}.tar.xz"
+download_source "wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.gz" \
+  "https://github.com/WireGuard/wireguard-tools/archive/refs/tags/v${WIREGUARD_TOOLS_VERSION}.tar.gz"
 
 case "$TARGET" in
   x86_64-unknown-linux-gnu)
@@ -131,7 +131,7 @@ if [ "$TARGET_OS" = linux ]; then
 fi
 
 (
-  cd "$WORK/src/wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.xz/src"
+  cd "$WORK/src/wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.gz/src"
   make -j2 CC="$CC_BIN" PKG_CONFIG_PATH="$managed_pkg_config" \
     PKG_CONFIG_LIBDIR="$managed_pkg_config" \
     CFLAGS="-O2 -I$WORK/prefix/include -DRUNSTATEDIR=\\\"/var/run\\\"" \
@@ -153,7 +153,7 @@ fi
 cp "$WORK/src/tmux-${TMUX_VERSION}.tar.gz/COPYING" "$LICENSE_DEST/tmux-COPYING"
 cp "$WORK/src/libevent-${LIBEVENT_VERSION}.tar.gz/LICENSE" "$LICENSE_DEST/libevent-LICENSE"
 cp "$WORK/src/ncurses-${NCURSES_VERSION}.tar.gz/COPYING" "$LICENSE_DEST/ncurses-COPYING"
-cp "$WORK/src/wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.xz/COPYING" "$LICENSE_DEST/wireguard-tools-COPYING"
+cp "$WORK/src/wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.gz/COPYING" "$LICENSE_DEST/wireguard-tools-COPYING"
 if [ "$TARGET_OS" = linux ]; then
   cp "$WORK/src/libmnl-${LIBMNL_VERSION}.tar.bz2/COPYING" "$LICENSE_DEST/libmnl-COPYING"
 fi

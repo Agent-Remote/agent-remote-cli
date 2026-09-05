@@ -140,7 +140,7 @@ for target in $TARGETS; do
       "name": "wireguard-tools",
       "required_version": "${WIREGUARD_TOOLS_VERSION}",
       "binary": "bin/wg",
-      "source": "dependencies/sources/wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.xz",
+      "source": "dependencies/sources/wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.gz",
       "license": "GPL-2.0-only",
       "license_notice": "See dependencies/licenses/wireguard-tools-COPYING",
       "binary_sha256": "$(sha256_file "$work/bin/wg")"

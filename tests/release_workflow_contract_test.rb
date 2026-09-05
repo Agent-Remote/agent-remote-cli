@@ -5,6 +5,7 @@ require "yaml"
 root = File.expand_path("..", __dir__)
 workflow = YAML.safe_load(File.read(File.join(root, ".github/workflows/release.yml")), aliases: true)
 text = File.read(File.join(root, ".github/workflows/release.yml"))
+managed_tools = File.read(File.join(root, "scripts/build-managed-tools.sh"))
 
 [
   "refs/tags/v${version}",
@@ -33,3 +34,7 @@ windows_arm64 = windows_matrix.find { |entry| entry["target"] == "aarch64-pc-win
 raise "Windows ARM64 release target is missing" unless windows_arm64
 raise "Windows ARM64 must use the cosign-compatible runner" unless windows_arm64["os"] == "windows-latest"
 raise "release publish does not depend on audit" unless workflow.dig("jobs", "publish", "needs").include?("audit")
+
+raise "managed tool source uses the retired WireGuard snapshot endpoint" if managed_tools.include?("git.zx2c4.com/wireguard-tools/snapshot")
+wireguard_tools_url = 'https://github.com/WireGuard/wireguard-tools/archive/refs/tags/v${WIREGUARD_TOOLS_VERSION}.tar.gz'
+raise "managed tool source does not use the official WireGuard tag archive" unless managed_tools.include?(wireguard_tools_url)
