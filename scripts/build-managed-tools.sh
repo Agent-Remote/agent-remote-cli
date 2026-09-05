@@ -12,6 +12,19 @@ NCURSES_VERSION="${NCURSES_VERSION:-6.5}"
 LIBMNL_VERSION="${LIBMNL_VERSION:-1.0.5}"
 WIREGUARD_TOOLS_VERSION="${WIREGUARD_TOOLS_VERSION:-1.0.20210914}"
 WIREGUARD_GO_VERSION="${WIREGUARD_GO_VERSION:-0.0.20250522}"
+MANAGED_TOOLS_CACHE_DIR="${MANAGED_TOOLS_CACHE_DIR:-}"
+
+if [[ -n "${MANAGED_TOOLS_BUILD_JOBS:-}" ]]; then
+  BUILD_JOBS="$MANAGED_TOOLS_BUILD_JOBS"
+elif command -v nproc >/dev/null 2>&1; then
+  BUILD_JOBS="$(nproc)"
+else
+  BUILD_JOBS="$(sysctl -n hw.ncpu)"
+fi
+if ! [[ "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "managed tool build jobs must be a positive integer" >&2
+  exit 2
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -19,6 +32,21 @@ mkdir -p "$DEST" "$SOURCE_DEST" "$LICENSE_DEST" "$WORK/prefix"
 DEST="$(cd "$DEST" && pwd)"
 SOURCE_DEST="$(cd "$SOURCE_DEST" && pwd)"
 LICENSE_DEST="$(cd "$LICENSE_DEST" && pwd)"
+
+cache_root=""
+if [[ -n "$MANAGED_TOOLS_CACHE_DIR" ]]; then
+  mkdir -p "$MANAGED_TOOLS_CACHE_DIR"
+  MANAGED_TOOLS_CACHE_DIR="$(cd "$MANAGED_TOOLS_CACHE_DIR" && pwd)"
+  cache_variant="tmux-$TMUX_VERSION-libevent-$LIBEVENT_VERSION-ncurses-$NCURSES_VERSION-libmnl-$LIBMNL_VERSION-wg-$WIREGUARD_TOOLS_VERSION-wg-go-$WIREGUARD_GO_VERSION"
+  cache_root="$MANAGED_TOOLS_CACHE_DIR/$TARGET/$cache_variant"
+  if [[ -f "$cache_root/.complete" ]]; then
+    cp -R "$cache_root/bin/." "$DEST/"
+    cp -R "$cache_root/sources/." "$SOURCE_DEST/"
+    cp -R "$cache_root/licenses/." "$LICENSE_DEST/"
+    echo "restored managed tools from $cache_root"
+    exit 0
+  fi
+fi
 
 download_source() {
   local name="$1" url="$2" archive source_dir attempt
@@ -81,7 +109,7 @@ fi
   cd "$WORK/src/libevent-${LIBEVENT_VERSION}.tar.gz"
   ./configure ${HOST_ARG:+--host="$HOST_ARG"} --prefix="$WORK/prefix" --disable-shared --enable-static \
     --disable-openssl --disable-samples --disable-libevent-regress
-  make -j2
+  make -j"$BUILD_JOBS"
   make install
 )
 tmux_cppflags="-I$WORK/prefix/include"
@@ -94,7 +122,7 @@ if [ "$TARGET_OS" = linux ]; then
       --prefix="$WORK/prefix" --without-shared --with-normal \
       --without-debug --without-ada --without-cxx --without-cxx-binding --without-progs --without-manpages \
       --without-tests --without-tack --enable-widec
-    make -j2
+    make -j"$BUILD_JOBS"
     make install
   )
   ln -sf libncursesw.a "$WORK/prefix/lib/libncurses.a"
@@ -115,7 +143,7 @@ fi
       LDFLAGS="-L$WORK/prefix/lib" LIBS="$tmux_libs" CC="$CC_BIN" \
       ./configure ${HOST_ARG:+--host="$HOST_ARG"} --disable-utf8proc
   fi
-  make -j2
+  make -j"$BUILD_JOBS"
   install -m 0755 tmux "$DEST/tmux"
 )
 
@@ -125,14 +153,14 @@ if [ "$TARGET_OS" = linux ]; then
   (
     cd "$WORK/src/libmnl-${LIBMNL_VERSION}.tar.bz2"
     CC="$CC_BIN" ./configure ${HOST_ARG:+--host="$HOST_ARG"} --prefix="$WORK/prefix" --disable-shared --enable-static
-    make -j2
+    make -j"$BUILD_JOBS"
     make install
   )
 fi
 
 (
   cd "$WORK/src/wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.gz/src"
-  make -j2 CC="$CC_BIN" PKG_CONFIG_PATH="$managed_pkg_config" \
+  make -j"$BUILD_JOBS" CC="$CC_BIN" PKG_CONFIG_PATH="$managed_pkg_config" \
     PKG_CONFIG_LIBDIR="$managed_pkg_config" \
     CFLAGS="-O2 -I$WORK/prefix/include -DRUNSTATEDIR=\\\"/var/run\\\"" \
     LDFLAGS="-L$WORK/prefix/lib" wg
@@ -156,4 +184,12 @@ cp "$WORK/src/ncurses-${NCURSES_VERSION}.tar.gz/COPYING" "$LICENSE_DEST/ncurses-
 cp "$WORK/src/wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.gz/COPYING" "$LICENSE_DEST/wireguard-tools-COPYING"
 if [ "$TARGET_OS" = linux ]; then
   cp "$WORK/src/libmnl-${LIBMNL_VERSION}.tar.bz2/COPYING" "$LICENSE_DEST/libmnl-COPYING"
+fi
+
+if [[ -n "$cache_root" ]]; then
+  mkdir -p "$cache_root/bin" "$cache_root/sources" "$cache_root/licenses"
+  cp -R "$DEST/." "$cache_root/bin/"
+  cp -R "$SOURCE_DEST/." "$cache_root/sources/"
+  cp -R "$LICENSE_DEST/." "$cache_root/licenses/"
+  touch "$cache_root/.complete"
 fi

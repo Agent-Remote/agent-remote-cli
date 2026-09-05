@@ -8,11 +8,39 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
+
+concurrency:
+  group: install-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      packaging: ${{ steps.filter.outputs.packaging }}
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dorny/paths-filter@v4.0.3
+        id: filter
+        with:
+          filters: |
+            packaging:
+              - '.github/workflows/install-smoke.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'packaging/**'
+              - 'scripts/**'
+              - 'src/**'
+              - 'tests/install_smoke_test.*'
+
   install:
     name: install (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.packaging == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +56,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: install-smoke-${{ matrix.target }}
       - uses: actions/setup-go@v6
         if: runner.os != 'Windows'
         with:
@@ -43,12 +74,19 @@ jobs:
           else
             brew install automake pkg-config
           fi
+      - name: Restore managed tool binaries
+        if: runner.os != 'Windows'
+        uses: actions/cache@v6.1.0
+        with:
+          path: .cache/managed-tools/${{ matrix.target }}
+          key: managed-tools-v1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('scripts/build-managed-tools.sh') }}
       - name: Build and install Unix package
         if: runner.os != 'Windows'
         shell: bash
         env:
           TARGETS: ${{ matrix.target }}
           VERSION: 0.0.0-install-ci
+          MANAGED_TOOLS_CACHE_DIR: ${{ github.workspace }}/.cache/managed-tools
         run: |
           scripts/package-release.sh
           package="$PWD/dist/agent-remote-cli-${VERSION}-${TARGETS}"

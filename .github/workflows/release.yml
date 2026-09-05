@@ -16,9 +16,14 @@ permissions:
   id-token: write
   attestations: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7.0.0
       - name: Resolve release version
@@ -65,6 +70,7 @@ jobs:
   release:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     environment: production-community-release
     strategy:
       fail-fast: false
@@ -83,6 +89,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: release-${{ matrix.target }}
       - uses: actions/setup-go@v6
         with:
           go-version: "1.24.x"
@@ -100,6 +109,11 @@ jobs:
           else
             brew install automake pkg-config
           fi
+      - name: Restore managed tool binaries
+        uses: actions/cache@v6.1.0
+        with:
+          path: .cache/managed-tools/${{ matrix.target }}
+          key: managed-tools-v1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('scripts/build-managed-tools.sh') }}
       - name: Resolve release version
         id: version
         env:
@@ -120,6 +134,7 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           DEVICE_APP_SIGNER_CERTIFICATE_SHA1: ${{ vars.COMMUNITY_SIGNER_CERTIFICATE_SHA1 }}
+          MANAGED_TOOLS_CACHE_DIR: ${{ github.workspace }}/.cache/managed-tools
           TARGETS: ${{ matrix.target }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |
@@ -179,6 +194,7 @@ jobs:
   release-windows:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -192,6 +208,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: release-${{ matrix.target }}
       - name: Resolve release version
         id: version
         shell: pwsh
@@ -251,6 +270,7 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [audit, release, release-windows]
     steps:
       - name: Resolve release version

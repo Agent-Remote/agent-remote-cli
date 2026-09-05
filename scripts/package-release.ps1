@@ -9,6 +9,24 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+function Invoke-Download {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile
+    )
+
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile
+            return
+        }
+        catch {
+            if ($attempt -eq 5) { throw }
+            Start-Sleep -Seconds ([Math]::Pow(2, $attempt - 1))
+        }
+    }
+}
+
 if (-not $Version) {
     $manifest = Get-Content Cargo.toml -Raw
     $Version = [regex]::Match($manifest, '(?m)^version = "([^"]+)"').Groups[1].Value
@@ -41,7 +59,7 @@ Copy-Item "target/$Target/release/agent-remote-ssh.exe" "$bin/ssh.exe"
 
 $download = Join-Path ([System.IO.Path]::GetTempPath()) "agent-remote-mutagen-$([guid]::NewGuid()).tar.gz"
 $mutagenUrl = "https://github.com/mutagen-io/mutagen/releases/download/v$MutagenVersion/mutagen_windows_$($architecture.Mutagen)_v$MutagenVersion.tar.gz"
-Invoke-WebRequest -Uri $mutagenUrl -OutFile $download
+Invoke-Download -Uri $mutagenUrl -OutFile $download
 tar.exe -xzf $download -C $bin
 if ($LASTEXITCODE -ne 0) { throw "failed to extract Mutagen" }
 Remove-Item $download
@@ -49,14 +67,14 @@ Remove-Item $download
 $wireGuardMsiName = "wireguard-$($architecture.WireGuard)-$WireGuardVersion.msi"
 $wireGuardMsiUrl = "https://download.wireguard.com/windows-client/$wireGuardMsiName"
 $wireGuardMsi = Join-Path $installers $wireGuardMsiName
-Invoke-WebRequest -Uri $wireGuardMsiUrl -OutFile $wireGuardMsi
+Invoke-Download -Uri $wireGuardMsiUrl -OutFile $wireGuardMsi
 
 $wireGuardSourceName = "wireguard-windows-$WireGuardVersion.tar.gz"
 $wireGuardSourceUrl = "https://github.com/WireGuard/wireguard-windows/archive/refs/tags/v$WireGuardVersion.tar.gz"
 $wireGuardSource = Join-Path $sources $wireGuardSourceName
-Invoke-WebRequest -Uri $wireGuardSourceUrl -OutFile $wireGuardSource
+Invoke-Download -Uri $wireGuardSourceUrl -OutFile $wireGuardSource
 $wireGuardLicense = Join-Path $licenses "wireguard-windows-COPYING"
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/WireGuard/wireguard-windows/v$WireGuardVersion/COPYING" -OutFile $wireGuardLicense
+Invoke-Download -Uri "https://raw.githubusercontent.com/WireGuard/wireguard-windows/v$WireGuardVersion/COPYING" -OutFile $wireGuardLicense
 
 $manifest = [ordered]@{
     schema_version = 1

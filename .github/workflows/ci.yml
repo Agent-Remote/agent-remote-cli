@@ -8,10 +8,44 @@ on:
 permissions:
   contents: read
   id-token: write
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      audit: ${{ steps.filter.outputs.audit }}
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: dorny/paths-filter@v4.0.3
+        id: filter
+        with:
+          filters: |
+            audit:
+              - '.github/workflows/ci.yml'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+            rust:
+              - '.github/workflows/**'
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'codecov.yml'
+              - 'packaging/**'
+              - 'scripts/**'
+              - 'src/**'
+              - 'tests/**'
+
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: changes
+    if: needs.changes.outputs.audit == 'true'
     steps:
       - uses: actions/checkout@v7.0.0
       - uses: taiki-e/install-action@v2
@@ -30,6 +64,9 @@ jobs:
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -39,7 +76,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - shell: bash
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          key: ci-${{ matrix.os }}
+      - name: Run static quality checks
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: scripts/run-static-checks.sh
+      - name: Run platform quality checks
+        if: matrix.os != 'ubuntu-latest'
+        shell: bash
         run: scripts/run-quality-checks.sh
       - name: Install cargo-llvm-cov
         if: matrix.os == 'ubuntu-latest'
@@ -52,6 +98,6 @@ jobs:
         uses: codecov/codecov-action@v7.0.0
         with:
           disable_search: true
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           files: ./lcov.info
           use_oidc: true
