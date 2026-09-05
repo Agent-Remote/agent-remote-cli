@@ -685,7 +685,11 @@ async fn proxy_local_connection(
         Ok(Ok(sender)) => sender,
         _ => return,
     };
-    let _ = proxy_stream(connection, sender, &forward_id).await;
+    if let Err(error) = proxy_stream(connection, sender, &forward_id).await {
+        terminal::warning_line(format!(
+            "Port-forward stream {forward_id} closed with an error: {error:#}"
+        ));
+    }
 }
 
 async fn wait_for_sender(
