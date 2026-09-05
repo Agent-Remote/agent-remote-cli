@@ -2,6 +2,13 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.10 - 2026-09-05
+
+- fix: report port-forward stream failures (05d106e)
+- ci: optimize workflow execution (8dedd0e)
+- fix(packaging): use available wireguard source archive (3df61b3)
+- feat(device): install app from local zip archive (845bb5e)
+
 ## v0.2.9 - 2026-08-19
 
 - fix: propagate tunnel startup failures (48db7cc)
