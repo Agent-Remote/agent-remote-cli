@@ -1,11 +1,15 @@
+use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 
 use anyhow::{bail, Context, Result};
 use semver::Version;
 use sha1::{Digest, Sha1};
+use tempfile::{Builder as TempDirBuilder, TempDir};
+use zip::ZipArchive;
 
 use crate::broker_credentials::{delete_active_broker_credential, load_active_broker_credential};
 use crate::config::AppPaths;
@@ -24,6 +28,9 @@ const GUI_EXECUTOR_EXECUTABLE: &str = "AgentRemoteGUIExecutor";
 const DEVICE_TEAM_IDENTIFIER: Option<&str> = option_env!("AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER");
 const DEVICE_SIGNER_CERTIFICATE_SHA1: Option<&str> =
     option_env!("AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1");
+const MAX_DEVICE_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_DEVICE_ARCHIVE_ENTRIES: usize = 50_000;
+const MAX_DEVICE_ARCHIVE_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
 const DEVICE_BUNDLE_IDENTIFIERS: [&str; 3] = [
     APP_BUNDLE_IDENTIFIER,
     NETWORK_BROKER_BUNDLE_IDENTIFIER,
@@ -55,12 +62,23 @@ impl DeviceAppInspection {
     }
 }
 
-/// Verifies and atomically installs a signed device application bundle.
+struct PreparedInstallSource {
+    bundle: PathBuf,
+    _extraction_directory: Option<TempDir>,
+}
+
+impl PreparedInstallSource {
+    fn bundle(&self) -> &Path {
+        &self.bundle
+    }
+}
+
+/// Verifies and atomically installs a signed device application bundle or ZIP archive.
 pub fn install(source: &Path) -> Result<()> {
     ensure_macos()?;
     let expected_identity = expected_signing_identity()?;
-    let source = validated_bundle_path(source).context("invalid device app source")?;
-    let source_status = inspect(&source, &expected_identity)?;
+    let prepared_source = prepare_install_source(source).context("invalid device app source")?;
+    let source_status = inspect(prepared_source.bundle(), &expected_identity)?;
     if !source_status.valid_for_install() {
         bail!("device app failed signature, Gatekeeper, bundle ID, or XPC validation")
     }
@@ -87,7 +105,7 @@ pub fn install(source: &Path) -> Result<()> {
     remove_known_temporary_bundle(&backup, applications)?;
 
     let copied = Command::new("ditto")
-        .arg(&source)
+        .arg(prepared_source.bundle())
         .arg(&staging)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -143,6 +161,185 @@ pub fn install(source: &Path) -> Result<()> {
     terminal::success_line(format!("Installed {}", destination.display()));
     if let Some(version) = staged_status.version {
         Details::new().field("Version", version).render();
+    }
+    Ok(())
+}
+
+fn prepare_install_source(source: &Path) -> Result<PreparedInstallSource> {
+    let metadata = fs::symlink_metadata(source)
+        .with_context(|| format!("failed to inspect {}", source.display()))?;
+    if metadata.file_type().is_symlink() {
+        bail!("source must not be a symbolic link")
+    }
+    if metadata.is_dir() {
+        return Ok(PreparedInstallSource {
+            bundle: validated_bundle_path(source)?,
+            _extraction_directory: None,
+        });
+    }
+    if !metadata.is_file()
+        || !source
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    {
+        bail!("source must be {APP_NAME} or a local ZIP archive")
+    }
+
+    let source = source
+        .canonicalize()
+        .with_context(|| format!("failed to resolve {}", source.display()))?;
+    let working_directory = TempDirBuilder::new()
+        .prefix("agent-remote-device-install-")
+        .tempdir()
+        .context("failed to create device archive extraction directory")?;
+    let archive = working_directory.path().join("source.zip");
+    copy_archive_bounded(&source, &archive)?;
+    validate_device_archive(&archive)?;
+    let extraction_directory = working_directory.path().join("extracted");
+    fs::create_dir(&extraction_directory)
+        .context("failed to create device archive extraction directory")?;
+    let extracted = Command::new("ditto")
+        .args([OsStr::new("-x"), OsStr::new("-k")])
+        .arg(&archive)
+        .arg(&extraction_directory)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to execute ditto for the device archive")?;
+    if !extracted.success() {
+        bail!("ditto failed while extracting the device archive")
+    }
+    ensure_single_extracted_bundle(&extraction_directory)?;
+    let bundle = validated_bundle_path(&extraction_directory.join(APP_NAME))?;
+    Ok(PreparedInstallSource {
+        bundle,
+        _extraction_directory: Some(working_directory),
+    })
+}
+
+fn copy_archive_bounded(source: &Path, destination: &Path) -> Result<()> {
+    let input = File::open(source)
+        .with_context(|| format!("failed to open device archive {}", source.display()))?;
+    let mut limited = input.take(MAX_DEVICE_ARCHIVE_BYTES + 1);
+    let mut output = File::create(destination).context("failed to stage device archive")?;
+    let copied = io::copy(&mut limited, &mut output).context("failed to stage device archive")?;
+    if copied == 0 || copied > MAX_DEVICE_ARCHIVE_BYTES {
+        bail!("device archive must be between 1 byte and 512 MiB")
+    }
+    Ok(())
+}
+
+fn validate_device_archive(path: &Path) -> Result<()> {
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("failed to inspect device archive {}", path.display()))?;
+    if metadata.len() == 0 || metadata.len() > MAX_DEVICE_ARCHIVE_BYTES {
+        bail!("device archive must be between 1 byte and 512 MiB")
+    }
+
+    let file = File::open(path)
+        .with_context(|| format!("failed to open device archive {}", path.display()))?;
+    let mut local_headers = File::open(path)
+        .with_context(|| format!("failed to open device archive {}", path.display()))?;
+    let mut archive = ZipArchive::new(file).context("device archive is not a valid ZIP file")?;
+    if archive.is_empty() || archive.len() > MAX_DEVICE_ARCHIVE_ENTRIES {
+        bail!("device archive must contain between 1 and {MAX_DEVICE_ARCHIVE_ENTRIES} entries")
+    }
+
+    let app_root = Path::new(APP_NAME);
+    let mut declared_size = 0_u64;
+    let mut expanded_size = 0_u64;
+    let mut member_paths = HashSet::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .with_context(|| format!("failed to read device archive entry {index}"))?;
+        validate_local_header_name(&mut local_headers, &entry)
+            .with_context(|| format!("device archive entry {index} has an invalid local header"))?;
+        if entry.encrypted() {
+            bail!("device archive must not contain encrypted entries")
+        }
+        if entry.is_symlink() || archive_entry_is_special(&entry) {
+            bail!("device archive must contain only regular files and directories")
+        }
+        let enclosed_name = entry
+            .enclosed_name()
+            .context("device archive contains an unsafe member path")?;
+        if entry
+            .name()
+            .split('/')
+            .any(|component| component == "." || component == "..")
+            || !enclosed_name.starts_with(app_root)
+        {
+            bail!("device archive entries must be contained in {APP_NAME}")
+        }
+        if !member_paths.insert(enclosed_name.clone()) {
+            bail!("device archive contains duplicate member paths")
+        }
+        declared_size = declared_size
+            .checked_add(entry.size())
+            .context("device archive expanded size overflowed")?;
+        if declared_size > MAX_DEVICE_ARCHIVE_EXPANDED_BYTES {
+            bail!("device archive expands beyond 1 GiB")
+        }
+
+        let remaining = MAX_DEVICE_ARCHIVE_EXPANDED_BYTES - expanded_size;
+        let bytes_read = io::copy(&mut entry.by_ref().take(remaining + 1), &mut io::sink())
+            .with_context(|| format!("failed to verify device archive entry {index}"))?;
+        if bytes_read > remaining {
+            bail!("device archive expands beyond 1 GiB")
+        }
+        if bytes_read != entry.size() {
+            bail!("device archive entry size does not match its metadata")
+        }
+        expanded_size += bytes_read;
+    }
+    Ok(())
+}
+
+fn validate_local_header_name(
+    archive: &mut File,
+    entry: &zip::read::ZipFile<'_, File>,
+) -> Result<()> {
+    const LOCAL_HEADER_BYTES: usize = 30;
+    let mut header = [0_u8; LOCAL_HEADER_BYTES];
+    archive
+        .seek(SeekFrom::Start(entry.header_start()))
+        .context("failed to seek to ZIP local header")?;
+    archive
+        .read_exact(&mut header)
+        .context("failed to read ZIP local header")?;
+    if &header[..4] != b"PK\x03\x04" {
+        bail!("ZIP local header signature is invalid")
+    }
+    let name_length = usize::from(u16::from_le_bytes([header[26], header[27]]));
+    let mut local_name = vec![0_u8; name_length];
+    archive
+        .read_exact(&mut local_name)
+        .context("failed to read ZIP local member name")?;
+    if local_name != entry.name_raw() {
+        bail!("ZIP central and local member names do not match")
+    }
+    Ok(())
+}
+
+fn archive_entry_is_special(entry: &zip::read::ZipFile<'_, File>) -> bool {
+    entry.unix_mode().is_some_and(|mode| {
+        let file_type = mode & 0o170_000;
+        file_type != 0 && file_type != 0o040_000 && file_type != 0o100_000
+    })
+}
+
+fn ensure_single_extracted_bundle(directory: &Path) -> Result<()> {
+    let mut entries = fs::read_dir(directory)
+        .context("failed to inspect extracted device archive")?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if entries.len() != 1
+        || entries
+            .pop()
+            .is_none_or(|entry| entry.file_name() != APP_NAME)
+    {
+        bail!("device archive must contain only one top-level {APP_NAME} bundle")
     }
     Ok(())
 }
@@ -758,19 +955,43 @@ fn ensure_macos() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::fs::{self, File, OpenOptions};
+    use std::io::{Seek, SeekFrom, Write};
 
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
+    #[cfg(target_os = "macos")]
+    use std::process::Command;
 
     use tempfile::tempdir;
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
 
+    #[cfg(target_os = "macos")]
+    use super::prepare_install_source;
     use super::{
         ensure_no_visibility_journal, ensure_not_downgrade, parse_team_identifier,
         remove_device_state, remove_fixed_state_path, remove_known_temporary_bundle,
-        tccutil_reports_missing_bundle, validated_bundle_path, APP_NAME,
+        tccutil_reports_missing_bundle, validate_device_archive, validated_bundle_path, APP_NAME,
         GUI_EXECUTOR_BUNDLE_IDENTIFIER,
     };
+
+    fn write_test_archive(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        let mut archive = ZipWriter::new(File::create(path).unwrap());
+        for (name, content) in entries {
+            if name.ends_with('/') {
+                archive
+                    .add_directory(*name, SimpleFileOptions::default())
+                    .unwrap();
+            } else {
+                archive
+                    .start_file(*name, SimpleFileOptions::default())
+                    .unwrap();
+                archive.write_all(content).unwrap();
+            }
+        }
+        archive.finish().unwrap();
+    }
 
     #[test]
     fn source_requires_the_fixed_non_symlink_app_name() {
@@ -785,6 +1006,82 @@ mod tests {
             validated_bundle_path(&expected).unwrap(),
             expected.canonicalize().unwrap()
         );
+    }
+
+    #[test]
+    fn archive_requires_every_entry_inside_the_fixed_app_bundle() {
+        let directory = tempdir().unwrap();
+        let valid = directory.path().join("device.zip");
+        write_test_archive(
+            &valid,
+            &[
+                ("Agent Remote Device.app/", b""),
+                ("Agent Remote Device.app/Contents/Info.plist", b"plist"),
+            ],
+        );
+        validate_device_archive(&valid).unwrap();
+
+        let sibling = directory.path().join("sibling.zip");
+        write_test_archive(
+            &sibling,
+            &[
+                ("Agent Remote Device.app/Contents/Info.plist", b"plist"),
+                ("unexpected.txt", b"unexpected"),
+            ],
+        );
+        assert!(validate_device_archive(&sibling).is_err());
+
+        let traversal = directory.path().join("traversal.zip");
+        write_test_archive(
+            &traversal,
+            &[("Agent Remote Device.app/../outside", b"unsafe")],
+        );
+        assert!(validate_device_archive(&traversal).is_err());
+
+        let symlink = directory.path().join("symlink.zip");
+        let mut archive = ZipWriter::new(File::create(&symlink).unwrap());
+        archive
+            .add_symlink(
+                "Agent Remote Device.app/Contents/link",
+                "../../../outside",
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+        archive.finish().unwrap();
+        assert!(validate_device_archive(&symlink).is_err());
+
+        let inconsistent = directory.path().join("inconsistent.zip");
+        write_test_archive(
+            &inconsistent,
+            &[("Agent Remote Device.app/Contents/Info.plist", b"plist")],
+        );
+        let mut archive = OpenOptions::new().write(true).open(&inconsistent).unwrap();
+        archive.seek(SeekFrom::Start(30)).unwrap();
+        archive.write_all(b"X").unwrap();
+        drop(archive);
+        assert!(validate_device_archive(&inconsistent).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn archive_source_is_extracted_to_a_temporary_app_bundle() {
+        let directory = tempdir().unwrap();
+        let archive = directory.path().join("device.ZIP");
+        let bundle = directory.path().join(APP_NAME);
+        fs::create_dir_all(bundle.join("Contents")).unwrap();
+        fs::write(bundle.join("Contents/Info.plist"), b"plist").unwrap();
+        assert!(Command::new("ditto")
+            .args(["-c", "-k", "--keepParent"])
+            .arg(&bundle)
+            .arg(&archive)
+            .status()
+            .unwrap()
+            .success());
+
+        let prepared = prepare_install_source(&archive).unwrap();
+
+        assert_eq!(prepared.bundle().file_name().unwrap(), APP_NAME);
+        assert!(prepared.bundle().join("Contents/Info.plist").is_file());
     }
 
     #[test]

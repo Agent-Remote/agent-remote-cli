@@ -36,7 +36,7 @@ agent-remote account verify <account-id>
 agent-remote account status <account-id>
 agent-remote ssh check --session-id <session-id>
 agent-remote attach <session-id> --print-only
-agent-remote device install --source "/path/to/Agent Remote Device.app"
+agent-remote device install --source "/path/to/agent-remote-device-macos-0.2.12.zip"
 agent-remote device uninstall [--yes]
 agent-remote device status
 agent-remote device diagnose
@@ -99,7 +99,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 
 ## 本地设备控制
 
-`agent-remote device install` 只接受显式指定、名称固定为 `Agent Remote Device.app` 的本地 app bundle。community 正式 CLI 会在暂存前后验证固定 bundle identifier、编译进 CLI 的项目自签名证书指纹、由同一身份签名的 Network Broker 与 GUI Executor XPC service，以及完整代码签名；随后只对已验证的暂存 bundle 移除 quarantine，并原子安装到 `~/Applications/Agent Remote Device.app`。允许重装相同语义版本和升级；拒绝降级，以及缺少版本或版本格式无效的 bundle。该命令不会下载或执行项目内容或 API 响应提供的安装地址。community 构建只从受保护的 `production-community-release` 环境取得证书指纹，并将 Gatekeeper 状态显示为 `manual trust`，不会声称已经 Apple 公证。
+`agent-remote device install` 接受显式指定的本地发布 ZIP 压缩包，或名称固定为 `Agent Remote Device.app` 的 app bundle。CLI 会限制并校验 ZIP 的大小和成员路径，将其复制到私有临时目录后自动解压；压缩包根目录只能包含该固定 app bundle。community 正式 CLI 随后会在暂存前后验证固定 bundle identifier、编译进 CLI 的项目自签名证书指纹、由同一身份签名的 Network Broker 与 GUI Executor XPC service，以及完整代码签名；只对已验证的暂存 bundle 移除 quarantine，并原子安装到 `~/Applications/Agent Remote Device.app`。允许重装相同语义版本和升级；拒绝降级，以及缺少版本或版本格式无效的 bundle。该命令不会下载或执行项目内容或 API 响应提供的安装地址。community 构建只从受保护的 `production-community-release` 环境取得证书指纹，并将 Gatekeeper 状态显示为 `manual trust`，不会声称已经 Apple 公证。
 
 `agent-remote device status` 显示已安装版本、签名、XPC 和进程状态；`agent-remote device diagnose` 执行相同的严格检查，安装不可信时返回非零状态。`agent-remote device uninstall` 要求 app 已停止，删除固定 app bundle、共享 Broker 凭据、TCC 授权及各 bundle 自有的沙盒数据，但不会撤销远端注册；存在隐藏应用恢复日志时会拒绝继续。`agent-remote device revoke` 要求本地已保存用户 token，未指定 `--yes` 时先确认，通过控制平面撤销指定或当前设备，并删除对应的本地设备凭据与刷新状态。`agent-remote device rotate-token` 只轮换当前 active device，通过控制面取得新令牌后不会打印令牌，并立即覆盖本机平台凭据和共享 Network Broker 凭据；执行前必须先停止活动的设备控制 session。
 

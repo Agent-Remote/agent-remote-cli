@@ -112,7 +112,7 @@ pub enum ForwardAction {
 #[derive(Debug, Subcommand)]
 /// Commands for managing the local macOS device bridge.
 pub enum DeviceCommand {
-    /// Verify and atomically install a signed Agent Remote Device app bundle.
+    /// Verify and atomically install a signed Agent Remote Device app bundle or ZIP archive.
     Install(DeviceInstallArgs),
     /// Remove the local device app, credentials, permissions, and sandbox data.
     Uninstall(DeviceUninstallArgs),
@@ -129,10 +129,10 @@ pub enum DeviceCommand {
 }
 
 #[derive(Debug, Args)]
-/// Arguments for installing a signed device application bundle.
+/// Arguments for installing a signed device application bundle or ZIP archive.
 pub struct DeviceInstallArgs {
-    /// Signed and notarized Agent Remote Device.app bundle to install.
-    #[arg(long, value_name = "APP")]
+    /// Local Agent Remote Device.app bundle or release ZIP archive to install.
+    #[arg(long, value_name = "APP_OR_ZIP")]
     pub source: PathBuf,
 }
 
@@ -665,6 +665,22 @@ mod tests {
                 if args.source == std::path::Path::new("/tmp/Agent Remote Device.app")
         ));
         assert!(Cli::try_parse_from(["agent-remote", "device", "install"]).is_err());
+
+        let archive = Cli::try_parse_from([
+            "agent-remote",
+            "device",
+            "install",
+            "--source",
+            "/tmp/agent-remote-device-macos-1.2.3.zip",
+        ])
+        .unwrap();
+        assert!(matches!(
+            archive.command,
+            CliCommand::Device(DeviceCommand::Install(args))
+                if args.source == std::path::Path::new(
+                    "/tmp/agent-remote-device-macos-1.2.3.zip"
+                )
+        ));
 
         let uninstall =
             Cli::try_parse_from(["agent-remote", "device", "uninstall", "--yes"]).unwrap();
