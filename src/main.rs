@@ -6,6 +6,7 @@ mod config;
 mod dependencies;
 mod device;
 mod doctor;
+mod ego_browser;
 mod identifiers;
 mod local_state;
 mod mutagen;
@@ -118,6 +119,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Device(DeviceCommand::Diagnose) => device::diagnose(),
         Command::Device(DeviceCommand::Revoke(args)) => device_revoke(paths, args).await,
         Command::Device(DeviceCommand::RotateToken(args)) => device_rotate_token(paths, args).await,
+        Command::EgoBrowser(command) => ego_browser::run(paths, command).await,
         Command::Attach(args) => attach(paths, args).await,
     }
 }

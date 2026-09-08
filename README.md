@@ -43,6 +43,10 @@ agent-remote device launch
 agent-remote device diagnose
 agent-remote device revoke [--device <device-id>] [--yes]
 agent-remote device rotate-token [--yes]
+agent-remote ego-browser status [<binding-id>]
+agent-remote ego-browser requests <binding-id>
+agent-remote ego-browser cancel-request <binding-id> <request-ledger-id> [--yes]
+agent-remote ego-browser pause|stop|revoke <binding-id> --generation <generation> [--yes]
 agent-remote logout [--no-revoke-remote]
 ```
 
@@ -105,6 +109,12 @@ The current implementation records and checks the manifest for Mutagen and WireG
 `agent-remote device install` accepts an explicit local release ZIP archive or an app bundle named `Agent Remote Device.app`. ZIP archives are size- and path-validated, copied into a private temporary directory, and automatically extracted; they must contain only the fixed app bundle at the archive root. The community release CLI then verifies the fixed bundle identifier, the self-signed certificate fingerprint pinned into the CLI, the Network Broker and GUI Executor XPC services signed by that same identity, and the complete code signature before and after staging. It removes quarantine only from the verified staging bundle and atomically installs it at `~/Applications/Agent Remote Device.app`. Reinstalling the same semantic version and upgrading are allowed; downgrades and missing or malformed bundle versions are rejected. It never downloads or executes an installer URL supplied by a project or API response. Community builds obtain the certificate fingerprint only from the protected `production-community-release` environment and report Gatekeeper as `manual trust`; they do not claim Apple notarization.
 
 Use `agent-remote device status` for the installed version, signature, XPC, and process state. `agent-remote device launch` verifies the installed bundle and the shared device credential before opening the local APP; the APP then lists the owning user's running Claude sessions and performs claim, rebind, and local approval itself. `agent-remote device diagnose` performs the same strict checks and exits non-zero when the installation is not trusted. `agent-remote device uninstall` requires the app to be stopped, removes its fixed app bundle, shared Broker credential, TCC grants, and bundle-owned sandbox data, but does not revoke the remote registration. It refuses to proceed while hidden-application recovery state remains. `agent-remote device revoke` requires a stored user token, asks for confirmation unless `--yes` is supplied, revokes the selected or active device through the control plane, and removes its local device credential and refresh state. `agent-remote device rotate-token` rotates only the active device through the control plane, never prints the returned token, and immediately replaces the local platform credential and shared Network Broker credential; stop active device-control sessions before using it.
+
+## Ego Browser Bridge Control
+
+The `agent-remote ego-browser` commands inspect and control the independent local ego-browser Bridge; they do not use the general device-control application. `status` shows local Bridge devices and bindings, while `status <binding>` also shows that binding's active requests. Use `requests <binding>` to refresh the active request ledger and `cancel-request <binding> <request-ledger-id>` to stop only that exact execution without invalidating the binding. Binding and request identifiers accept the same unique prefixes used by other list commands; `--no-trunc` prints full values.
+
+Claims and resumes remain explicit authorization operations in the independent `ego-browser-device` client. `agent-remote ego-browser claim <tool-session-id>` and `resume` invoke that client and show the full-trust warning unless `--yes` is supplied. Pause, stop, and revoke require the current generation and are confirmed by default. Browser scripts run as the current macOS user without an App Sandbox and can access files, network, login data, subprocesses, and any ego lite Tab or Task Space; cancellation stops supervised work but cannot undo side effects or guarantee cleanup of deliberately detached processes.
 
 ## WireGuard and SSH
 
@@ -180,13 +190,13 @@ scripts/run-quality-checks.sh
 Build macOS and Linux CLI archives:
 
 ```sh
-VERSION=0.2.10 scripts/package-release.sh
+VERSION=0.2.11 scripts/package-release.sh
 ```
 
 Build a Windows x64 archive from PowerShell on Windows (pass `-Target aarch64-pc-windows-msvc` for ARM64):
 
 ```powershell
-./scripts/package-release.ps1 -Version 0.2.10
+./scripts/package-release.ps1 -Version 0.2.11
 ```
 
 The release archive includes:
@@ -211,7 +221,7 @@ Install a specific version or customize paths:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.2.10 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version 0.2.11 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 Install a downloaded release archive:

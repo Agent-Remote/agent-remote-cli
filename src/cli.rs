@@ -69,6 +69,9 @@ pub enum Command {
     /// Install, launch, inspect, diagnose, or revoke the local macOS device bridge.
     #[command(subcommand)]
     Device(DeviceCommand),
+    /// Inspect and control the independent local ego-browser Bridge.
+    #[command(name = "ego-browser", subcommand)]
+    EgoBrowser(EgoBrowserCommand),
     /// Attach to a remote session by a unique ID prefix or full UUID.
     Attach(AttachArgs),
     /// Forward a local loopback port to one managed session loopback port.
@@ -126,6 +129,92 @@ pub enum DeviceCommand {
     Revoke(DeviceRevokeArgs),
     /// Rotate the active device token and replace its local credential.
     RotateToken(DeviceRotateTokenArgs),
+}
+
+#[derive(Debug, Subcommand)]
+/// Commands for the independent ego-browser Bridge and its bindings.
+pub enum EgoBrowserCommand {
+    /// Show registered local Bridge devices and current binding state.
+    Status(EgoBrowserStatusArgs),
+    /// List all browser bindings visible to the current user.
+    List(ListArgs),
+    /// List active requests for one browser binding.
+    Requests(EgoBrowserRequestsArgs),
+    /// Cancel one exact active browser request through its ledger ID.
+    CancelRequest(EgoBrowserCancelRequestArgs),
+    /// Ask the independent Device Client to claim an explicit tool session.
+    Claim(EgoBrowserClaimArgs),
+    /// Pause a binding and invalidate its executable generation.
+    Pause(EgoBrowserLifecycleArgs),
+    /// Ask the independent Device Client to reauthorize a paused binding.
+    Resume(EgoBrowserLifecycleArgs),
+    /// Stop a binding and invalidate its executable generation.
+    Stop(EgoBrowserLifecycleArgs),
+    /// Permanently revoke a binding.
+    Revoke(EgoBrowserLifecycleArgs),
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserStatusArgs {
+    /// Binding UUID or unique hexadecimal prefix; omit to show all state.
+    #[arg(value_name = "BINDING")]
+    pub binding: Option<String>,
+
+    /// Print full identifiers instead of stable short IDs.
+    #[arg(long)]
+    pub no_trunc: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserClaimArgs {
+    /// Explicit remote Claude tool-session UUID.
+    #[arg(value_name = "TOOL_SESSION")]
+    pub tool_session: String,
+
+    /// Confirm full-trust execution without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserRequestsArgs {
+    /// Binding UUID or unique hexadecimal prefix.
+    #[arg(value_name = "BINDING")]
+    pub binding: String,
+
+    /// Print full identifiers instead of stable short IDs.
+    #[arg(long)]
+    pub no_trunc: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserCancelRequestArgs {
+    /// Binding UUID or unique hexadecimal prefix.
+    #[arg(value_name = "BINDING")]
+    pub binding: String,
+
+    /// Request ledger UUID or unique hexadecimal prefix from `requests`.
+    #[arg(value_name = "REQUEST")]
+    pub request: String,
+
+    /// Confirm request cancellation without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserLifecycleArgs {
+    /// Binding UUID or unique hexadecimal prefix.
+    #[arg(value_name = "BINDING")]
+    pub binding: String,
+
+    /// Expected binding generation; stale generations fail closed.
+    #[arg(long, value_name = "GENERATION")]
+    pub generation: u64,
+
+    /// Confirm the lifecycle action without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(Debug, Args)]
@@ -596,7 +685,10 @@ pub struct ListArgs {
 mod tests {
     use clap::{Command, CommandFactory, Parser};
 
-    use super::{AccountCommand, Cli, Command as CliCommand, CredentialsCommand, DeviceCommand};
+    use super::{
+        AccountCommand, Cli, Command as CliCommand, CredentialsCommand, DeviceCommand,
+        EgoBrowserCommand,
+    };
 
     fn assert_documented(command: &Command, path: &str) {
         assert!(
@@ -710,6 +802,72 @@ mod tests {
             rotate.command,
             CliCommand::Device(DeviceCommand::RotateToken(args)) if args.yes
         ));
+    }
+
+    #[test]
+    fn ego_browser_commands_separate_control_from_device_authorization() {
+        let claim = Cli::try_parse_from([
+            "agent-remote",
+            "ego-browser",
+            "claim",
+            "11111111-2222-3333-4444-555555555555",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            claim.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::Claim(args))
+                if args.yes && args.tool_session == "11111111-2222-3333-4444-555555555555"
+        ));
+
+        let pause = Cli::try_parse_from([
+            "agent-remote",
+            "ego-browser",
+            "pause",
+            "aabbccdd",
+            "--generation",
+            "7",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            pause.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::Pause(args))
+                if args.binding == "aabbccdd" && args.generation == 7 && args.yes
+        ));
+
+        let requests = Cli::try_parse_from([
+            "agent-remote",
+            "ego-browser",
+            "requests",
+            "aabbccdd",
+            "--no-trunc",
+        ])
+        .unwrap();
+        assert!(matches!(
+            requests.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::Requests(args))
+                if args.binding == "aabbccdd" && args.no_trunc
+        ));
+
+        let cancel = Cli::try_parse_from([
+            "agent-remote",
+            "ego-browser",
+            "cancel-request",
+            "aabbccdd",
+            "11223344",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cancel.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::CancelRequest(args))
+                if args.binding == "aabbccdd" && args.request == "11223344" && args.yes
+        ));
+
+        assert!(
+            Cli::try_parse_from(["agent-remote", "ego-browser", "resume", "aabbccdd"]).is_err()
+        );
     }
 
     #[test]

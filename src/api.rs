@@ -115,6 +115,109 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    /// Lists browser Bridge devices visible to the current user.
+    pub async fn list_ego_browser_devices(
+        &self,
+        token: &str,
+    ) -> Result<Vec<EgoBrowserDeviceData>, ApiError> {
+        let response: Envelope<EgoBrowserDeviceListData> =
+            self.get("/api/v1/ego-browser/devices", Some(token)).await?;
+        Ok(response.data.items)
+    }
+
+    /// Lists browser bindings visible to the current user.
+    pub async fn list_ego_browser_bindings(
+        &self,
+        token: &str,
+    ) -> Result<Vec<EgoBrowserBindingData>, ApiError> {
+        let response: Envelope<EgoBrowserBindingListData> = self
+            .get("/api/v1/ego-browser/bindings", Some(token))
+            .await?;
+        Ok(response.data.items)
+    }
+
+    /// Reads one browser binding by its full identifier.
+    pub async fn get_ego_browser_binding(
+        &self,
+        token: &str,
+        binding_id: &str,
+    ) -> Result<EgoBrowserBindingData, ApiError> {
+        let response: Envelope<EgoBrowserBindingData> = self
+            .get(
+                &format!("/api/v1/ego-browser/bindings/{}", url_encode(binding_id)),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    /// Lists cancellable requests for one browser binding.
+    pub async fn list_ego_browser_requests(
+        &self,
+        token: &str,
+        binding_id: &str,
+    ) -> Result<Vec<EgoBrowserRequestData>, ApiError> {
+        let response: Envelope<EgoBrowserRequestListData> = self
+            .get(
+                &format!(
+                    "/api/v1/ego-browser/bindings/{}/requests",
+                    url_encode(binding_id)
+                ),
+                Some(token),
+            )
+            .await?;
+        Ok(response.data.items)
+    }
+
+    /// Requests cancellation of one exact active browser request.
+    pub async fn cancel_ego_browser_request(
+        &self,
+        token: &str,
+        binding_id: &str,
+        request_id: &str,
+        generation: u64,
+        sequence: u64,
+    ) -> Result<EgoBrowserRequestData, ApiError> {
+        let response: Envelope<EgoBrowserRequestData> = self
+            .post(
+                &format!(
+                    "/api/v1/ego-browser/bindings/{}/requests/{}/cancel",
+                    url_encode(binding_id),
+                    url_encode(request_id)
+                ),
+                Some(token),
+                &EgoBrowserCancelRequest {
+                    generation,
+                    sequence,
+                },
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    /// Applies a privilege-reducing browser binding lifecycle action.
+    pub async fn control_ego_browser_binding(
+        &self,
+        token: &str,
+        binding_id: &str,
+        generation: u64,
+        action: &str,
+        reason: &str,
+    ) -> Result<EgoBrowserBindingData, ApiError> {
+        let response: Envelope<EgoBrowserBindingData> = self
+            .post(
+                &format!(
+                    "/api/v1/ego-browser/bindings/{}/{}",
+                    url_encode(binding_id),
+                    url_encode(action)
+                ),
+                Some(token),
+                &EgoBrowserLifecycleRequest { generation, reason },
+            )
+            .await?;
+        Ok(response.data)
+    }
+
     pub async fn get_wireguard_config(&self, token: &str) -> Result<WireGuardConfigData, ApiError> {
         let response: Envelope<WireGuardConfigData> = self
             .get("/api/v1/network/wireguard/config", Some(token))
@@ -763,6 +866,80 @@ pub struct DeviceData {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct EgoBrowserDeviceData {
+    pub id: String,
+    pub status: String,
+    pub release_profile: String,
+    pub bridge_version: Option<String>,
+    pub local_ego_browser_runtime_version: Option<String>,
+    pub ego_lite_runtime_version: Option<String>,
+    pub skill_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct EgoBrowserDeviceListData {
+    items: Vec<EgoBrowserDeviceData>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct EgoBrowserBindingData {
+    pub id: String,
+    pub ego_browser_device_id: String,
+    pub tool_session_id: String,
+    pub node_id: String,
+    pub status: String,
+    pub relay_binding_kind: String,
+    pub authorization_mode: String,
+    pub release_profile: String,
+    pub local_runtime_version: Option<String>,
+    pub ego_lite_runtime_version: Option<String>,
+    pub skill_version: Option<String>,
+    pub bridge_protocol_version: String,
+    pub allowlist_revision: u64,
+    pub learning_bundle_digest: Option<String>,
+    pub lease_until: Option<String>,
+    pub lease_health: String,
+    pub generation: u64,
+    pub connected_at: Option<String>,
+    pub stop_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct EgoBrowserBindingListData {
+    items: Vec<EgoBrowserBindingData>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct EgoBrowserRequestData {
+    pub id: String,
+    pub binding_id: String,
+    pub generation: u64,
+    pub request_id: String,
+    pub sequence: u64,
+    pub message_type: String,
+    pub payload_bytes: u64,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct EgoBrowserRequestListData {
+    items: Vec<EgoBrowserRequestData>,
+}
+
+#[derive(Debug, Serialize)]
+struct EgoBrowserCancelRequest {
+    generation: u64,
+    sequence: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct EgoBrowserLifecycleRequest<'a> {
+    generation: u64,
+    reason: &'a str,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct WireGuardConfigData {
     pub device_id: String,
     pub interface_address: String,
@@ -1372,6 +1549,72 @@ mod tests {
             .unwrap();
         assert_eq!(token.expires_in, 3600);
         assert!(!format!("{token:?}").contains("new-device-token"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ego_browser_request_cancel_uses_exact_path_identity_and_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let (header_end, content_length) = loop {
+                let mut chunk = [0_u8; 1024];
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "request ended before its body was complete");
+                request.extend_from_slice(&chunk[..read]);
+                assert!(request.len() <= 8192, "request exceeded 8 KiB");
+                if let Some(header_end) = request
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|index| index + 4)
+                {
+                    let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap();
+                    break (header_end, content_length);
+                }
+            };
+            while request.len() < header_end + content_length {
+                let mut chunk = [0_u8; 1024];
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "request ended before its body was complete");
+                request.extend_from_slice(&chunk[..read]);
+            }
+
+            let headers = String::from_utf8(request[..header_end].to_vec()).unwrap();
+            assert!(headers.starts_with(
+                "POST /api/v1/ego-browser/bindings/binding%20123/requests/request%2F123/cancel HTTP/1.1\r\n"
+            ));
+            assert!(headers
+                .to_ascii_lowercase()
+                .contains("\r\nauthorization: bearer test-user-token\r\n"));
+            let body: serde_json::Value =
+                serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
+            assert_eq!(body, serde_json::json!({"generation": 7, "sequence": 19}));
+
+            let response_body = r#"{"data":{"id":"ledger-123","binding_id":"binding 123","generation":7,"request_id":"request/123","sequence":19,"message_type":"execute","payload_bytes":321,"status":"cancel_requested","created_at":"2026-09-07T00:00:00Z"}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response_body}",
+                response_body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let result = ApiClient::new(format!("http://{address}"))
+            .unwrap()
+            .cancel_ego_browser_request("test-user-token", "binding 123", "request/123", 7, 19)
+            .await
+            .unwrap();
+        assert_eq!(result.id, "ledger-123");
+        assert_eq!(result.status, "cancel_requested");
         server.await.unwrap();
     }
 }

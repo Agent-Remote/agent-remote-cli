@@ -42,6 +42,19 @@ pub struct LocalSyncSession {
     pub remote_endpoint: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalEgoBrowserBinding {
+    pub id: String,
+    pub server_url: String,
+    pub ego_browser_device_id: String,
+    pub tool_session_id: String,
+    pub node_id: String,
+    pub status: String,
+    pub generation: u64,
+    pub relay_binding_kind: String,
+    pub lease_until: Option<String>,
+}
+
 impl LocalState {
     pub fn open(paths: &AppPaths) -> Result<Self> {
         paths.ensure_base_dirs()?;
@@ -94,9 +107,23 @@ impl LocalState {
                  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
              );
              CREATE INDEX IF NOT EXISTS sync_sessions_workspace_idx
-                 ON sync_sessions (workspace_id);",
+                 ON sync_sessions (workspace_id);
+             CREATE TABLE IF NOT EXISTS ego_browser_bindings (
+                 id TEXT PRIMARY KEY,
+                 server_url TEXT NOT NULL,
+                 ego_browser_device_id TEXT NOT NULL,
+                 tool_session_id TEXT NOT NULL,
+                 node_id TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 generation INTEGER NOT NULL,
+                 relay_binding_kind TEXT NOT NULL,
+                 lease_until TEXT,
+                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+             );
+             CREATE INDEX IF NOT EXISTS ego_browser_bindings_server_status_idx
+                 ON ego_browser_bindings (server_url, status);",
         )?;
-        self.connection.pragma_update(None, "user_version", 2)?;
+        self.connection.pragma_update(None, "user_version", 3)?;
         Ok(())
     }
 
@@ -313,6 +340,67 @@ impl LocalState {
         Ok(sync_session)
     }
 
+    pub fn upsert_ego_browser_binding(&self, binding: &LocalEgoBrowserBinding) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO ego_browser_bindings (
+                id, server_url, ego_browser_device_id, tool_session_id, node_id,
+                status, generation, relay_binding_kind, lease_until, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP)
+             ON CONFLICT(id) DO UPDATE SET
+                server_url = excluded.server_url,
+                ego_browser_device_id = excluded.ego_browser_device_id,
+                tool_session_id = excluded.tool_session_id,
+                node_id = excluded.node_id,
+                status = excluded.status,
+                generation = excluded.generation,
+                relay_binding_kind = excluded.relay_binding_kind,
+                lease_until = excluded.lease_until,
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                binding.id,
+                binding.server_url,
+                binding.ego_browser_device_id,
+                binding.tool_session_id,
+                binding.node_id,
+                binding.status,
+                binding.generation,
+                binding.relay_binding_kind,
+                binding.lease_until,
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn get_ego_browser_binding(
+        &self,
+        binding_id: &str,
+    ) -> Result<Option<LocalEgoBrowserBinding>> {
+        let binding = self
+            .connection
+            .query_row(
+                "SELECT id, server_url, ego_browser_device_id, tool_session_id,
+                        node_id, status, generation, relay_binding_kind, lease_until
+                 FROM ego_browser_bindings WHERE id = ?1",
+                params![binding_id],
+                |row| {
+                    Ok(LocalEgoBrowserBinding {
+                        id: row.get(0)?,
+                        server_url: row.get(1)?,
+                        ego_browser_device_id: row.get(2)?,
+                        tool_session_id: row.get(3)?,
+                        node_id: row.get(4)?,
+                        status: row.get(5)?,
+                        generation: row.get(6)?,
+                        relay_binding_kind: row.get(7)?,
+                        lease_until: row.get(8)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(binding)
+    }
+
     #[cfg(test)]
     pub fn table_columns(&self, table: &str) -> Result<Vec<String>> {
         let mut statement = self
@@ -333,7 +421,9 @@ mod tests {
 
     use crate::config::AppPaths;
 
-    use super::{LocalDevice, LocalState, LocalSyncSession, LocalWorkspace};
+    use super::{
+        LocalDevice, LocalEgoBrowserBinding, LocalState, LocalSyncSession, LocalWorkspace,
+    };
 
     #[test]
     fn stores_device_metadata_without_token_columns() {
@@ -361,6 +451,35 @@ mod tests {
         let columns = state.table_columns("devices").unwrap();
         assert!(!columns.iter().any(|column| column.contains("token")));
         assert!(!columns.iter().any(|column| column.contains("secret")));
+    }
+
+    #[test]
+    fn stores_ego_browser_metadata_without_connection_secrets() {
+        let dir = tempdir().unwrap();
+        let paths = AppPaths::from_home(dir.path().join("agent-remote"));
+        let state = LocalState::open(&paths).unwrap();
+        state.init_schema().unwrap();
+        let binding = LocalEgoBrowserBinding {
+            id: "11111111-2222-3333-4444-555555555555".to_string(),
+            server_url: "https://example.test".to_string(),
+            ego_browser_device_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            tool_session_id: "99999999-8888-7777-6666-555555555555".to_string(),
+            node_id: "01234567-89ab-cdef-0123-456789abcdef".to_string(),
+            status: "active".to_string(),
+            generation: 7,
+            relay_binding_kind: "ego_browser".to_string(),
+            lease_until: Some("2026-09-06T12:00:00Z".to_string()),
+        };
+
+        state.upsert_ego_browser_binding(&binding).unwrap();
+        assert_eq!(
+            state.get_ego_browser_binding(&binding.id).unwrap(),
+            Some(binding)
+        );
+        let columns = state.table_columns("ego_browser_bindings").unwrap();
+        assert!(!columns.iter().any(|column| {
+            column.contains("token") || column.contains("script") || column.contains("secret")
+        }));
     }
 
     #[test]

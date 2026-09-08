@@ -42,6 +42,10 @@ agent-remote device status
 agent-remote device diagnose
 agent-remote device revoke [--device <device-id>] [--yes]
 agent-remote device rotate-token [--yes]
+agent-remote ego-browser status [<binding-id>]
+agent-remote ego-browser requests <binding-id>
+agent-remote ego-browser cancel-request <binding-id> <request-ledger-id> [--yes]
+agent-remote ego-browser pause|stop|revoke <binding-id> --generation <generation> [--yes]
 agent-remote logout [--no-revoke-remote]
 ```
 
@@ -102,6 +106,12 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 `agent-remote device install` 接受显式指定的本地发布 ZIP 压缩包，或名称固定为 `Agent Remote Device.app` 的 app bundle。CLI 会限制并校验 ZIP 的大小和成员路径，将其复制到私有临时目录后自动解压；压缩包根目录只能包含该固定 app bundle。community 正式 CLI 随后会在暂存前后验证固定 bundle identifier、编译进 CLI 的项目自签名证书指纹、由同一身份签名的 Network Broker 与 GUI Executor XPC service，以及完整代码签名；只对已验证的暂存 bundle 移除 quarantine，并原子安装到 `~/Applications/Agent Remote Device.app`。允许重装相同语义版本和升级；拒绝降级，以及缺少版本或版本格式无效的 bundle。该命令不会下载或执行项目内容或 API 响应提供的安装地址。community 构建只从受保护的 `production-community-release` 环境取得证书指纹，并将 Gatekeeper 状态显示为 `manual trust`，不会声称已经 Apple 公证。
 
 `agent-remote device status` 显示已安装版本、签名、XPC 和进程状态；`agent-remote device diagnose` 执行相同的严格检查，安装不可信时返回非零状态。`agent-remote device uninstall` 要求 app 已停止，删除固定 app bundle、共享 Broker 凭据、TCC 授权及各 bundle 自有的沙盒数据，但不会撤销远端注册；存在隐藏应用恢复日志时会拒绝继续。`agent-remote device revoke` 要求本地已保存用户 token，未指定 `--yes` 时先确认，通过控制平面撤销指定或当前设备，并删除对应的本地设备凭据与刷新状态。`agent-remote device rotate-token` 只轮换当前 active device，通过控制面取得新令牌后不会打印令牌，并立即覆盖本机平台凭据和共享 Network Broker 凭据；执行前必须先停止活动的设备控制 session。
+
+## Ego Browser Bridge 控制
+
+`agent-remote ego-browser` 用于查看和控制独立的本地 ego-browser Bridge，不会进入通用设备控制应用。`status` 显示本地 Bridge 设备与 binding；`status <binding>` 还会显示该 binding 的活动 request。`requests <binding>` 会刷新活动 request ledger，`cancel-request <binding> <request-ledger-id>` 只停止这一条准确执行，不会使整个 binding 失效。binding 和 request ID 支持其他列表命令使用的唯一前缀；`--no-trunc` 显示完整 ID。
+
+claim 和 resume 仍是独立 `ego-browser-device` 客户端中的显式授权操作。`agent-remote ego-browser claim <tool-session-id>` 与 `resume` 会调用该客户端，并在未指定 `--yes` 时显示全信任警告。pause、stop 与 revoke 要求当前 generation，且默认需要确认。浏览器脚本以当前 macOS 用户身份在无 App Sandbox 的环境中运行，可以访问文件、网络、登录数据、子进程以及任意 ego lite Tab 或 Task Space；取消只能终止受监管执行，无法回滚副作用，也不能保证清理主动脱离监管的进程。
 
 ## WireGuard 和 SSH
 
@@ -177,13 +187,13 @@ scripts/run-quality-checks.sh
 构建 macOS 和 Linux CLI 归档：
 
 ```sh
-VERSION=0.2.10 scripts/package-release.sh
+VERSION=0.2.11 scripts/package-release.sh
 ```
 
 在 Windows PowerShell 中构建 Windows x64 归档（ARM64 可传入 `-Target aarch64-pc-windows-msvc`）：
 
 ```powershell
-./scripts/package-release.ps1 -Version 0.2.10
+./scripts/package-release.ps1 -Version 0.2.11
 ```
 
 发布归档包含：
@@ -208,7 +218,7 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.2.10 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version 0.2.11 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 安装已下载的发布归档：

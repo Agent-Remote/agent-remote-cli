@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.11 - 2026-09-09
+
+- feat: add ego-browser device and binding controls
+
 ## v0.2.10 - 2026-09-05
 
 - fix: report port-forward stream failures (05d106e)
