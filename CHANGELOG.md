@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.12 - 2026-09-09
+
+- fix(release): repair changelog history (607828f)
+
 ## v0.2.11 - 2026-09-09
 
 - feat: add ego-browser device and binding controls (ed8173e)
