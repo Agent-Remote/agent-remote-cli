@@ -1,6 +1,8 @@
 use std::ffi::OsString;
+use std::process::Stdio;
 
 use anyhow::{bail, Context, Result};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command as ProcessCommand;
 use uuid::Uuid;
 
@@ -8,7 +10,7 @@ use crate::api::{ApiClient, EgoBrowserBindingData, EgoBrowserRequestData};
 use crate::auth::load_device_token;
 use crate::cli::{
     EgoBrowserCancelRequestArgs, EgoBrowserClaimArgs, EgoBrowserCommand, EgoBrowserLifecycleArgs,
-    EgoBrowserRequestsArgs, EgoBrowserStatusArgs, ListArgs,
+    EgoBrowserRegisterArgs, EgoBrowserRequestsArgs, EgoBrowserStatusArgs, ListArgs,
 };
 use crate::config::{AppPaths, Config};
 use crate::identifiers::{resolve_id, short_id};
@@ -21,6 +23,7 @@ const FULL_TRUST_WARNING: &str = "Remote fclaude will execute complete ego-brows
 /// Run one independent ego-browser control command.
 pub async fn run(paths: AppPaths, command: EgoBrowserCommand) -> Result<()> {
     match command {
+        EgoBrowserCommand::Register(args) => register(paths, args).await,
         EgoBrowserCommand::Status(args) => status(paths, args).await,
         EgoBrowserCommand::List(args) => list(paths, args).await,
         EgoBrowserCommand::Requests(args) => requests(paths, args).await,
@@ -31,6 +34,39 @@ pub async fn run(paths: AppPaths, command: EgoBrowserCommand) -> Result<()> {
         EgoBrowserCommand::Stop(args) => lifecycle(paths, "stop", args).await,
         EgoBrowserCommand::Revoke(args) => lifecycle(paths, "revoke", args).await,
     }
+}
+
+async fn register(paths: AppPaths, args: EgoBrowserRegisterArgs) -> Result<()> {
+    let (server_url, token) =
+        load_control_token_for_server(&paths, args.server_url.as_deref()).await?;
+    let certificate = args
+        .signer_certificate_sha256
+        .or_else(|| std::env::var("EGO_BROWSER_SIGNER_CERTIFICATE_SHA256").ok())
+        .context(
+            "Bridge signing-certificate SHA-256 is required; pass --signer-certificate-sha256",
+        )?;
+    let certificate = certificate.trim().to_ascii_lowercase();
+    if certificate.len() != 64 || !certificate.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("Bridge signing-certificate SHA-256 is invalid")
+    }
+
+    terminal::note(
+        "Registering the ego-browser Device Client with the agent-remote credential store.",
+    );
+    run_device_client_with_token(
+        [
+            OsString::from("register"),
+            OsString::from("--server"),
+            OsString::from(server_url),
+            OsString::from("--token-stdin"),
+            OsString::from("--signer-certificate-sha256"),
+            OsString::from(certificate),
+        ],
+        &token,
+    )
+    .await?;
+    terminal::success_line("Ego-browser Device Client registered");
+    Ok(())
 }
 
 async fn status(paths: AppPaths, args: EgoBrowserStatusArgs) -> Result<()> {
@@ -252,16 +288,77 @@ async fn run_device_client<const N: usize>(args: [OsString; N]) -> Result<()> {
     Ok(())
 }
 
+async fn run_device_client_with_token<const N: usize>(
+    args: [OsString; N],
+    token: &str,
+) -> Result<()> {
+    if token.is_empty() {
+        bail!("agent-remote credential store returned an empty token")
+    }
+    let executable = std::env::var_os("AGENT_REMOTE_EGO_BROWSER_DEVICE")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| OsString::from("ego-browser-device"));
+    let mut child = ProcessCommand::new(&executable)
+        .args(args)
+        .stdin(Stdio::piped())
+        .spawn()
+        .with_context(|| {
+            format!(
+                "failed to launch {}; install the independent agent-remote-ego-browser Device Client",
+                executable.to_string_lossy()
+            )
+        })?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("failed to open the Device Client token pipe")?;
+    stdin
+        .write_all(token.as_bytes())
+        .await
+        .context("failed to pass the credential to the Device Client")?;
+    drop(stdin);
+    let status = child
+        .wait()
+        .await
+        .context("failed waiting for the Device Client")?;
+    if !status.success() {
+        bail!("independent ego-browser Device Client exited with {status}")
+    }
+    Ok(())
+}
+
 async fn load_control_token(paths: &AppPaths) -> Result<(String, String)> {
+    load_control_token_for_server(paths, None).await
+}
+
+async fn load_control_token_for_server(
+    paths: &AppPaths,
+    requested_server: Option<&str>,
+) -> Result<(String, String)> {
     let config = Config::load(paths)?;
-    let server_url = config
+    let configured_server = config
         .server_url
         .clone()
         .context("not logged in: server URL is missing")?;
+    let configured_server = crate::normalize_server_url(&configured_server);
+    if configured_server.is_empty() {
+        bail!("configured agent-remote server URL is empty")
+    }
+    let server_url = requested_server
+        .map(crate::normalize_server_url)
+        .unwrap_or_else(|| configured_server.clone());
+    if server_url != configured_server {
+        bail!(
+            "requested server URL does not match the configured agent-remote server ({configured_server})"
+        )
+    }
     if let Some(token) = SecretStore::new(paths.clone()).get_secret(&user_token_key(&server_url))? {
         return Ok((server_url, token));
     }
-    let (server_url, _device_id, token) = load_device_token(paths).await?;
+    let (device_server, _device_id, token) = load_device_token(paths).await?;
+    if crate::normalize_server_url(&device_server) != server_url {
+        bail!("stored agent-remote credential is bound to a different server")
+    }
     Ok((server_url, token))
 }
 

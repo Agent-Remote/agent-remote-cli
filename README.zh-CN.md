@@ -42,6 +42,7 @@ agent-remote device status
 agent-remote device diagnose
 agent-remote device revoke [--device <device-id>] [--yes]
 agent-remote device rotate-token [--yes]
+agent-remote ego-browser register [--server-url URL] --signer-certificate-sha256 HEX
 agent-remote ego-browser status [<binding-id>]
 agent-remote ego-browser requests <binding-id>
 agent-remote ego-browser cancel-request <binding-id> <request-ledger-id> [--yes]
@@ -109,7 +110,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 
 ## Ego Browser Bridge 控制
 
-`agent-remote ego-browser` 用于查看和控制独立的本地 ego-browser Bridge，不会进入通用设备控制应用。`status` 显示本地 Bridge 设备与 binding；`status <binding>` 还会显示该 binding 的活动 request。`requests <binding>` 会刷新活动 request ledger，`cancel-request <binding> <request-ledger-id>` 只停止这一条准确执行，不会使整个 binding 失效。binding 和 request ID 支持其他列表命令使用的唯一前缀；`--no-trunc` 显示完整 ID。
+`agent-remote ego-browser` 用于查看和控制独立的本地 ego-browser Bridge，不会进入通用设备控制应用。`register` 会复用 `agent-remote login` 保存的服务器和凭据（或校验显式的 `--server-url`），并通过 stdin 将 token 传给 Device Client，因此不会出现在进程参数或 CLI 输出中。`status` 显示本地 Bridge 设备与 binding；`status <binding>` 还会显示该 binding 的活动 request。`requests <binding>` 会刷新活动 request ledger，`cancel-request <binding> <request-ledger-id>` 只停止这一条准确执行，不会使整个 binding 失效。binding 和 request ID 支持其他列表命令使用的唯一前缀；`--no-trunc` 显示完整 ID。
 
 claim 和 resume 仍是独立 `ego-browser-device` 客户端中的显式授权操作。`agent-remote ego-browser claim <tool-session-id>` 与 `resume` 会调用该客户端，并在未指定 `--yes` 时显示全信任警告。pause、stop 与 revoke 要求当前 generation，且默认需要确认。浏览器脚本以当前 macOS 用户身份在无 App Sandbox 的环境中运行，可以访问文件、网络、登录数据、子进程以及任意 ego lite Tab 或 Task Space；取消只能终止受监管执行，无法回滚副作用，也不能保证清理主动脱离监管的进程。
 

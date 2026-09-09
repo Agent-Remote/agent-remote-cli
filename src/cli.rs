@@ -134,6 +134,8 @@ pub enum DeviceCommand {
 #[derive(Debug, Subcommand)]
 /// Commands for the independent ego-browser Bridge and its bindings.
 pub enum EgoBrowserCommand {
+    /// Register the independent Device Client with the stored agent-remote credential.
+    Register(EgoBrowserRegisterArgs),
     /// Show registered local Bridge devices and current binding state.
     Status(EgoBrowserStatusArgs),
     /// List all browser bindings visible to the current user.
@@ -152,6 +154,21 @@ pub enum EgoBrowserCommand {
     Stop(EgoBrowserLifecycleArgs),
     /// Permanently revoke a binding.
     Revoke(EgoBrowserLifecycleArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct EgoBrowserRegisterArgs {
+    /// Control-plane URL; must match the configured agent-remote server when supplied.
+    #[arg(long = "server-url", alias = "server", value_name = "URL")]
+    pub server_url: Option<String>,
+
+    /// Verified Bridge signing-certificate SHA-256 fingerprint.
+    #[arg(
+        long,
+        env = "EGO_BROWSER_SIGNER_CERTIFICATE_SHA256",
+        value_name = "HEX"
+    )]
+    pub signer_certificate_sha256: Option<String>,
 }
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -806,6 +823,24 @@ mod tests {
 
     #[test]
     fn ego_browser_commands_separate_control_from_device_authorization() {
+        let register = Cli::try_parse_from([
+            "agent-remote",
+            "ego-browser",
+            "register",
+            "--server-url",
+            "https://example.test",
+            "--signer-certificate-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ])
+        .unwrap();
+        assert!(matches!(
+            register.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::Register(args))
+                if args.server_url.as_deref() == Some("https://example.test")
+                    && args.signer_certificate_sha256.as_deref()
+                        == Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        ));
+
         let claim = Cli::try_parse_from([
             "agent-remote",
             "ego-browser",

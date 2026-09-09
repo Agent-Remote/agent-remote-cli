@@ -80,6 +80,7 @@ fn every_command_path_executes_help_successfully() {
         &["device", "revoke"],
         &["device", "rotate-token"],
         &["ego-browser"],
+        &["ego-browser", "register"],
         &["ego-browser", "status"],
         &["ego-browser", "list"],
         &["ego-browser", "requests"],
@@ -129,6 +130,153 @@ fn fclaude_delete_help_includes_failed_sessions() {
         String::from_utf8_lossy(&output.stdout).contains("stopped, interrupted, or failed"),
         "delete help does not document failed sessions"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_register_passes_stored_token_over_stdin() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let state_home = temporary.path().join("agent-remote");
+    let secrets = state_home.join("secrets");
+    fs::create_dir_all(&secrets).unwrap();
+    fs::write(
+        state_home.join("config.toml"),
+        "server_url = \"https://example.test\"\n",
+    )
+    .unwrap();
+    let token = "art_test-user-token";
+    fs::write(
+        secrets.join("user-token_https___example.test.secret"),
+        token,
+    )
+    .unwrap();
+
+    let device_client = temporary.path().join("ego-browser-device");
+    fs::write(
+        &device_client,
+        "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then printf '%s\\n' --token-stdin; exit 0; fi\nprintf '%s\\n' \"$*\" > \"$TEST_DEVICE_ARGS\"\ncat > \"$TEST_DEVICE_STDIN\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&device_client, fs::Permissions::from_mode(0o700)).unwrap();
+    let args_log = temporary.path().join("device-args");
+    let stdin_log = temporary.path().join("device-stdin");
+    let certificate = "a".repeat(64);
+
+    let output = Command::new(AGENT_REMOTE)
+        .args([
+            "--color",
+            "never",
+            "ego-browser",
+            "register",
+            "--server-url",
+            "https://example.test",
+            "--signer-certificate-sha256",
+            certificate.as_str(),
+        ])
+        .env("HOME", temporary.path())
+        .env("AGENT_REMOTE_HOME", &state_home)
+        .env("AGENT_REMOTE_SECRET_BACKEND", "file")
+        .env("AGENT_REMOTE_EGO_BROWSER_DEVICE", &device_client)
+        .env("TEST_DEVICE_ARGS", &args_log)
+        .env("TEST_DEVICE_STDIN", &stdin_log)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "registration delegation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let child_args = fs::read_to_string(args_log).unwrap();
+    assert!(child_args.contains("register"));
+    assert!(child_args.contains("--token-stdin"));
+    assert!(child_args.contains("--signer-certificate-sha256"));
+    assert!(!child_args.contains(token));
+    assert_eq!(fs::read_to_string(stdin_log).unwrap(), token);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(token));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(token));
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_register_reuses_the_standard_device_token_store() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use agent_remote_cli::config::AppPaths;
+    use agent_remote_cli::local_state::LocalState;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let state_home = temporary.path().join("agent-remote");
+    fs::create_dir_all(state_home.join("secrets")).unwrap();
+    fs::write(
+        state_home.join("config.toml"),
+        "server_url = \"https://example.test\"\nactive_device_id = \"device-1\"\n",
+    )
+    .unwrap();
+    let token = "art_test-device-token-with-more-than-enough-entropy";
+    fs::write(
+        state_home.join("secrets/device-token_https___example.test_device-1.secret"),
+        token,
+    )
+    .unwrap();
+
+    // Keep the fixture on the normal device-token path without making a network
+    // refresh request during this process-level contract test.
+    let paths = AppPaths::new(Some(state_home.clone())).unwrap();
+    let state = LocalState::open(&paths).unwrap();
+    state.init_schema().unwrap();
+    state
+        .set_kv(
+            "device-token-refresh-at:https://example.test:device-1",
+            "4102444800",
+        )
+        .unwrap();
+
+    let device_client = temporary.path().join("ego-browser-device");
+    fs::write(
+        &device_client,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$TEST_DEVICE_ARGS\"\ncat > \"$TEST_DEVICE_STDIN\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&device_client, fs::Permissions::from_mode(0o700)).unwrap();
+    let args_log = temporary.path().join("device-args");
+    let stdin_log = temporary.path().join("device-stdin");
+    let certificate = "b".repeat(64);
+
+    let output = Command::new(AGENT_REMOTE)
+        .args([
+            "--color",
+            "never",
+            "ego-browser",
+            "register",
+            "--signer-certificate-sha256",
+            certificate.as_str(),
+        ])
+        .env("HOME", temporary.path())
+        .env("AGENT_REMOTE_HOME", &state_home)
+        .env("AGENT_REMOTE_SECRET_BACKEND", "file")
+        .env("AGENT_REMOTE_EGO_BROWSER_DEVICE", &device_client)
+        .env("TEST_DEVICE_ARGS", &args_log)
+        .env("TEST_DEVICE_STDIN", &stdin_log)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "device-token registration delegation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let child_args = fs::read_to_string(args_log).unwrap();
+    assert!(child_args.contains("--token-stdin"));
+    assert!(child_args.contains("--server https://example.test"));
+    assert!(!child_args.contains(token));
+    assert_eq!(fs::read_to_string(stdin_log).unwrap(), token);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(token));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(token));
 }
 
 #[cfg(target_os = "macos")]
