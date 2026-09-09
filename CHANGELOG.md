@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.14 - 2026-09-09
+
+- fix(release): isolate managed tool cache contents (ceea175)
+
 ## v0.2.13 - 2026-09-09
 
 - fix(release): pin macos device identity in cli artifacts (46abf75)
