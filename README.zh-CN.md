@@ -188,13 +188,13 @@ scripts/run-quality-checks.sh
 构建 macOS 和 Linux CLI 归档：
 
 ```sh
-VERSION=0.2.14 scripts/package-release.sh
+VERSION=0.2.15 scripts/package-release.sh
 ```
 
 在 Windows PowerShell 中构建 Windows x64 归档（ARM64 可传入 `-Target aarch64-pc-windows-msvc`）：
 
 ```powershell
-./scripts/package-release.ps1 -Version 0.2.14
+./scripts/package-release.ps1 -Version 0.2.15
 ```
 
 发布归档包含：
@@ -219,7 +219,7 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.2.14 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version 0.2.15 --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 安装已下载的发布归档：

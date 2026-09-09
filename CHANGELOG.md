@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.15 - 2026-09-09
+
+- feat(ego-browser): reuse stored login credentials (489d40b)
+
 ## v0.2.14 - 2026-09-09
 
 - fix(release): isolate managed tool cache contents (ceea175)
