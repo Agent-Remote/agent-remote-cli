@@ -133,8 +133,10 @@ jobs:
       - name: Build release package
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CARGO_TARGET_DIR: ${{ runner.temp }}/agent-remote-cli-release-target
           DEVICE_APP_SIGNER_CERTIFICATE_SHA1: ${{ vars.COMMUNITY_SIGNER_CERTIFICATE_SHA1 }}
           MANAGED_TOOLS_CACHE_DIR: ${{ github.workspace }}/.cache/managed-tools
+          REQUIRE_DEVICE_SIGNING_IDENTITY: "1"
           TARGETS: ${{ matrix.target }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |

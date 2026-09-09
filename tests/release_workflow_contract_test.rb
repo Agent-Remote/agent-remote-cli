@@ -10,6 +10,7 @@ install_text = File.read(File.join(root, ".github/workflows/install-smoke.yml"))
 static_checks = File.read(File.join(root, "scripts/run-static-checks.sh"))
 managed_tools = File.read(File.join(root, "scripts/build-managed-tools.sh"))
 windows_packager = File.read(File.join(root, "scripts/package-release.ps1"))
+unix_packager = File.read(File.join(root, "scripts/package-release.sh"))
 
 [
   "refs/tags/v${version}",
@@ -57,3 +58,14 @@ wireguard_tools_url = 'https://github.com/WireGuard/wireguard-tools/archive/refs
 raise "managed tool source does not use the official WireGuard tag archive" unless managed_tools.include?(wireguard_tools_url)
 raise "Windows downloads do not retry" unless windows_packager.include?("function Invoke-Download")
 raise "managed tool cache behavior is not tested" unless static_checks.include?("tests/managed_tools_cache_test.sh")
+[
+  "CARGO_TARGET_DIR",
+  "REQUIRE_DEVICE_SIGNING_IDENTITY",
+  "AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1",
+  "agent-remote $VERSION",
+  "strings",
+].each do |fragment|
+  raise "Unix release packager is missing #{fragment}" unless unix_packager.include?(fragment)
+end
+raise "release workflow must use an isolated Cargo target directory" unless text.include?("CARGO_TARGET_DIR:")
+raise "release workflow must require a pinned macOS identity" unless text.include?("REQUIRE_DEVICE_SIGNING_IDENTITY")

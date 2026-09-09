@@ -8,6 +8,8 @@ default_version() {
 VERSION="${VERSION:-$(default_version)}"
 OUT_DIR="${OUT_DIR:-dist}"
 TARGETS="${TARGETS:-x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin}"
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+REQUIRE_DEVICE_SIGNING_IDENTITY="${REQUIRE_DEVICE_SIGNING_IDENTITY:-0}"
 MUTAGEN_VERSION="${MUTAGEN_VERSION:-0.18.1}"
 TMUX_VERSION="${TMUX_VERSION:-3.5a}"
 WIREGUARD_TOOLS_VERSION="${WIREGUARD_TOOLS_VERSION:-1.0.20210914}"
@@ -53,6 +55,47 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 for target in $TARGETS; do
+  build_environment=("AGENT_REMOTE_VERSION=$VERSION")
+  if [[ -n "${AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER:-}" ]]; then
+    build_environment+=("AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER=$AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER")
+  fi
+  if [[ -n "${AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1:-}" ]]; then
+    build_environment+=("AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1=$AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1")
+  elif [[ -n "${DEVICE_APP_SIGNER_CERTIFICATE_SHA1:-}" ]]; then
+    build_environment+=("AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1=$DEVICE_APP_SIGNER_CERTIFICATE_SHA1")
+  fi
+  if [[ -n "${AGENT_REMOTE_DEVICE_CREDENTIAL_MODE:-}" ]]; then
+    build_environment+=("AGENT_REMOTE_DEVICE_CREDENTIAL_MODE=$AGENT_REMOTE_DEVICE_CREDENTIAL_MODE")
+  fi
+
+  if [[ "$target" == *apple-darwin ]]; then
+    device_team_identifier="${AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER:-}"
+    device_signer_certificate_sha1="${AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1:-${DEVICE_APP_SIGNER_CERTIFICATE_SHA1:-}}"
+    if [[ -n "$device_team_identifier" ]] &&
+      ! [[ "$device_team_identifier" =~ ^[A-Z0-9]{10}$ ]]; then
+      echo "AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER must contain exactly 10 uppercase letters or digits" >&2
+      exit 2
+    fi
+    if [[ -n "$device_signer_certificate_sha1" ]] &&
+      ! [[ "$device_signer_certificate_sha1" =~ ^[A-F0-9]{40}$ ]]; then
+      echo "AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1 must contain exactly 40 uppercase hex characters" >&2
+      exit 2
+    fi
+    if [[ -n "$device_team_identifier" ]] && [[ -n "$device_signer_certificate_sha1" ]]; then
+      echo "device release must pin either a Team ID or a certificate SHA-1, not both" >&2
+      exit 2
+    fi
+    if [[ "$REQUIRE_DEVICE_SIGNING_IDENTITY" == "1" ]] &&
+      [[ -z "$device_team_identifier" ]] && [[ -z "$device_signer_certificate_sha1" ]]; then
+      echo "formal macOS release requires one pinned device signing identity" >&2
+      exit 2
+    fi
+    if [[ -n "$device_signer_certificate_sha1" ]] &&
+      [[ -z "${AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1:-}" ]]; then
+      build_environment+=("AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1=$device_signer_certificate_sha1")
+    fi
+  fi
+
   if [[ "$target" == *apple-darwin && "$ENABLE_DEVICE_BROKER_CREDENTIALS" == "1" ]]; then
     team_identifier=${TEAM_IDENTIFIER:?TEAM_IDENTIFIER is required for device Broker credentials}
     signing_identity=${MACOS_SIGNING_IDENTITY:?MACOS_SIGNING_IDENTITY is required for device Broker credentials}
@@ -65,26 +108,43 @@ for target in $TARGETS; do
       exit 1
     fi
     access_group="$team_identifier.dev.agentremote.device.credentials"
-    AGENT_REMOTE_VERSION="$VERSION" \
-      AGENT_REMOTE_KEYCHAIN_ACCESS_GROUP="$access_group" \
+    build_environment+=("AGENT_REMOTE_KEYCHAIN_ACCESS_GROUP=$access_group")
+    env "${build_environment[@]}" \
+      CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
       cargo build --release --target "$target"
     resolved_entitlements=$(mktemp)
     install -m 0644 packaging/macos/agent-remote.entitlements "$resolved_entitlements"
     /usr/libexec/PlistBuddy -c \
       "Set :keychain-access-groups:0 $access_group" "$resolved_entitlements"
     codesign --force --sign "$signing_identity" --options runtime --timestamp \
-      --entitlements "$resolved_entitlements" "target/$target/release/agent-remote"
-    codesign --verify --strict --verbose=2 "target/$target/release/agent-remote"
+      --entitlements "$resolved_entitlements" "$CARGO_TARGET_DIR/$target/release/agent-remote"
+    codesign --verify --strict --verbose=2 "$CARGO_TARGET_DIR/$target/release/agent-remote"
     rm -f "$resolved_entitlements"
   else
-    AGENT_REMOTE_VERSION="$VERSION" cargo build --release --target "$target"
+    env "${build_environment[@]}" \
+      CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
+      cargo build --release --target "$target"
   fi
   package="agent-remote-cli-${VERSION}-${target}"
   work="$OUT_DIR/$package"
   mkdir -p "$work/bin" "$work/dependencies/sources" "$work/dependencies/licenses"
-  install -m 0755 "target/$target/release/agent-remote" "$work/bin/agent-remote"
-  install -m 0755 "target/$target/release/fclaude" "$work/bin/fclaude"
-  install -m 0755 "target/$target/release/agent-remote-wireguard" "$work/bin/agent-remote-wireguard"
+  binary="$CARGO_TARGET_DIR/$target/release/agent-remote"
+  test -x "$binary"
+  if [[ "$target" == *apple-darwin && "$REQUIRE_DEVICE_SIGNING_IDENTITY" == "1" ]]; then
+    version_output=$("$binary" --version)
+    if [[ "$version_output" != "agent-remote $VERSION" ]]; then
+      echo "macOS release binary reports '$version_output', expected 'agent-remote $VERSION'" >&2
+      exit 1
+    fi
+    expected_identity="${device_team_identifier:-$device_signer_certificate_sha1}"
+    if ! LC_ALL=C strings "$binary" | grep -F -- "$expected_identity" >/dev/null; then
+      echo "macOS release binary does not contain its pinned device signing identity" >&2
+      exit 1
+    fi
+  fi
+  install -m 0755 "$binary" "$work/bin/agent-remote"
+  install -m 0755 "$CARGO_TARGET_DIR/$target/release/fclaude" "$work/bin/fclaude"
+  install -m 0755 "$CARGO_TARGET_DIR/$target/release/agent-remote-wireguard" "$work/bin/agent-remote-wireguard"
   install -m 0755 scripts/mutagen-scp "$work/bin/scp"
   install -m 0755 scripts/mutagen-ssh "$work/bin/ssh"
   download_mutagen "$target" "$work/bin/mutagen"
