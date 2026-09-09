@@ -79,7 +79,7 @@ jobs:
         uses: actions/cache@v6.1.0
         with:
           path: .cache/managed-tools/${{ matrix.target }}
-          key: managed-tools-v1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('scripts/build-managed-tools.sh') }}
+          key: managed-tools-v2-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('scripts/build-managed-tools.sh') }}
       - name: Build and install Unix package
         if: runner.os != 'Windows'
         shell: bash

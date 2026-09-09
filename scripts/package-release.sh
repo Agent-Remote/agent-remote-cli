@@ -130,6 +130,10 @@ for target in $TARGETS; do
   mkdir -p "$work/bin" "$work/dependencies/sources" "$work/dependencies/licenses"
   binary="$CARGO_TARGET_DIR/$target/release/agent-remote"
   test -x "$binary"
+  if ! LC_ALL=C strings "$binary" | grep -F -- "$VERSION" >/dev/null; then
+    echo "release binary does not contain expected version '$VERSION' for $target" >&2
+    exit 1
+  fi
   if [[ "$target" == *apple-darwin && "$REQUIRE_DEVICE_SIGNING_IDENTITY" == "1" ]]; then
     version_output=$("$binary" --version)
     if [[ "$version_output" != "agent-remote $VERSION" ]]; then
@@ -148,7 +152,14 @@ for target in $TARGETS; do
   install -m 0755 scripts/mutagen-scp "$work/bin/scp"
   install -m 0755 scripts/mutagen-ssh "$work/bin/ssh"
   download_mutagen "$target" "$work/bin/mutagen"
-  scripts/build-managed-tools.sh "$target" "$work/bin" "$work/dependencies/sources" "$work/dependencies/licenses"
+  managed_tools_work="$work/.managed-tools"
+  mkdir -p "$managed_tools_work/bin" "$managed_tools_work/sources" "$managed_tools_work/licenses"
+  scripts/build-managed-tools.sh "$target" \
+    "$managed_tools_work/bin" "$managed_tools_work/sources" "$managed_tools_work/licenses"
+  cp -R "$managed_tools_work/bin/." "$work/bin/"
+  cp -R "$managed_tools_work/sources/." "$work/dependencies/sources/"
+  cp -R "$managed_tools_work/licenses/." "$work/dependencies/licenses/"
+  rm -rf "$managed_tools_work"
   cp README.md README.zh-CN.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "$work/"
   install -m 0755 scripts/install.sh "$work/install.sh"
   cat > "$work/dependencies/manifest.json" <<EOF

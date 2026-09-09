@@ -6,6 +6,15 @@ DEST="${2:?destination is required}"
 SOURCE_DEST="${3:?source destination is required}"
 LICENSE_DEST="${4:?license destination is required}"
 
+case "$TARGET" in
+  x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu|x86_64-apple-darwin|aarch64-apple-darwin)
+    ;;
+  *)
+    echo "unsupported managed-tools target: $TARGET" >&2
+    exit 1
+    ;;
+esac
+
 TMUX_VERSION="${TMUX_VERSION:-3.5a}"
 LIBEVENT_VERSION="${LIBEVENT_VERSION:-2.1.12-stable}"
 NCURSES_VERSION="${NCURSES_VERSION:-6.5}"
@@ -38,9 +47,16 @@ if [[ -n "$MANAGED_TOOLS_CACHE_DIR" ]]; then
   mkdir -p "$MANAGED_TOOLS_CACHE_DIR"
   MANAGED_TOOLS_CACHE_DIR="$(cd "$MANAGED_TOOLS_CACHE_DIR" && pwd)"
   cache_variant="tmux-$TMUX_VERSION-libevent-$LIBEVENT_VERSION-ncurses-$NCURSES_VERSION-libmnl-$LIBMNL_VERSION-wg-$WIREGUARD_TOOLS_VERSION-wg-go-$WIREGUARD_GO_VERSION"
-  cache_root="$MANAGED_TOOLS_CACHE_DIR/$TARGET/$cache_variant"
+  cache_root="$MANAGED_TOOLS_CACHE_DIR/v2/$TARGET/$cache_variant"
   if [[ -f "$cache_root/.complete" ]]; then
-    cp -R "$cache_root/bin/." "$DEST/"
+    for managed_binary in tmux wg wg-quick; do
+      test -f "$cache_root/bin/$managed_binary"
+      install -m 0755 "$cache_root/bin/$managed_binary" "$DEST/$managed_binary"
+    done
+    if [[ "$TARGET" == *apple-darwin ]]; then
+      test -f "$cache_root/bin/wireguard-go"
+      install -m 0755 "$cache_root/bin/wireguard-go" "$DEST/wireguard-go"
+    fi
     cp -R "$cache_root/sources/." "$SOURCE_DEST/"
     cp -R "$cache_root/licenses/." "$LICENSE_DEST/"
     echo "restored managed tools from $cache_root"
@@ -92,10 +108,6 @@ case "$TARGET" in
     HOST=""
     CC_BIN=cc
     TARGET_OS=darwin
-    ;;
-  *)
-    echo "unsupported managed-tools target: $TARGET" >&2
-    exit 1
     ;;
 esac
 
@@ -187,8 +199,17 @@ if [ "$TARGET_OS" = linux ]; then
 fi
 
 if [[ -n "$cache_root" ]]; then
+  mkdir -p "$cache_root"
+  find "$cache_root" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
   mkdir -p "$cache_root/bin" "$cache_root/sources" "$cache_root/licenses"
-  cp -R "$DEST/." "$cache_root/bin/"
+  for managed_binary in tmux wg wg-quick; do
+    test -f "$DEST/$managed_binary"
+    install -m 0755 "$DEST/$managed_binary" "$cache_root/bin/$managed_binary"
+  done
+  if [[ "$TARGET" == *apple-darwin ]]; then
+    test -f "$DEST/wireguard-go"
+    install -m 0755 "$DEST/wireguard-go" "$cache_root/bin/wireguard-go"
+  fi
   cp -R "$SOURCE_DEST/." "$cache_root/sources/"
   cp -R "$LICENSE_DEST/." "$cache_root/licenses/"
   touch "$cache_root/.complete"
