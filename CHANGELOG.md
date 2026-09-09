@@ -4,7 +4,7 @@ All notable changes to this repository are recorded here.
 
 ## v0.2.11 - 2026-09-09
 
-- feat: add ego-browser device and binding controls
+- feat: add ego-browser device and binding controls (ed8173e)
 
 ## v0.2.10 - 2026-09-05
 
@@ -25,19 +25,19 @@ All notable changes to this repository are recorded here.
 
 ## v0.2.7 - 2026-08-13
 
-- Release metadata update.
+- chore: release v0.2.7 (6894f72)
 
 ## v0.2.6 - 2026-08-10
 
-- Release metadata update.
+- chore: release v0.2.6 (4ee7902)
 
 ## v0.2.5 - 2026-08-09
 
-- Release metadata update.
+- chore: release v0.2.5 (f43d466)
 
 ## v0.2.4 - 2026-08-09
 
-- Release metadata update.
+- chore: release v0.2.4 (a90da4f)
 
 ## v0.2.3 - 2026-08-09
 
@@ -45,11 +45,11 @@ All notable changes to this repository are recorded here.
 
 ## v0.2.2 - 2026-08-07
 
-- Release metadata update.
+- chore: release v0.2.2 (e2bd009)
 
 ## v0.2.1 - 2026-08-05
 
-- Release metadata update.
+- chore: release v0.2.1 (6923213)
 
 ## v0.2.0 - 2026-08-04
 
@@ -58,7 +58,7 @@ All notable changes to this repository are recorded here.
 
 ## v0.1.9 - 2026-08-04
 
-- Release metadata update.
+- chore: release v0.1.9 (334da3c)
 
 ## v0.1.8 - 2026-08-03
 
@@ -76,7 +76,7 @@ All notable changes to this repository are recorded here.
 
 ## v0.1.5 - 2026-07-31
 
-- Release metadata update.
+- fix(ci): generate cargo-audit checksum without dist prefix (b1c3001)
 
 ## v0.1.4 - 2026-07-31
 
@@ -85,10 +85,6 @@ All notable changes to this repository are recorded here.
 ## v0.1.3 - 2026-07-31
 
 - feat: install community-signed device app (8ef8d81)
-- feat: add local device management commands (f6695a2)
-- ci: run full cli checks on macos (0180e89)
-- test: stabilize tunnel cleanup coverage (da46507)
-- ci: isolate release tags from validation (812a4b8)
 
 ## v0.1.0 - 2026-07-31
 
@@ -99,7 +95,7 @@ All notable changes to this repository are recorded here.
 - test: stabilize tunnel cleanup coverage (da46507)
 - ci: isolate release tags from validation (812a4b8)
 
-## v0.0.6 - 2026-07-29
+## v0.0.6 - 2026-07-30
 
 - fix: compile tunnel process guards on windows (a5989bf)
 - chore: release v0.0.6 (913ae79)
@@ -240,6 +236,16 @@ All notable changes to this repository are recorded here.
 
 ## v0.0.2 - 2026-07-07
 
-- ci: allow manual release dispatch (075ea00)
 - chore: release v0.0.2 (05db10e)
 - build: add release version injection and installer (93fdc5a)
+
+## v0.0.1 - 2026-07-07
+
+- feat: initialize the local CLI foundation (93575e4)
+- feat: add WireGuard and SSH attach commands (cc949eb)
+- feat: add workspace synchronization commands (87bead0)
+- feat: add account binding commands (1ab10e8)
+- feat: add the fclaude launcher (8989c7e)
+- feat: support account configuration import and Git sync policy (5224c3b)
+- feat: add the interactive CLI initialization wizard (0aa99f5)
+- ci: add the CLI release packaging workflow (431c1dd)
