@@ -281,6 +281,53 @@ fn ego_browser_register_reuses_the_standard_device_token_store() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn ego_browser_claim_discovers_the_standard_installed_device_client() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let device_client = temporary.path().join(
+        "Library/Application Support/Agent Remote Ego Browser/current/bin/ego-browser-device",
+    );
+    fs::create_dir_all(device_client.parent().unwrap()).unwrap();
+    fs::write(
+        &device_client,
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$TEST_DEVICE_ARGS\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&device_client, fs::Permissions::from_mode(0o700)).unwrap();
+    let args_log = temporary.path().join("device-args");
+    let tool_session = "149aef7a-ba99-4bd5-a0e9-baf1a2635c09";
+
+    let output = Command::new(AGENT_REMOTE)
+        .args([
+            "--color",
+            "never",
+            "ego-browser",
+            "claim",
+            tool_session,
+            "--yes",
+        ])
+        .env("HOME", temporary.path())
+        .env("PATH", "/usr/bin:/bin")
+        .env_remove("AGENT_REMOTE_EGO_BROWSER_DEVICE")
+        .env("TEST_DEVICE_ARGS", &args_log)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "claim delegation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(args_log).unwrap(),
+        format!("claim {tool_session} --confirm\n")
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn device_uninstall_removes_fixed_residue_and_preserves_unrelated_data() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;

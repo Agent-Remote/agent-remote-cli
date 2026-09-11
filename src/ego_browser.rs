@@ -269,9 +269,7 @@ async fn lifecycle(paths: AppPaths, action: &str, args: EgoBrowserLifecycleArgs)
 }
 
 async fn run_device_client<const N: usize>(args: [OsString; N]) -> Result<()> {
-    let executable = std::env::var_os("AGENT_REMOTE_EGO_BROWSER_DEVICE")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| OsString::from("ego-browser-device"));
+    let executable = device_client_executable();
     let status = ProcessCommand::new(&executable)
         .args(args)
         .status()
@@ -295,9 +293,7 @@ async fn run_device_client_with_token<const N: usize>(
     if token.is_empty() {
         bail!("agent-remote credential store returned an empty token")
     }
-    let executable = std::env::var_os("AGENT_REMOTE_EGO_BROWSER_DEVICE")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| OsString::from("ego-browser-device"));
+    let executable = device_client_executable();
     let mut child = ProcessCommand::new(&executable)
         .args(args)
         .stdin(Stdio::piped())
@@ -325,6 +321,29 @@ async fn run_device_client_with_token<const N: usize>(
         bail!("independent ego-browser Device Client exited with {status}")
     }
     Ok(())
+}
+
+fn device_client_executable() -> OsString {
+    if let Some(executable) =
+        std::env::var_os("AGENT_REMOTE_EGO_BROWSER_DEVICE").filter(|value| !value.is_empty())
+    {
+        return executable;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = crate::platform::user_home_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let candidate = home.join(
+            "Library/Application Support/Agent Remote Ego Browser/current/bin/ego-browser-device",
+        );
+        if candidate
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        {
+            return candidate.into_os_string();
+        }
+    }
+    OsString::from("ego-browser-device")
 }
 
 async fn load_control_token(paths: &AppPaths) -> Result<(String, String)> {
