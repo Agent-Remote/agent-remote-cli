@@ -125,6 +125,19 @@ impl ApiClient {
         Ok(response.data.items)
     }
 
+    /// Deletes a revoked browser Bridge device after its binding history is cleared.
+    pub async fn delete_ego_browser_device(
+        &self,
+        token: &str,
+        device_id: &str,
+    ) -> Result<(), ApiError> {
+        self.delete_empty(
+            &format!("/api/v1/ego-browser/devices/{}", url_encode(device_id)),
+            Some(token),
+        )
+        .await
+    }
+
     /// Lists browser bindings visible to the current user.
     pub async fn list_ego_browser_bindings(
         &self,
@@ -134,6 +147,19 @@ impl ApiClient {
             .get("/api/v1/ego-browser/bindings", Some(token))
             .await?;
         Ok(response.data.items)
+    }
+
+    /// Deletes a terminal browser binding and its retained request ledger.
+    pub async fn delete_ego_browser_binding(
+        &self,
+        token: &str,
+        binding_id: &str,
+    ) -> Result<(), ApiError> {
+        self.delete_empty(
+            &format!("/api/v1/ego-browser/bindings/{}", url_encode(binding_id)),
+            Some(token),
+        )
+        .await
     }
 
     /// Reads one browser binding by its full identifier.

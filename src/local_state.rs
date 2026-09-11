@@ -371,6 +371,29 @@ impl LocalState {
         Ok(())
     }
 
+    /// Remove one ego-browser binding metadata row for a server.
+    pub fn delete_ego_browser_binding(&self, server_url: &str, binding_id: &str) -> Result<()> {
+        self.connection.execute(
+            "DELETE FROM ego_browser_bindings WHERE server_url = ?1 AND id = ?2",
+            params![server_url, binding_id],
+        )?;
+        Ok(())
+    }
+
+    /// Remove all locally cached bindings for one server-scoped browser device.
+    pub fn delete_ego_browser_bindings_for_device(
+        &self,
+        server_url: &str,
+        device_id: &str,
+    ) -> Result<()> {
+        self.connection.execute(
+            "DELETE FROM ego_browser_bindings
+             WHERE server_url = ?1 AND ego_browser_device_id = ?2",
+            params![server_url, device_id],
+        )?;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub fn get_ego_browser_binding(
         &self,

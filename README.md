@@ -48,6 +48,8 @@ agent-remote ego-browser status [<binding-id>]
 agent-remote ego-browser requests <binding-id>
 agent-remote ego-browser cancel-request <binding-id> <request-ledger-id> [--yes]
 agent-remote ego-browser pause|stop|revoke <binding-id> --generation <generation> [--yes]
+agent-remote ego-browser delete-binding <binding-id> [--yes]
+agent-remote ego-browser delete-device <device-id> [--yes]
 agent-remote logout [--no-revoke-remote]
 ```
 
@@ -113,7 +115,7 @@ Use `agent-remote device status` for the installed version, signature, XPC, and 
 
 ## Ego Browser Bridge Control
 
-The `agent-remote ego-browser` commands inspect and control the independent local ego-browser Bridge; they do not use the general device-control application. `register` reuses the configured server and credential from `agent-remote login` (or validates an explicit `--server-url`) and passes the token to the Device Client over stdin, so it never appears in process arguments or CLI output. `status` shows local Bridge devices and bindings, while `status <binding>` also shows that binding's active requests. Use `requests <binding>` to refresh the active request ledger and `cancel-request <binding> <request-ledger-id>` to stop only that exact execution without invalidating the binding. Binding and request identifiers accept the same unique prefixes used by other list commands; `--no-trunc` prints full values.
+The `agent-remote ego-browser` commands inspect and control the independent local ego-browser Bridge; they do not use the general device-control application. `register` reuses the configured server and credential from `agent-remote login` (or validates an explicit `--server-url`) and passes the token to the Device Client over stdin, so it never appears in process arguments or CLI output. `status` shows local Bridge devices and bindings, while `status <binding>` also shows that binding's active requests. Use `requests <binding>` to refresh the active request ledger and `cancel-request <binding> <request-ledger-id>` to stop only that exact execution without invalidating the binding. Binding, request, claim-session, and deletion identifiers accept unique hexadecimal prefixes; `--no-trunc` prints full values. `delete-binding` permanently removes a terminal binding and its retained request ledger after revocation delivery has completed. `delete-device` permanently removes a revoked device after all of its binding history has been deleted. Both deletion commands ask for confirmation unless `--yes` is supplied.
 
 Claims and resumes remain explicit authorization operations in the independent `ego-browser-device` client. `agent-remote ego-browser claim <tool-session-id>` and `resume` invoke that client and show the full-trust warning unless `--yes` is supplied. Pause, stop, and revoke require the current generation and are confirmed by default. Browser scripts run as the current macOS user without an App Sandbox and can access files, network, login data, subprocesses, and any ego lite Tab or Task Space; cancellation stops supervised work but cannot undo side effects or guarantee cleanup of deliberately detached processes.
 

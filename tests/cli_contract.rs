@@ -90,6 +90,8 @@ fn every_command_path_executes_help_successfully() {
         &["ego-browser", "resume"],
         &["ego-browser", "stop"],
         &["ego-browser", "revoke"],
+        &["ego-browser", "delete-device"],
+        &["ego-browser", "delete-binding"],
         &["attach"],
         &["forward"],
         &["forward", "list"],
@@ -324,6 +326,75 @@ fn ego_browser_claim_discovers_the_standard_installed_device_client() {
         fs::read_to_string(args_log).unwrap(),
         format!("claim {tool_session} --confirm\n")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_claim_hides_device_client_output_and_reports_a_safe_summary() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let device_client = temporary.path().join("ego-browser-device");
+    fs::write(
+        &device_client,
+        "#!/bin/sh\nprintf 'raw success output with /private/path and token=secret\n'\nprintf 'raw warning\n' >&2\n",
+    )
+    .unwrap();
+    fs::set_permissions(&device_client, fs::Permissions::from_mode(0o700)).unwrap();
+    let session = "149aef7a-ba99-4bd5-a0e9-baf1a2635c09";
+
+    let output = Command::new(AGENT_REMOTE)
+        .args(["--color", "never", "ego-browser", "claim", session, "--yes"])
+        .env("AGENT_REMOTE_EGO_BROWSER_DEVICE", &device_client)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "claim delegation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("OK Ego-browser claim submitted for Claude session 149aef7aba99"));
+    assert!(!stdout.contains("raw success output"));
+    assert!(!stdout.contains("secret"));
+    assert!(!stderr.contains("raw warning"));
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_claim_reduces_device_client_failure_to_a_safe_error_code() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let device_client = temporary.path().join("ego-browser-device");
+    fs::write(
+        &device_client,
+        "#!/bin/sh\nprintf 'private path /tmp/secret\nerror=secret-token\nerror=policy_invalid\n' >&2\nexit 2\n",
+    )
+    .unwrap();
+    fs::set_permissions(&device_client, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let output = Command::new(AGENT_REMOTE)
+        .args([
+            "--color",
+            "never",
+            "ego-browser",
+            "claim",
+            "149aef7a-ba99-4bd5-a0e9-baf1a2635c09",
+            "--yes",
+        ])
+        .env("AGENT_REMOTE_EGO_BROWSER_DEVICE", &device_client)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("policy_invalid"));
+    assert!(!stderr.contains("/tmp/secret"));
+    assert!(!stderr.contains("private path"));
+    assert!(!stderr.contains("secret-token"));
 }
 
 #[cfg(target_os = "macos")]

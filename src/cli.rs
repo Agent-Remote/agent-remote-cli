@@ -154,6 +154,12 @@ pub enum EgoBrowserCommand {
     Stop(EgoBrowserLifecycleArgs),
     /// Permanently revoke a binding.
     Revoke(EgoBrowserLifecycleArgs),
+    /// Delete a revoked local Bridge device after its binding history is removed.
+    #[command(name = "delete-device", alias = "device-delete")]
+    DeleteDevice(EgoBrowserDeleteArgs),
+    /// Delete a terminal browser binding and its retained request ledger.
+    #[command(name = "delete-binding", alias = "binding-delete")]
+    DeleteBinding(EgoBrowserDeleteArgs),
 }
 
 #[derive(Debug, Args)]
@@ -184,7 +190,7 @@ pub struct EgoBrowserStatusArgs {
 
 #[derive(Debug, Args, PartialEq, Eq)]
 pub struct EgoBrowserClaimArgs {
-    /// Explicit remote Claude tool-session UUID.
+    /// Remote Claude tool-session UUID or a unique hexadecimal prefix.
     #[arg(value_name = "TOOL_SESSION")]
     pub tool_session: String,
 
@@ -230,6 +236,17 @@ pub struct EgoBrowserLifecycleArgs {
     pub generation: u64,
 
     /// Confirm the lifecycle action without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserDeleteArgs {
+    /// Device or binding UUID, or a unique hexadecimal prefix.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// Confirm permanent deletion without an interactive prompt.
     #[arg(long, short = 'y')]
     pub yes: bool,
 }
@@ -898,6 +915,29 @@ mod tests {
             cancel.command,
             CliCommand::EgoBrowser(EgoBrowserCommand::CancelRequest(args))
                 if args.binding == "aabbccdd" && args.request == "11223344" && args.yes
+        ));
+
+        let delete_device = Cli::try_parse_from([
+            "agent-remote",
+            "ego-browser",
+            "delete-device",
+            "aabbccdd",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            delete_device.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::DeleteDevice(args))
+                if args.id == "aabbccdd" && args.yes
+        ));
+
+        let delete_binding =
+            Cli::try_parse_from(["agent-remote", "ego-browser", "binding-delete", "aabbccdd"])
+                .unwrap();
+        assert!(matches!(
+            delete_binding.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::DeleteBinding(args))
+                if args.id == "aabbccdd" && !args.yes
         ));
 
         assert!(
