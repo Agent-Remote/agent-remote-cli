@@ -97,6 +97,51 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    /// Lists managed Linux Nodes visible to an administrator.
+    pub async fn list_nodes(&self, token: &str) -> Result<Vec<NodeData>, ApiError> {
+        let response: Envelope<NodeListData> = self.get("/api/v1/nodes", Some(token)).await?;
+        Ok(response.data.items)
+    }
+
+    /// Issues a short-lived, one-time Node enrollment code.
+    pub async fn issue_node_join_code(
+        &self,
+        token: &str,
+        node_id: &str,
+        ego_browser_enabled: Option<bool>,
+        exchange_id: &str,
+    ) -> Result<NodeJoinCodeData, ApiError> {
+        let response: Envelope<NodeJoinCodeData> = self
+            .post(
+                &format!("/api/v1/nodes/{}/join-code", url_encode(node_id)),
+                Some(token),
+                &NodeJoinCodeRequest {
+                    expires_in_seconds: 900,
+                    ego_browser_enabled,
+                    exchange_id: exchange_id.to_owned(),
+                },
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    /// Revokes only the unconsumed Node code bound to one managed exchange.
+    pub async fn revoke_node_join_code(
+        &self,
+        token: &str,
+        node_id: &str,
+        exchange_id: &str,
+    ) -> Result<NodeJoinCodeRevokeState, ApiError> {
+        let response: Envelope<NodeJoinCodeRevokeData> = self
+            .post(
+                &format!("/api/v1/nodes/{}/join-code/revoke", url_encode(node_id)),
+                Some(token),
+                &NodeJoinCodeRevokeRequest { exchange_id },
+            )
+            .await?;
+        Ok(response.data.state)
+    }
+
     /// Revokes one device through the authenticated control-plane endpoint.
     pub async fn revoke_device(&self, token: &str, device_id: &str) -> Result<(), ApiError> {
         let path = format!("/api/v1/devices/{}/revoke", url_encode(device_id));
@@ -119,10 +164,40 @@ impl ApiClient {
     pub async fn list_ego_browser_devices(
         &self,
         token: &str,
+        all_users: bool,
     ) -> Result<Vec<EgoBrowserDeviceData>, ApiError> {
-        let response: Envelope<EgoBrowserDeviceListData> =
-            self.get("/api/v1/ego-browser/devices", Some(token)).await?;
+        let path = if all_users {
+            "/api/v1/ego-browser/devices?all_users=true"
+        } else {
+            "/api/v1/ego-browser/devices"
+        };
+        let response: Envelope<EgoBrowserDeviceListData> = self.get(path, Some(token)).await?;
         Ok(response.data.items)
+    }
+
+    /// Revokes one exact Device generation; repeated revocation is idempotent.
+    pub async fn revoke_ego_browser_device(
+        &self,
+        token: &str,
+        device_id: &str,
+        generation: u64,
+        reason: &str,
+    ) -> Result<EgoBrowserDeviceData, ApiError> {
+        let response: Envelope<EgoBrowserDeviceData> = self
+            .post(
+                &format!(
+                    "/api/v1/ego-browser/devices/{}/revoke",
+                    url_encode(device_id)
+                ),
+                Some(token),
+                &EgoBrowserDeviceRevokeRequest {
+                    device_generation: generation,
+                    generation,
+                    reason,
+                },
+            )
+            .await?;
+        Ok(response.data)
     }
 
     /// Deletes a revoked browser Bridge device after its binding history is cleared.
@@ -147,6 +222,24 @@ impl ApiClient {
             .get("/api/v1/ego-browser/bindings", Some(token))
             .await?;
         Ok(response.data.items)
+    }
+
+    /// Lists fresh remote session candidates; cached indices are not authorization.
+    pub async fn list_ego_browser_candidates(
+        &self,
+        token: &str,
+    ) -> Result<Vec<EgoBrowserBindingCandidateData>, ApiError> {
+        let response: Envelope<EgoBrowserBindingCandidateListData> = self
+            .get("/api/v1/ego-browser/bindings/candidates", Some(token))
+            .await?;
+        Ok(response.data.items)
+    }
+
+    /// Reads the public enrollment and execution admission policy.
+    pub async fn ego_browser_policy(&self, token: &str) -> Result<EgoBrowserPolicyData, ApiError> {
+        let response: Envelope<serde_json::Value> =
+            self.get("/api/v1/ego-browser/policy", Some(token)).await?;
+        decode_ego_browser_policy(response.data)
     }
 
     /// Deletes a terminal browser binding and its retained request ledger.
@@ -213,6 +306,7 @@ impl ApiClient {
                 ),
                 Some(token),
                 &EgoBrowserCancelRequest {
+                    binding_generation: generation,
                     generation,
                     sequence,
                 },
@@ -222,6 +316,7 @@ impl ApiClient {
     }
 
     /// Applies a privilege-reducing browser binding lifecycle action.
+    #[allow(dead_code)]
     pub async fn control_ego_browser_binding(
         &self,
         token: &str,
@@ -238,7 +333,11 @@ impl ApiClient {
                     url_encode(action)
                 ),
                 Some(token),
-                &EgoBrowserLifecycleRequest { generation, reason },
+                &EgoBrowserLifecycleRequest {
+                    binding_generation: generation,
+                    generation,
+                    reason,
+                },
             )
             .await?;
         Ok(response.data)
@@ -792,6 +891,27 @@ impl ApiClient {
     }
 }
 
+fn decode_ego_browser_policy(value: serde_json::Value) -> Result<EgoBrowserPolicyData, ApiError> {
+    let Some(object) = value.as_object() else {
+        return Err(ApiError {
+            status: Some(StatusCode::OK),
+            code: Some("SERVER_CAPABILITY_UNAVAILABLE".to_owned()),
+            message: "Server policy response is missing enrollment/execution admission fields"
+                .to_owned(),
+        });
+    };
+    if !object.contains_key("enrollment_enabled") || !object.contains_key("execution_admission") {
+        return Err(ApiError {
+            status: Some(StatusCode::OK),
+            code: Some("SERVER_CAPABILITY_UNAVAILABLE".to_owned()),
+            message: "Server does not advertise separated enrollment and execution admission"
+                .to_owned(),
+        });
+    }
+    serde_json::from_value(value)
+        .map_err(|error| ApiError::decode(StatusCode::OK, String::new(), error))
+}
+
 async fn read_response_body(mut response: reqwest::Response) -> Result<String, ApiError> {
     let status = response.status();
     if response
@@ -892,14 +1012,136 @@ pub struct DeviceData {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct NodeData {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    #[serde(default)]
+    pub ssh_host: Option<String>,
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
+    #[serde(default)]
+    pub ssh_user: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub ego_browser_enabled: bool,
+    #[serde(default)]
+    pub configured_enabled: bool,
+    #[serde(default)]
+    pub effective_enabled: bool,
+    #[serde(default)]
+    pub node_execution_allowed: bool,
+    #[serde(default)]
+    pub enrollment_admission: bool,
+    #[serde(default)]
+    pub execution_admission: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct NodeListData {
+    items: Vec<NodeData>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct NodeJoinCodeRequest {
+    expires_in_seconds: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ego_browser_enabled: Option<bool>,
+    exchange_id: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct NodeJoinCodeRevokeRequest<'a> {
+    exchange_id: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeJoinCodeRevokeState {
+    Revoked,
+    Consumed,
+    Missing,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct NodeJoinCodeRevokeData {
+    state: NodeJoinCodeRevokeState,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct NodeJoinCodeData {
+    pub node_id: String,
+    pub code: String,
+    pub expires_at: String,
+    #[serde(default)]
+    pub ego_browser_enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct EgoBrowserDeviceData {
     pub id: String,
+    #[serde(default)]
+    pub generation: u64,
+    #[serde(default)]
+    pub device_generation: Option<u64>,
     pub status: String,
     pub release_profile: String,
     pub bridge_version: Option<String>,
     pub local_ego_browser_runtime_version: Option<String>,
     pub ego_lite_runtime_version: Option<String>,
     pub skill_version: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct EgoBrowserBindingCandidateData {
+    pub tool_session_id: String,
+    pub tool_type: String,
+    pub tool_account_id: String,
+    pub workspace_id: String,
+    pub project_key: String,
+    pub display_name: String,
+    pub status: String,
+    pub node_id: String,
+    pub runtime_backend: String,
+    pub current_ego_browser_device_id: Option<String>,
+    pub current_ego_browser_device_name: Option<String>,
+    pub binding_id: Option<String>,
+    pub controllable: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct EgoBrowserBindingCandidateListData {
+    items: Vec<EgoBrowserBindingCandidateData>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct EgoBrowserPolicyData {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub enrollment_enabled: bool,
+    #[serde(default)]
+    pub execution_admission: bool,
+    #[serde(default)]
+    pub protocol: Option<String>,
+}
+
+impl EgoBrowserPolicyData {
+    /// Returns whether local Device enrollment is currently admitted.
+    pub fn enrollment_is_admitted(&self) -> bool {
+        self.enrollment_enabled
+    }
+
+    /// Returns whether a new binding/relay execution is currently admitted.
+    pub fn execution_is_admitted(&self) -> bool {
+        self.enabled && self.execution_admission
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -926,6 +1168,8 @@ pub struct EgoBrowserBindingData {
     pub lease_until: Option<String>,
     pub lease_health: String,
     pub generation: u64,
+    #[serde(default)]
+    pub binding_generation: Option<u64>,
     pub connected_at: Option<String>,
     pub stop_reason: Option<String>,
 }
@@ -940,6 +1184,8 @@ pub struct EgoBrowserRequestData {
     pub id: String,
     pub binding_id: String,
     pub generation: u64,
+    #[serde(default)]
+    pub binding_generation: Option<u64>,
     pub request_id: String,
     pub sequence: u64,
     pub message_type: String,
@@ -955,12 +1201,22 @@ struct EgoBrowserRequestListData {
 
 #[derive(Debug, Serialize)]
 struct EgoBrowserCancelRequest {
+    binding_generation: u64,
     generation: u64,
     sequence: u64,
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct EgoBrowserLifecycleRequest<'a> {
+    binding_generation: u64,
+    generation: u64,
+    reason: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct EgoBrowserDeviceRevokeRequest<'a> {
+    device_generation: u64,
     generation: u64,
     reason: &'a str,
 }
@@ -1347,6 +1603,22 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    /// Stable server error code, when the response contained one.
+    pub fn code(&self) -> Option<&str> {
+        self.code.as_deref()
+    }
+
+    /// HTTP status returned by the control plane, when available.
+    pub fn status_code(&self) -> Option<u16> {
+        self.status.map(|value| value.as_u16())
+    }
+
+    /// Human-readable message with server-controlled detail.
+    #[allow(dead_code)]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     #[allow(dead_code)]
     pub fn is_not_found(&self) -> bool {
         self.status == Some(StatusCode::NOT_FOUND)
@@ -1448,7 +1720,27 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use super::{ApiClient, AttachSessionData, RegisterDeviceRequest};
+    use super::{decode_ego_browser_policy, ApiClient, AttachSessionData, RegisterDeviceRequest};
+
+    #[test]
+    fn policy_requires_separated_admission_fields() {
+        let error = decode_ego_browser_policy(serde_json::json!({
+            "enabled": true,
+            "protocol": "ego-browser-bridge-v1"
+        }))
+        .unwrap_err();
+        assert_eq!(error.code(), Some("SERVER_CAPABILITY_UNAVAILABLE"));
+
+        let policy = decode_ego_browser_policy(serde_json::json!({
+            "enabled": true,
+            "enrollment_enabled": true,
+            "execution_admission": false,
+            "protocol": "ego-browser-bridge-v1"
+        }))
+        .unwrap();
+        assert!(policy.enrollment_is_admitted());
+        assert!(!policy.execution_is_admitted());
+    }
 
     #[test]
     fn attach_authorization_defaults_to_ready_for_older_servers() {
@@ -1624,7 +1916,14 @@ mod tests {
                 .contains("\r\nauthorization: bearer test-user-token\r\n"));
             let body: serde_json::Value =
                 serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
-            assert_eq!(body, serde_json::json!({"generation": 7, "sequence": 19}));
+            assert_eq!(
+                body,
+                serde_json::json!({
+                    "binding_generation": 7,
+                    "generation": 7,
+                    "sequence": 19
+                })
+            );
 
             let response_body = r#"{"data":{"id":"ledger-123","binding_id":"binding 123","generation":7,"request_id":"request/123","sequence":19,"message_type":"execute","payload_bytes":321,"status":"cancel_requested","created_at":"2026-09-07T00:00:00Z"}}"#;
             let response = format!(

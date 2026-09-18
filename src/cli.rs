@@ -32,6 +32,10 @@ pub struct Cli {
     )]
     pub color: ColorChoice,
 
+    /// Emit machine-readable, secret-free output where the command supports it.
+    #[arg(long, global = true)]
+    pub json: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -69,6 +73,9 @@ pub enum Command {
     /// Install, launch, inspect, diagnose, or revoke the local macOS device bridge.
     #[command(subcommand)]
     Device(DeviceCommand),
+    /// Select and enroll a managed Linux Node through a one-time join code.
+    #[command(subcommand)]
+    Node(NodeCommand),
     /// Inspect and control the independent local ego-browser Bridge.
     #[command(name = "ego-browser", subcommand)]
     EgoBrowser(EgoBrowserCommand),
@@ -132,8 +139,48 @@ pub enum DeviceCommand {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum NodeCommand {
+    /// Issue a one-time join code and deliver it over the Node's configured SSH transport.
+    Install(NodeInstallArgs),
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct NodeInstallArgs {
+    /// Exact Node UUID or an unambiguous prefix.
+    #[arg(long, value_name = "NODE_REFERENCE")]
+    pub node: String,
+
+    /// Explicitly authorize the join-code intent to enable ego-browser.
+    #[arg(long)]
+    pub enable_ego_browser: bool,
+
+    /// Accept the selected Node and capability intent without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Subcommand)]
 /// Commands for the independent ego-browser Bridge and its bindings.
 pub enum EgoBrowserCommand {
+    /// Prepare the local Bridge and ensure its existing Device identity is enrolled.
+    Setup(EgoBrowserSetupArgs),
+    /// Select one remote Claude session and establish an explicitly confirmed binding.
+    Connect(EgoBrowserConnectArgs),
+    /// Repair the currently selected Bridge release, credential, and local policy.
+    Repair(EgoBrowserActionArgs),
+    /// Upgrade the selected Bridge release while preserving the Device identity.
+    Upgrade(EgoBrowserUpgradeArgs),
+    /// Remove Bridge components while retaining the Device identity for a later setup.
+    Remove(EgoBrowserRemoveArgs),
+    /// Revoke this Mac's Device identity and remove it after server confirmation.
+    #[command(name = "forget-this-mac", alias = "forget")]
+    ForgetThisMac(EgoBrowserForgetArgs),
+    /// Re-enroll the retained local Device identity after an explicit recovery confirmation.
+    ReEnroll(EgoBrowserActionArgs),
+    /// Rotate the local Device signing and encryption keys to a new generation.
+    DeviceRotate(EgoBrowserActionArgs),
+    /// Revoke the old-origin identity before creating a new identity on another Server.
+    SwitchServer(EgoBrowserSwitchServerArgs),
     /// Register the independent Device Client with the stored agent-remote credential.
     Register(EgoBrowserRegisterArgs),
     /// Show registered local Bridge devices and current binding state.
@@ -175,6 +222,71 @@ pub struct EgoBrowserRegisterArgs {
         value_name = "HEX"
     )]
     pub signer_certificate_sha256: Option<String>,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserSetupArgs {
+    /// Accept local release and permission prompts without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserConnectArgs {
+    /// Optional Claude tool-session UUID or unique prefix. Omit to choose interactively.
+    #[arg(value_name = "TOOL_SESSION")]
+    pub tool_session: Option<String>,
+
+    /// Confirm full-trust execution without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserActionArgs {
+    /// Accept repair actions without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserUpgradeArgs {
+    /// Accept the currently verified release profile without an interactive prompt.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserRemoveArgs {
+    /// Also remove retained Bridge release directories when supported by the installer.
+    #[arg(long)]
+    pub remove_releases: bool,
+
+    /// Confirm stopping active browser execution and removing Bridge components.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserForgetArgs {
+    /// Exact device ID or an unambiguous prefix used for damaged-identity recovery.
+    #[arg(long = "device-id", alias = "device")]
+    pub device_id: Option<String>,
+
+    /// Confirm irreversible Device identity revocation and local key removal.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct EgoBrowserSwitchServerArgs {
+    /// New canonical control-plane origin; it must already have a stored login credential.
+    #[arg(long = "server-url", alias = "server", value_name = "URL")]
+    pub server_url: String,
+
+    /// Confirm revoking the old-origin identity and creating a new one.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -229,10 +341,14 @@ pub struct EgoBrowserCancelRequestArgs {
 pub struct EgoBrowserLifecycleArgs {
     /// Binding UUID or unique hexadecimal prefix.
     #[arg(value_name = "BINDING")]
-    pub binding: String,
+    pub binding: Option<String>,
 
     /// Expected binding generation; stale generations fail closed.
-    #[arg(long, value_name = "GENERATION")]
+    #[arg(long = "binding-generation", value_name = "GENERATION")]
+    pub binding_generation: Option<u64>,
+
+    /// Legacy alias for --binding-generation.
+    #[arg(long, value_name = "GENERATION", default_value_t = 0, hide = true)]
     pub generation: u64,
 
     /// Confirm the lifecycle action without an interactive prompt.
@@ -885,7 +1001,7 @@ mod tests {
         assert!(matches!(
             pause.command,
             CliCommand::EgoBrowser(EgoBrowserCommand::Pause(args))
-                if args.binding == "aabbccdd" && args.generation == 7 && args.yes
+                if args.binding.as_deref() == Some("aabbccdd") && args.generation == 7 && args.yes
         ));
 
         let requests = Cli::try_parse_from([
@@ -940,9 +1056,41 @@ mod tests {
                 if args.id == "aabbccdd" && !args.yes
         ));
 
-        assert!(
-            Cli::try_parse_from(["agent-remote", "ego-browser", "resume", "aabbccdd"]).is_err()
-        );
+        let resume = Cli::try_parse_from(["agent-remote", "ego-browser", "resume"]).unwrap();
+        assert!(matches!(
+            resume.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::Resume(args))
+                if args.binding.is_none() && args.generation == 0 && !args.yes
+        ));
+
+        let re_enroll =
+            Cli::try_parse_from(["agent-remote", "ego-browser", "re-enroll", "--yes"]).unwrap();
+        assert!(matches!(
+            re_enroll.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::ReEnroll(args)) if args.yes
+        ));
+
+        let device_rotate =
+            Cli::try_parse_from(["agent-remote", "ego-browser", "device-rotate", "--yes"]).unwrap();
+        assert!(matches!(
+            device_rotate.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::DeviceRotate(args)) if args.yes
+        ));
+
+        let switch_server = Cli::try_parse_from([
+            "agent-remote",
+            "ego-browser",
+            "switch-server",
+            "--server-url",
+            "https://new.example.test",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            switch_server.command,
+            CliCommand::EgoBrowser(EgoBrowserCommand::SwitchServer(args))
+                if args.server_url == "https://new.example.test" && args.yes
+        ));
     }
 
     #[test]
@@ -993,5 +1141,15 @@ mod tests {
             opted_out.command,
             CliCommand::Logout(args) if !args.revoke_remote
         ));
+    }
+
+    #[test]
+    fn global_json_flag_is_accepted_before_or_after_lifecycle_commands() {
+        let before =
+            Cli::try_parse_from(["agent-remote", "--json", "ego-browser", "status"]).unwrap();
+        assert!(before.json);
+        let after =
+            Cli::try_parse_from(["agent-remote", "ego-browser", "status", "--json"]).unwrap();
+        assert!(after.json);
     }
 }

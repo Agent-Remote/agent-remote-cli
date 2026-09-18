@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "node": {
+    "repository": "Agent-Remote/agent-remote-node",
+    "release_workflow": "release.yml",
+    "version": "0.2.20"
+  },
+  "ego_browser_bridge": {
+    "repository": "Agent-Remote/agent-remote-ego-browser",
+    "version": "0.1.12",
+    "protocol_version": "ego-browser-bridge-v1",
+    "profile_id": "community-local-trust",
+    "credential_profile": "community_file",
+    "signer_certificate_sha256": "1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5",
+    "bootstrap": {
+      "commit": "2e2c103e62e2f81b8e61debc42beaae1f8bc90b0",
+      "sha256": "66611568015fcb316e39f2a16b1872b93b127158160df1f19d1bdc675c4f8d73"
+    }
+  }
+}

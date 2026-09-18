@@ -1,10 +1,32 @@
 use std::io::{self, IsTerminal};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use clap::ValueEnum;
 use unicode_width::UnicodeWidthStr;
 
 static COLOR_CHOICE: AtomicU8 = AtomicU8::new(0);
+static OUTPUT_SUPPRESSED: AtomicBool = AtomicBool::new(false);
+
+/// Restores the prior terminal-output mode when a machine-readable command ends.
+pub struct OutputSuppressionGuard {
+    previous: bool,
+}
+
+impl Drop for OutputSuppressionGuard {
+    fn drop(&mut self) {
+        OUTPUT_SUPPRESSED.store(self.previous, Ordering::Relaxed);
+    }
+}
+
+pub fn suppress_output(suppressed: bool) -> OutputSuppressionGuard {
+    OutputSuppressionGuard {
+        previous: OUTPUT_SUPPRESSED.swap(suppressed, Ordering::Relaxed),
+    }
+}
+
+pub(crate) fn output_suppressed() -> bool {
+    OUTPUT_SUPPRESSED.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum ColorChoice {
@@ -98,22 +120,37 @@ pub fn status(value: &str) -> String {
 }
 
 pub fn section(title: &str) {
+    if output_suppressed() {
+        return;
+    }
     println!("{}", heading(title));
 }
 
 pub fn success_line(message: impl std::fmt::Display) {
+    if output_suppressed() {
+        return;
+    }
     println!("{} {message}", success("OK"));
 }
 
 pub fn warning_line(message: impl std::fmt::Display) {
+    if output_suppressed() {
+        return;
+    }
     println!("{} {message}", warning("WARN"));
 }
 
 pub fn failure_line(message: impl std::fmt::Display) {
+    if output_suppressed() {
+        return;
+    }
     println!("{} {message}", failure("FAIL"));
 }
 
 pub fn note(message: impl std::fmt::Display) {
+    if output_suppressed() {
+        return;
+    }
     println!("{} {message}", muted("NOTE"));
 }
 
@@ -138,6 +175,9 @@ impl Details {
     }
 
     pub fn render(&self) {
+        if output_suppressed() {
+            return;
+        }
         let width = self
             .rows
             .iter()
@@ -187,6 +227,9 @@ impl Table {
     }
 
     pub fn render(&self) {
+        if output_suppressed() {
+            return;
+        }
         let mut widths: Vec<_> = self
             .headers
             .iter()

@@ -36,6 +36,7 @@ agent-remote account verify <account-id>
 agent-remote account status <account-id>
 agent-remote ssh check --session-id <session-id>
 agent-remote attach <session-id> --print-only
+agent-remote node install --node <node-id-or-prefix> [--enable-ego-browser] [--yes]
 agent-remote device install --source "/path/to/agent-remote-device-macos-0.2.12.zip"
 agent-remote device uninstall [--yes]
 agent-remote device status
@@ -43,11 +44,17 @@ agent-remote device launch
 agent-remote device diagnose
 agent-remote device revoke [--device <device-id>] [--yes]
 agent-remote device rotate-token [--yes]
-agent-remote ego-browser register [--server-url URL] --signer-certificate-sha256 HEX
+agent-remote ego-browser setup
+agent-remote ego-browser connect [<tool-session-id-or-prefix>]
 agent-remote ego-browser status [<binding-id>]
+agent-remote ego-browser repair|upgrade
+agent-remote ego-browser pause|resume|stop [<binding-id>] [--binding-generation <generation>]
+agent-remote ego-browser remove
+agent-remote ego-browser forget-this-mac
+agent-remote ego-browser register [--server-url URL] [--signer-certificate-sha256 HEX] # advanced compatibility
 agent-remote ego-browser requests <binding-id>
 agent-remote ego-browser cancel-request <binding-id> <request-ledger-id> [--yes]
-agent-remote ego-browser pause|stop|revoke <binding-id> --generation <generation> [--yes]
+agent-remote ego-browser revoke [<binding-id>] [--binding-generation <generation>] [--yes]
 agent-remote ego-browser delete-binding <binding-id> [--yes]
 agent-remote ego-browser delete-device <device-id> [--yes]
 agent-remote logout [--no-revoke-remote]
@@ -113,11 +120,41 @@ The current implementation records and checks the manifest for Mutagen and WireG
 
 Use `agent-remote device status` for the installed version, signature, XPC, and process state. `agent-remote device launch` verifies the installed bundle and the shared device credential before opening the local APP; the APP then lists the owning user's running Claude sessions and performs claim, rebind, and local approval itself. `agent-remote device diagnose` performs the same strict checks and exits non-zero when the installation is not trusted. `agent-remote device uninstall` requires the app to be stopped, removes its fixed app bundle, shared Broker credential, TCC grants, and bundle-owned sandbox data, but does not revoke the remote registration. It refuses to proceed while hidden-application recovery state remains. `agent-remote device revoke` requires a stored user token, asks for confirmation unless `--yes` is supplied, revokes the selected or active device through the control plane, and removes its local device credential and refresh state. `agent-remote device rotate-token` rotates only the active device through the control plane, never prints the returned token, and immediately replaces the local platform credential and shared Network Broker credential; stop active device-control sessions before using it.
 
+## Node Enrollment
+
+`agent-remote node install --node <node-id-or-prefix>` authenticates the fixed Node release checksum
+and Sigstore workflow identity on the control workstation, transfers its archive over a dedicated SSH
+stdin, runs the staged installer, and only then asks the control plane for a short-lived join code. The
+code is sent over a separate SSH stdin and never enters argv, environment variables, URLs, logs, or
+terminal output. A retry may reuse a byte-identical staged archive, but it always reruns the installer
+before issuing a code. The pinned `0.2.20` candidate is not yet a published production release, so the
+download path fails closed until its tag-bound assets and Sigstore evidence exist.
+
 ## Ego Browser Bridge Control
 
-The `agent-remote ego-browser` commands inspect and control the independent local ego-browser Bridge; they do not use the general device-control application. `register` reuses the configured server and credential from `agent-remote login` (or validates an explicit `--server-url`) and passes the token to the Device Client over stdin, so it never appears in process arguments or CLI output. `status` shows local Bridge devices and bindings, while `status <binding>` also shows that binding's active requests. Use `requests <binding>` to refresh the active request ledger and `cancel-request <binding> <request-ledger-id>` to stop only that exact execution without invalidating the binding. Binding, request, claim-session, and deletion identifiers accept unique hexadecimal prefixes; `--no-trunc` prints full values. `delete-binding` permanently removes a terminal binding and its retained request ledger after revocation delivery has completed. `delete-device` permanently removes a revoked device after all of its binding history has been deleted. Both deletion commands ask for confirmation unless `--yes` is supplied.
+The normal flow is `agent-remote ego-browser setup`, followed by `agent-remote ego-browser connect` when the user is ready to select and authorize one remote session. `setup` reuses the server and credential from `agent-remote login`, discovers the verified release profile and certificate pin, ensures the existing Device identity, and never claims a session. Ordinary use does not require a Server URL, registration token, Device ID, or certificate digest.
 
-Claims and resumes remain explicit authorization operations in the independent `ego-browser-device` client. `agent-remote ego-browser claim <tool-session-id>` and `resume` invoke that client and show the full-trust warning unless `--yes` is supplied. Pause, stop, and revoke require the current generation and are confirmed by default. Browser scripts run as the current macOS user without an App Sandbox and can access files, network, login data, subprocesses, and any ego lite Tab or Task Space; cancellation stops supervised work but cannot undo side effects or guarantee cleanup of deliberately detached processes.
+With an existing verified installation, `setup` and `repair` run only that release's owner-only
+installer and never upgrade it. A missing installation or an explicit `upgrade` uses a bootstrap
+pinned by commit and SHA-256; that bootstrap is allowed to request only Bridge `0.1.12`, repository
+`Agent-Remote/agent-remote-ego-browser`, profile `community-local-trust` version `0.1.12`, and signer
+certificate `1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5`. It receives no Server URL,
+token, session ID, or full-trust claim. Because `0.1.12` is still unpublished, this path intentionally
+fails closed until its release assets and Sigstore evidence exist.
+
+Local trust is stored owner-only against the exact profile ID, profile version, Bridge version, and
+certificate pin. Routine `repair` reuses an exact match without `--yes`; first use or any tuple change
+requires confirmation, and non-interactive use returns `trust_confirmation_required` unless the
+caller explicitly supplies `--yes`.
+
+`connect` and `resume` show the full-trust warning and require explicit confirmation. `pause` is recoverable: it preserves the paused binding for a separately confirmed `resume` at a new binding generation. `stop` is terminal and requires a fresh `connect`. These lifecycle commands resolve the active handoff or one unambiguous candidate when IDs are omitted and fail closed instead of guessing. Browser scripts run as the current macOS user without an App Sandbox and can access files, network, login data, subprocesses, and any ego lite Tab or Task Space; cancellation stops supervised work but cannot undo side effects or guarantee cleanup of deliberately detached processes.
+
+`register`, explicit `--server-url`, and `--signer-certificate-sha256` remain advanced compatibility surfaces for custom or older releases. `register` still passes the stored token to the Device Client over stdin, so it never appears in process arguments or CLI output. `status` shows local Bridge devices and bindings, while `status <binding>` also shows that binding's active requests. Use `requests <binding>` to refresh the active request ledger and `cancel-request <binding> <request-ledger-id>` to stop only that exact execution without invalidating the binding. Binding, request, claim-session, and deletion identifiers accept unique hexadecimal prefixes; `--no-trunc` prints full values. `delete-binding` permanently removes a terminal binding and its retained request ledger after revocation delivery has completed. `delete-device` permanently removes a revoked device after all of its binding history has been deleted. Both deletion commands ask for confirmation unless `--yes` is supplied.
+
+Add global `--json` for machine-readable lifecycle output. Successful mutations, status, binding
+lists, and request lists each emit exactly one JSON document; JSON mode never prompts or guesses a
+candidate. The projection deliberately excludes credentials, keys, scripts, page data, cookies,
+URLs, and relay ciphertext.
 
 ## WireGuard and SSH
 
@@ -193,13 +230,15 @@ scripts/run-quality-checks.sh
 Build macOS and Linux CLI archives:
 
 ```sh
-VERSION=0.2.15 scripts/package-release.sh
+VERSION="$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "agent-remote-cli") | .version')" \
+  scripts/package-release.sh
 ```
 
 Build a Windows x64 archive from PowerShell on Windows (pass `-Target aarch64-pc-windows-msvc` for ARM64):
 
 ```powershell
-./scripts/package-release.ps1 -Version 0.2.15
+$version = ((cargo metadata --format-version=1 --no-deps | ConvertFrom-Json).packages | Where-Object name -eq "agent-remote-cli").version
+./scripts/package-release.ps1 -Version $version
 ```
 
 The release archive includes:
@@ -223,8 +262,9 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
 Install a specific version or customize paths:
 
 ```sh
+VERSION=VERSION_TO_INSTALL
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.2.15 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version "$VERSION" --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 Install a downloaded release archive:

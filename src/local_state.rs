@@ -371,6 +371,33 @@ impl LocalState {
         Ok(())
     }
 
+    /// Returns stale diagnostic bindings that must never authorize offline actions.
+    pub fn list_ego_browser_bindings(
+        &self,
+        server_url: &str,
+    ) -> Result<Vec<LocalEgoBrowserBinding>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, server_url, ego_browser_device_id, tool_session_id,
+                    node_id, status, generation, relay_binding_kind, lease_until
+             FROM ego_browser_bindings WHERE server_url = ?1 ORDER BY updated_at DESC",
+        )?;
+        let rows = statement.query_map(params![server_url], |row| {
+            Ok(LocalEgoBrowserBinding {
+                id: row.get(0)?,
+                server_url: row.get(1)?,
+                ego_browser_device_id: row.get(2)?,
+                tool_session_id: row.get(3)?,
+                node_id: row.get(4)?,
+                status: row.get(5)?,
+                generation: row.get(6)?,
+                relay_binding_kind: row.get(7)?,
+                lease_until: row.get(8)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     /// Remove one ego-browser binding metadata row for a server.
     pub fn delete_ego_browser_binding(&self, server_url: &str, binding_id: &str) -> Result<()> {
         self.connection.execute(

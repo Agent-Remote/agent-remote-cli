@@ -36,17 +36,24 @@ agent-remote account verify <account-id>
 agent-remote account status <account-id>
 agent-remote ssh check --session-id <session-id>
 agent-remote attach <session-id> --print-only
+agent-remote node install --node <node-id-or-prefix> [--enable-ego-browser] [--yes]
 agent-remote device install --source "/path/to/agent-remote-device-macos-0.2.12.zip"
 agent-remote device uninstall [--yes]
 agent-remote device status
 agent-remote device diagnose
 agent-remote device revoke [--device <device-id>] [--yes]
 agent-remote device rotate-token [--yes]
-agent-remote ego-browser register [--server-url URL] --signer-certificate-sha256 HEX
+agent-remote ego-browser setup
+agent-remote ego-browser connect [<tool-session-id-or-prefix>]
 agent-remote ego-browser status [<binding-id>]
+agent-remote ego-browser repair|upgrade
+agent-remote ego-browser pause|resume|stop [<binding-id>] [--binding-generation <generation>]
+agent-remote ego-browser remove
+agent-remote ego-browser forget-this-mac
+agent-remote ego-browser register [--server-url URL] [--signer-certificate-sha256 HEX] # 高级兼容入口
 agent-remote ego-browser requests <binding-id>
 agent-remote ego-browser cancel-request <binding-id> <request-ledger-id> [--yes]
-agent-remote ego-browser pause|stop|revoke <binding-id> --generation <generation> [--yes]
+agent-remote ego-browser revoke [<binding-id>] [--binding-generation <generation>] [--yes]
 agent-remote ego-browser delete-binding <binding-id> [--yes]
 agent-remote ego-browser delete-device <device-id> [--yes]
 agent-remote logout [--no-revoke-remote]
@@ -110,11 +117,38 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 
 `agent-remote device status` 显示已安装版本、签名、XPC 和进程状态；`agent-remote device diagnose` 执行相同的严格检查，安装不可信时返回非零状态。`agent-remote device uninstall` 要求 app 已停止，删除固定 app bundle、共享 Broker 凭据、TCC 授权及各 bundle 自有的沙盒数据，但不会撤销远端注册；存在隐藏应用恢复日志时会拒绝继续。`agent-remote device revoke` 要求本地已保存用户 token，未指定 `--yes` 时先确认，通过控制平面撤销指定或当前设备，并删除对应的本地设备凭据与刷新状态。`agent-remote device rotate-token` 只轮换当前 active device，通过控制面取得新令牌后不会打印令牌，并立即覆盖本机平台凭据和共享 Network Broker 凭据；执行前必须先停止活动的设备控制 session。
 
+## Node Enrollment
+
+`agent-remote node install --node <node-id-or-prefix>` 会先在控制工作站验证固定 Node release 的
+checksum 与 Sigstore workflow identity，再通过独立 SSH stdin 传输归档并运行暂存 installer；
+只有安装成功后才向控制面申请短期加入码。加入码使用另一次 SSH stdin，不会进入 argv、环境
+变量、URL、日志或终端输出。重试可以复用字节完全相同的暂存归档，但签发加入码前始终重新运行
+installer。固定的 `0.2.20` candidate 尚未发布为 production release，因此 tag-bound 制品和
+Sigstore evidence 就绪前，下载路径会按预期 fail closed。
+
 ## Ego Browser Bridge 控制
 
-`agent-remote ego-browser` 用于查看和控制独立的本地 ego-browser Bridge，不会进入通用设备控制应用。`register` 会复用 `agent-remote login` 保存的服务器和凭据（或校验显式的 `--server-url`），并通过 stdin 将 token 传给 Device Client，因此不会出现在进程参数或 CLI 输出中。`status` 显示本地 Bridge 设备与 binding；`status <binding>` 还会显示该 binding 的活动 request。`requests <binding>` 会刷新活动 request ledger，`cancel-request <binding> <request-ledger-id>` 只停止这一条准确执行，不会使整个 binding 失效。binding、request、claim session 和删除命令的 ID 都支持唯一十六进制前缀；`--no-trunc` 显示完整 ID。`delete-binding` 会在 binding 进入终态且撤销通知投递完成后永久删除 binding 及其请求账本；`delete-device` 会在设备已撤销且其全部 binding 历史已删除后永久删除设备。两个删除命令默认要求确认，使用 `--yes` 可跳过确认。
+普通流程先运行 `agent-remote ego-browser setup`；准备连接时，再运行 `agent-remote ego-browser connect` 选择并授权一个远端 session。`setup` 复用 `agent-remote login` 保存的服务器与凭据，自动发现已验证 release profile 和证书 pin，确保复用现有 Device identity，且不会自动 claim session。普通使用不需要输入 Server URL、registration token、Device ID 或证书摘要。
 
-claim 和 resume 仍是独立 `ego-browser-device` 客户端中的显式授权操作。`agent-remote ego-browser claim <tool-session-id>` 与 `resume` 会调用该客户端，并在未指定 `--yes` 时显示全信任警告。pause、stop 与 revoke 要求当前 generation，且默认需要确认。浏览器脚本以当前 macOS 用户身份在无 App Sandbox 的环境中运行，可以访问文件、网络、登录数据、子进程以及任意 ego lite Tab 或 Task Space；取消只能终止受监管执行，无法回滚副作用，也不能保证清理主动脱离监管的进程。
+已有验证安装时，`setup` 与 `repair` 只运行该 current release 的 owner-only installer，绝不
+隐式升级。缺少安装或显式执行 `upgrade` 时使用由 commit 与 SHA-256 固定的 bootstrap；它只能
+请求 Bridge `0.1.12`、仓库 `Agent-Remote/agent-remote-ego-browser`、profile
+`community-local-trust` version `0.1.12`，以及 signer certificate
+`1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5`，且不会收到 Server URL、
+token、session ID 或 full-trust claim。由于 `0.1.12` 尚未发布，release asset 与 Sigstore
+evidence 就绪前，该路径会有意 fail closed。
+
+本机信任以 owner-only 文件绑定准确的 profile ID、profile version、Bridge version 与证书 pin。
+例行 `repair` 在四项完全匹配时无需 `--yes`；首次使用或任一项变化都重新确认，非交互调用若未
+显式传入 `--yes` 则返回 `trust_confirmation_required`。
+
+`connect` 与 `resume` 会显示全信任警告并要求明确确认。`pause` 可恢复：它保留 paused binding，之后经再次确认的 `resume` 推进到新的 binding generation。`stop` 是终态，之后必须重新 `connect`。省略 ID 时，这些生命周期命令只会使用 active handoff 或唯一候选；无法唯一解析时会 fail closed，不会猜测。浏览器脚本以当前 macOS 用户身份在无 App Sandbox 的环境中运行，可以访问文件、网络、登录数据、子进程以及任意 ego lite Tab 或 Task Space；取消只能终止受监管执行，无法回滚副作用，也不能保证清理主动脱离监管的进程。
+
+`register`、显式 `--server-url` 与 `--signer-certificate-sha256` 仅作为自定义或旧版 release 的高级兼容入口保留。`register` 仍通过 stdin 将保存的 token 传给 Device Client，因此不会出现在进程参数或 CLI 输出中。`status` 显示本地 Bridge 设备与 binding；`status <binding>` 还会显示该 binding 的活动 request。`requests <binding>` 会刷新活动 request ledger，`cancel-request <binding> <request-ledger-id>` 只停止这一条准确执行，不会使整个 binding 失效。binding、request、claim session 和删除命令的 ID 都支持唯一十六进制前缀；`--no-trunc` 显示完整 ID。`delete-binding` 会在 binding 进入终态且撤销通知投递完成后永久删除 binding 及其请求账本；`delete-device` 会在设备已撤销且其全部 binding 历史已删除后永久删除设备。两个删除命令默认要求确认，使用 `--yes` 可跳过确认。
+
+全局添加 `--json` 可获得机器可读的生命周期输出。成功变更、status、binding 列表和 request
+列表都只输出一个 JSON 文档；JSON 模式不会提示输入或猜测候选。该投影明确排除 credential、
+private key、脚本、页面数据、Cookie、URL 和 relay ciphertext。
 
 ## WireGuard 和 SSH
 
@@ -190,13 +224,15 @@ scripts/run-quality-checks.sh
 构建 macOS 和 Linux CLI 归档：
 
 ```sh
-VERSION=0.2.15 scripts/package-release.sh
+VERSION="$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "agent-remote-cli") | .version')" \
+  scripts/package-release.sh
 ```
 
 在 Windows PowerShell 中构建 Windows x64 归档（ARM64 可传入 `-Target aarch64-pc-windows-msvc`）：
 
 ```powershell
-./scripts/package-release.ps1 -Version 0.2.15
+$version = ((cargo metadata --format-version=1 --no-deps | ConvertFrom-Json).packages | Where-Object name -eq "agent-remote-cli").version
+./scripts/package-release.ps1 -Version $version
 ```
 
 发布归档包含：
@@ -220,8 +256,9 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
 安装指定版本或自定义路径：
 
 ```sh
+VERSION=VERSION_TO_INSTALL
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
-  bash -s -- --version 0.2.15 --home ~/.config/agent-remote --bin-dir ~/.local/bin
+  bash -s -- --version "$VERSION" --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
 安装已下载的发布归档：
