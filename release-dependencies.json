@@ -3,7 +3,7 @@
   "node": {
     "repository": "Agent-Remote/agent-remote-node",
     "release_workflow": "release.yml",
-    "version": "0.2.21"
+    "version": "0.2.22"
   },
   "ego_browser_bridge": {
     "repository": "Agent-Remote/agent-remote-ego-browser",

@@ -20,6 +20,13 @@ const AGENT_REMOTE: &str = env!("CARGO_BIN_EXE_agent-remote");
 const FCLAUDE: &str = env!("CARGO_BIN_EXE_fclaude");
 const WIREGUARD: &str = env!("CARGO_BIN_EXE_agent-remote-wireguard");
 
+#[cfg(unix)]
+fn managed_node_version() -> String {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../release-dependencies.json")).unwrap();
+    manifest["node"]["version"].as_str().unwrap().to_owned()
+}
+
 fn run(binary: &str, args: &[&str]) -> Output {
     Command::new(binary)
         .args(args)
@@ -211,8 +218,11 @@ struct NodeReleaseFixture {
 
 #[cfg(unix)]
 fn write_node_release_fixture(root: &Path) -> NodeReleaseFixture {
-    let archive_name = "agent-remote-node-0.2.21-linux-amd64-glibc.tar.gz";
-    let archive = root.join(archive_name);
+    let archive_name = format!(
+        "agent-remote-node-{}-linux-amd64-glibc.tar.gz",
+        managed_node_version()
+    );
+    let archive = root.join(&archive_name);
     let payload = b"contract-test authenticated Node release";
     fs::write(&archive, payload).unwrap();
     let digest = format!("{:x}", Sha256::digest(payload));
@@ -1104,9 +1114,10 @@ cat > "$TEST_NODE_SSH_CALLS.stdin-$count"
     assert!(!String::from_utf8_lossy(&output.stderr).contains(join_code));
     let cosign_arguments = fs::read_to_string(&release.cosign_calls).unwrap();
     assert!(cosign_arguments.contains("verify-blob"));
-    assert!(cosign_arguments.contains(
-        "https://github.com/Agent-Remote/agent-remote-node/.github/workflows/release.yml@refs/tags/v0.2.21"
-    ));
+    assert!(cosign_arguments.contains(&format!(
+        "https://github.com/Agent-Remote/agent-remote-node/.github/workflows/release.yml@refs/tags/v{}",
+        managed_node_version()
+    )));
 
     let requests = server.join().unwrap();
     assert_eq!(requests.len(), 4);
@@ -1400,7 +1411,7 @@ fn node_install_recovers_consumed_exchange_without_reissuing_or_reusing_code() {
     let initial = node_item(node_id);
     let mut recovered = node_item(node_id);
     recovered["status"] = serde_json::json!("healthy");
-    recovered["version"] = serde_json::json!("0.2.21");
+    recovered["version"] = serde_json::json!(managed_node_version());
     recovered["effective_enabled"] = serde_json::json!(true);
     let (server_url, server) = spawn_http_exchange_responses(vec![
         serde_json::json!({"data": {"items": [initial.clone()]}}),

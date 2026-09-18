@@ -127,7 +127,7 @@ and Sigstore workflow identity on the control workstation, transfers its archive
 stdin, runs the staged installer, and only then asks the control plane for a short-lived join code. The
 code is sent over a separate SSH stdin and never enters argv, environment variables, URLs, logs, or
 terminal output. A retry may reuse a byte-identical staged archive, but it always reruns the installer
-before issuing a code. The pinned `0.2.21` release is accepted only with its tag-bound assets
+before issuing a code. The pinned `0.2.22` release is accepted only with its tag-bound assets
 and Sigstore evidence.
 
 ## Ego Browser Bridge Control

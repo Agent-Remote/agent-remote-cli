@@ -123,7 +123,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 checksum 与 Sigstore workflow identity，再通过独立 SSH stdin 传输归档并运行暂存 installer；
 只有安装成功后才向控制面申请短期加入码。加入码使用另一次 SSH stdin，不会进入 argv、环境
 变量、URL、日志或终端输出。重试可以复用字节完全相同的暂存归档，但签发加入码前始终重新运行
-installer。固定的 `0.2.21` release 只有在 tag-bound 制品与 Sigstore evidence 完整时才会被接受。
+installer。固定的 `0.2.22` release 只有在 tag-bound 制品与 Sigstore evidence 完整时才会被接受。
 
 ## Ego Browser Bridge 控制
 
