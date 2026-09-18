@@ -2159,7 +2159,10 @@ fn migrate_legacy_device_store_paths(home: &Path, legacy: &Path, canonical: &Pat
                 fs::create_dir_all(parent)?;
                 validate_directory_chain_without_symlinks(home, parent)?;
             }
+            #[cfg(unix)]
             let mut builder = fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = fs::DirBuilder::new();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
@@ -2612,10 +2615,10 @@ fn read_owner_only_file(path: &std::path::Path, limit: u64) -> std::io::Result<V
         options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     let file = options.open(path)?;
-    let opened = file.metadata()?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata()?;
         if path_metadata.dev() != opened.dev() || path_metadata.ino() != opened.ino() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -2824,10 +2827,10 @@ fn read_installed_release_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
         options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     let file = options.open(path)?;
-    let after = file.metadata()?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let after = file.metadata()?;
         if before.dev() != after.dev() || before.ino() != after.ino() || after.nlink() != 1 {
             bail!("managed Bridge release metadata changed while opening")
         }
@@ -2867,10 +2870,10 @@ fn read_trusted_certificate_pin(path: &Path) -> Result<Option<String>> {
         options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
     let file = options.open(path)?;
-    let opened = file.metadata()?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        let opened = file.metadata()?;
         if metadata.dev() != opened.dev() || metadata.ino() != opened.ino() {
             bail!("trusted certificate pin changed while opening")
         }

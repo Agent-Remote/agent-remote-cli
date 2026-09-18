@@ -200,6 +200,8 @@ fn set_directory_owner_only(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -209,6 +211,8 @@ fn make_executable_owner_only(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o500))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
