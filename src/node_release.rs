@@ -333,13 +333,17 @@ fn validate_private_file(path: &Path, limit: u64) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::{
-        append_suffix, copy_regular_file, obtain_with, validate_target, verify_checksum_file,
-        MANAGED_NODE_RELEASE_WORKFLOW, MANAGED_NODE_REPOSITORY, MANAGED_NODE_VERSION,
-        MAX_ARCHIVE_BYTES,
+        append_suffix, copy_regular_file, obtain_with, MANAGED_NODE_RELEASE_WORKFLOW,
+        MANAGED_NODE_REPOSITORY, MAX_ARCHIVE_BYTES,
     };
+    use super::{validate_target, verify_checksum_file, MANAGED_NODE_VERSION};
+    #[cfg(unix)]
     use sha2::{Digest, Sha256};
-    use std::fs::{self, File};
+    use std::fs;
+    #[cfg(unix)]
+    use std::fs::File;
 
     #[cfg(unix)]
     use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};

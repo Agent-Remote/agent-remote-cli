@@ -5615,10 +5615,8 @@ mod tests {
         close_local_admission, device_store_dir, ensure_device_store_dir, forget_this_mac,
         load_local_device_metadata, load_pending_revocation, load_trust_confirmation,
         local_admission_path, local_admission_state, local_binding_is_connected,
-        local_bridge_installation_exists, local_device_is_registered,
-        managed_device_client_at_root, map_api_error_fields, map_operational_error,
-        migrate_legacy_device_store_paths, move_store_files_transactionally,
-        next_switch_server_stage, parse_lifecycle_binding_selection,
+        local_bridge_installation_exists, local_device_is_registered, map_api_error_fields,
+        map_operational_error, next_switch_server_stage, parse_lifecycle_binding_selection,
         pending_revocation_next_command, project_status_state, reconcile_switch_server_progress,
         reject_pending_revocation, render_status_json, resolve_local_handoff_target,
         select_bridge_installer, select_candidate_with_interactivity,
@@ -5628,6 +5626,11 @@ mod tests {
         BridgeTrustEvidence, LocalActiveBindingHandoff, LocalAdmissionRecord,
         LocalAdmissionSnapshot, LocalDeviceMetadata, LocalTrustConfirmation, PendingRevocation,
         SwitchLocalIdentity, SwitchServerStage,
+    };
+    #[cfg(unix)]
+    use super::{
+        managed_device_client_at_root, migrate_legacy_device_store_paths,
+        move_store_files_transactionally,
     };
     use crate::api::{EgoBrowserBindingCandidateData, EgoBrowserBindingData, EgoBrowserDeviceData};
     use crate::cli::EgoBrowserForgetArgs;
