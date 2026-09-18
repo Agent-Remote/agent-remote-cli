@@ -2527,6 +2527,7 @@ fn write_local_admission_record(
         drop(file);
         fs::rename(&temporary, destination)?;
         crate::platform::set_owner_only_permissions(destination)?;
+        #[cfg(unix)]
         fs::File::open(directory)?.sync_all()?;
         Ok::<(), anyhow::Error>(())
     })();
