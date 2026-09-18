@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.18 - 2026-09-18
+
+- chore(release): pin managed node v0.2.22 (3f5b526)
+
 ## v0.2.17 - 2026-09-18
 
 - feat(ego-browser): pin the verified Bridge 0.1.13 bootstrap and Node 0.2.21 release.
