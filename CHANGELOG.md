@@ -2,6 +2,15 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.16 - 2026-09-18
+
+- fix(ego-browser): sync admission directories only on unix (d2da709)
+- test(cli): gate unix-only test imports (c3450fc)
+- fix(cli): restore windows checks and update rustls (cf6b70c)
+- feat(ego-browser): add verified managed lifecycle and node installation (144fa89)
+- feat(ego-browser): add cleanup commands and compact output (b3296ba)
+- fix(ego-browser): discover installed device client (7650519)
+
 ## v0.2.15 - 2026-09-09
 
 - feat(ego-browser): reuse stored login credentials (489d40b)
