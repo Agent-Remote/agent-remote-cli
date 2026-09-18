@@ -3,18 +3,18 @@
   "node": {
     "repository": "Agent-Remote/agent-remote-node",
     "release_workflow": "release.yml",
-    "version": "0.2.20"
+    "version": "0.2.21"
   },
   "ego_browser_bridge": {
     "repository": "Agent-Remote/agent-remote-ego-browser",
-    "version": "0.1.12",
+    "version": "0.1.13",
     "protocol_version": "ego-browser-bridge-v1",
     "profile_id": "community-local-trust",
     "credential_profile": "community_file",
     "signer_certificate_sha256": "1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5",
     "bootstrap": {
-      "commit": "2e2c103e62e2f81b8e61debc42beaae1f8bc90b0",
-      "sha256": "66611568015fcb316e39f2a16b1872b93b127158160df1f19d1bdc675c4f8d73"
+      "commit": "ed2b4cd316f1bcbf338e0dfef8766091b59cf003",
+      "sha256": "a69b48c9acb1611f0a56ca6d47265ff01442f7af0e3072a2092137bf325cde07"
     }
   }
 }

@@ -211,7 +211,7 @@ struct NodeReleaseFixture {
 
 #[cfg(unix)]
 fn write_node_release_fixture(root: &Path) -> NodeReleaseFixture {
-    let archive_name = "agent-remote-node-0.2.20-linux-amd64-glibc.tar.gz";
+    let archive_name = "agent-remote-node-0.2.21-linux-amd64-glibc.tar.gz";
     let archive = root.join(archive_name);
     let payload = b"contract-test authenticated Node release";
     fs::write(&archive, payload).unwrap();
@@ -1105,7 +1105,7 @@ cat > "$TEST_NODE_SSH_CALLS.stdin-$count"
     let cosign_arguments = fs::read_to_string(&release.cosign_calls).unwrap();
     assert!(cosign_arguments.contains("verify-blob"));
     assert!(cosign_arguments.contains(
-        "https://github.com/Agent-Remote/agent-remote-node/.github/workflows/release.yml@refs/tags/v0.2.20"
+        "https://github.com/Agent-Remote/agent-remote-node/.github/workflows/release.yml@refs/tags/v0.2.21"
     ));
 
     let requests = server.join().unwrap();
@@ -1400,7 +1400,7 @@ fn node_install_recovers_consumed_exchange_without_reissuing_or_reusing_code() {
     let initial = node_item(node_id);
     let mut recovered = node_item(node_id);
     recovered["status"] = serde_json::json!("healthy");
-    recovered["version"] = serde_json::json!("0.2.20");
+    recovered["version"] = serde_json::json!("0.2.21");
     recovered["effective_enabled"] = serde_json::json!(true);
     let (server_url, server) = spawn_http_exchange_responses(vec![
         serde_json::json!({"data": {"items": [initial.clone()]}}),

@@ -123,8 +123,7 @@ AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
 checksum 与 Sigstore workflow identity，再通过独立 SSH stdin 传输归档并运行暂存 installer；
 只有安装成功后才向控制面申请短期加入码。加入码使用另一次 SSH stdin，不会进入 argv、环境
 变量、URL、日志或终端输出。重试可以复用字节完全相同的暂存归档，但签发加入码前始终重新运行
-installer。固定的 `0.2.20` candidate 尚未发布为 production release，因此 tag-bound 制品和
-Sigstore evidence 就绪前，下载路径会按预期 fail closed。
+installer。固定的 `0.2.21` release 只有在 tag-bound 制品与 Sigstore evidence 完整时才会被接受。
 
 ## Ego Browser Bridge 控制
 
@@ -132,11 +131,11 @@ Sigstore evidence 就绪前，下载路径会按预期 fail closed。
 
 已有验证安装时，`setup` 与 `repair` 只运行该 current release 的 owner-only installer，绝不
 隐式升级。缺少安装或显式执行 `upgrade` 时使用由 commit 与 SHA-256 固定的 bootstrap；它只能
-请求 Bridge `0.1.12`、仓库 `Agent-Remote/agent-remote-ego-browser`、profile
-`community-local-trust` version `0.1.12`，以及 signer certificate
+请求 Bridge `0.1.13`、仓库 `Agent-Remote/agent-remote-ego-browser`、profile
+`community-local-trust` version `0.1.13`，以及 signer certificate
 `1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5`，且不会收到 Server URL、
-token、session ID 或 full-trust claim。由于 `0.1.12` 尚未发布，release asset 与 Sigstore
-evidence 就绪前，该路径会有意 fail closed。
+token、session ID 或 full-trust claim。缺少或无效的 release asset 与 Sigstore evidence
+都会 fail closed。
 
 本机信任以 owner-only 文件绑定准确的 profile ID、profile version、Bridge version 与证书 pin。
 例行 `repair` 在四项完全匹配时无需 `--yes`；首次使用或任一项变化都重新确认，非交互调用若未

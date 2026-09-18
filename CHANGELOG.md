@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.17 - 2026-09-18
+
+- feat(ego-browser): pin the verified Bridge 0.1.13 bootstrap and Node 0.2.21 release.
+
 ## v0.2.16 - 2026-09-18
 
 - fix(ego-browser): sync admission directories only on unix (d2da709)

@@ -127,8 +127,8 @@ and Sigstore workflow identity on the control workstation, transfers its archive
 stdin, runs the staged installer, and only then asks the control plane for a short-lived join code. The
 code is sent over a separate SSH stdin and never enters argv, environment variables, URLs, logs, or
 terminal output. A retry may reuse a byte-identical staged archive, but it always reruns the installer
-before issuing a code. The pinned `0.2.20` candidate is not yet a published production release, so the
-download path fails closed until its tag-bound assets and Sigstore evidence exist.
+before issuing a code. The pinned `0.2.21` release is accepted only with its tag-bound assets
+and Sigstore evidence.
 
 ## Ego Browser Bridge Control
 
@@ -136,11 +136,11 @@ The normal flow is `agent-remote ego-browser setup`, followed by `agent-remote e
 
 With an existing verified installation, `setup` and `repair` run only that release's owner-only
 installer and never upgrade it. A missing installation or an explicit `upgrade` uses a bootstrap
-pinned by commit and SHA-256; that bootstrap is allowed to request only Bridge `0.1.12`, repository
-`Agent-Remote/agent-remote-ego-browser`, profile `community-local-trust` version `0.1.12`, and signer
+pinned by commit and SHA-256; that bootstrap is allowed to request only Bridge `0.1.13`, repository
+`Agent-Remote/agent-remote-ego-browser`, profile `community-local-trust` version `0.1.13`, and signer
 certificate `1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5`. It receives no Server URL,
-token, session ID, or full-trust claim. Because `0.1.12` is still unpublished, this path intentionally
-fails closed until its release assets and Sigstore evidence exist.
+token, session ID, or full-trust claim. Missing or invalid release assets and Sigstore evidence
+fail closed.
 
 Local trust is stored owner-only against the exact profile ID, profile version, Bridge version, and
 certificate pin. Routine `repair` reuses an exact match without `--yes`; first use or any tuple change
