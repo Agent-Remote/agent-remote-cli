@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.20 - 2026-09-19
+
+- fix(release): align managed node with bridge v0.1.14 (be49047)
+
 ## v0.2.19 - 2026-09-19
 
 - test(port-forward): drain fake ssh handshake (28521b4)
