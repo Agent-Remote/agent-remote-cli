@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.22 - 2026-09-19
+
+- fix(deps): pin node 0.2.25 and ego-browser 0.1.16 (3c82cad)
+- fix(ego-browser): explicitly re-enroll retained devices after upgrades (f2b8269)
+
 ## v0.2.21 - 2026-09-19
 
 - fix(deps): pin node 0.2.24 and ego-browser 0.1.15 (7fd2d5e)
