@@ -77,6 +77,14 @@ The CLI initialization flow does not create users. Administrators create regular
 
 `agent-remote login` stores tokens in the platform credential store when available:
 
+On Servers supporting CLI sessions, user commands migrate a still-valid login to a
+remembered session and automatically rotate its short-lived access token. The default
+session lifetime is 30 days; expiry, revocation, or account disablement requires login
+again. Both credentials remain in the credential store, and logout revokes the session.
+Device registration also retains the user login needed for browser management. Older
+Servers retain their existing short-lived login behavior. Browser connect/resume still
+requires a separate full-trust confirmation.
+
 - macOS: Keychain through the `security` command
 - Linux: Secret Service through `secret-tool`
 - Windows: Windows Credential Manager through the native Win32 API

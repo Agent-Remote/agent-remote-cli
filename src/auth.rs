@@ -11,6 +11,9 @@ use crate::config::{AppPaths, Config};
 use crate::local_state::LocalState;
 use crate::secrets::{device_token_key, SecretBackend, SecretStore};
 
+mod user_session;
+pub use user_session::{load_user_token, logout_user, store_user_token, user_login_error};
+
 pub fn store_device_token(
     paths: &AppPaths,
     server_url: &str,

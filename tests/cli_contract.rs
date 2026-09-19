@@ -67,7 +67,17 @@ fn write_user_token(state_home: &Path, server_url: &str, token: &str) {
         .collect();
     let directory = state_home.join("secrets");
     fs::create_dir_all(&directory).unwrap();
-    write_private_file(&directory.join(format!("{sanitized}.secret")), token);
+    let credential = serde_json::json!({
+        "version": 1,
+        "token": {"access_token": token, "expires_in": 3600, "refresh_token": "test-refresh", "refresh_expires_in": 2592000},
+        "refresh_at": 4102444800_u64,
+        "expires_at": 4102444800_u64,
+        "session_expires_at": 4102444800_u64
+    });
+    write_private_file(
+        &directory.join(format!("{sanitized}.secret")),
+        credential.to_string(),
+    );
 }
 
 #[cfg(unix)]
@@ -918,11 +928,7 @@ fn ego_browser_register_passes_stored_token_over_stdin() {
     )
     .unwrap();
     let token = "art_test-user-token";
-    fs::write(
-        secrets.join("user-token_https___example.test.secret"),
-        token,
-    )
-    .unwrap();
+    write_user_token(&state_home, "https://example.test", token);
 
     let device_client = temporary.path().join("ego-browser-device");
     fs::write(

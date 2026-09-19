@@ -20,7 +20,7 @@ use crate::api::{
     ApiClient, EgoBrowserBindingCandidateData, EgoBrowserBindingData, EgoBrowserDeviceData,
     EgoBrowserPolicyData, EgoBrowserRequestData,
 };
-use crate::auth::load_device_token;
+use crate::auth::{load_device_token, load_user_token};
 use crate::bridge_release::{
     self, MANAGED_BRIDGE_PROTOCOL_VERSION, MANAGED_BRIDGE_VERSION, MANAGED_CREDENTIAL_PROFILE,
     MANAGED_PROFILE_ID, MANAGED_SIGNER_CERTIFICATE_SHA256,
@@ -34,7 +34,6 @@ use crate::cli::{
 use crate::config::{AppPaths, Config};
 use crate::identifiers::{resolve_id, short_id};
 use crate::local_state::{LocalEgoBrowserBinding, LocalState};
-use crate::secrets::{user_token_key, SecretStore};
 use crate::terminal::{self, Details, Table};
 
 const FULL_TRUST_WARNING: &str = "Remote fclaude will execute complete ego-browser heredoc scripts as the current macOS user without an App Sandbox. Scripts can access that user's files, environment, network, browser login data, Node modules, subprocesses, and other tabs or Task Spaces, and can send data remotely. Stopping terminates supervised work only; it cannot roll back side effects or guarantee cleanup of deliberately detached processes.";
@@ -1361,8 +1360,8 @@ fn switch_pending_failure(
     ))
 }
 
-fn server_secret(paths: &AppPaths, server_url: &str) -> Result<Option<String>> {
-    SecretStore::new(paths.clone()).get_secret(&user_token_key(server_url))
+async fn server_secret(paths: &AppPaths, server_url: &str) -> Result<Option<String>> {
+    load_user_token(paths, server_url).await
 }
 
 fn config_points_at(paths: &AppPaths, server_url: &str) -> Result<bool> {
@@ -1505,7 +1504,7 @@ async fn switch_server(paths: AppPaths, args: EgoBrowserSwitchServerArgs) -> Res
             ));
         }
         // Validate both profiles before creating a destructive operation or revoking the old Device.
-        let new_token = server_secret(&paths, &new_server)?;
+        let new_token = server_secret(&paths, &new_server).await?;
         if new_token.as_deref().is_none_or(str::is_empty) {
             return Err(lifecycle_error(
                 "server_profile_required",
@@ -1516,7 +1515,7 @@ async fn switch_server(paths: AppPaths, args: EgoBrowserSwitchServerArgs) -> Res
                 false,
             ));
         }
-        let old_token = server_secret(&paths, &metadata.server_url)?;
+        let old_token = server_secret(&paths, &metadata.server_url).await?;
         if old_token.as_deref().is_none_or(str::is_empty) {
             return Err(lifecycle_error(
                 "login_required",
@@ -1583,7 +1582,7 @@ async fn switch_server(paths: AppPaths, args: EgoBrowserSwitchServerArgs) -> Res
                     .server_url
                     .as_deref()
                     .context("switch-server pending origin is missing")?;
-                let old_token = match server_secret(&paths, old_server) {
+                let old_token = match server_secret(&paths, old_server).await {
                     Ok(Some(token)) if !token.is_empty() => token,
                     _ => return switch_pending_failure(&paths, pending, "login_required"),
                 };
@@ -1697,7 +1696,7 @@ async fn switch_server(paths: AppPaths, args: EgoBrowserSwitchServerArgs) -> Res
                     }
                     SwitchLocalIdentity::Absent | SwitchLocalIdentity::TargetIncomplete => {}
                 }
-                let new_token = match server_secret(&paths, &target) {
+                let new_token = match server_secret(&paths, &target).await {
                     Ok(Some(token)) if !token.is_empty() => token,
                     _ => return switch_pending_failure(&paths, pending, "server_profile_required"),
                 };
@@ -3597,6 +3596,9 @@ fn map_api_error_fields(
     operation: &str,
 ) -> anyhow::Error {
     let normalized = raw_code.to_ascii_uppercase();
+    if status_code == Some(401) {
+        return crate::auth::user_login_error();
+    }
     let (code, admission, default_next_action) = if status_code.is_none() {
         ("server_unreachable", "unknown", "retry")
     } else {
@@ -5383,18 +5385,16 @@ async fn load_user_control_token(paths: &AppPaths) -> Result<(String, String)> {
                 false,
             )
         })?;
-    let token = SecretStore::new(paths.clone())
-        .get_secret(&user_token_key(&server_url))?
-        .ok_or_else(|| {
-            lifecycle_error(
-                "login_required",
-                "absent",
-                "unknown",
-                "login",
-                "agent-remote login",
-                false,
-            )
-        })?;
+    let token = load_user_token(paths, &server_url).await?.ok_or_else(|| {
+        lifecycle_error(
+            "login_required",
+            "absent",
+            "unknown",
+            "login",
+            "agent-remote login",
+            false,
+        )
+    })?;
     Ok((server_url, token))
 }
 
@@ -5419,7 +5419,7 @@ async fn load_control_token_for_server(
             "requested server URL does not match the configured agent-remote server ({configured_server})"
         )
     }
-    if let Some(token) = SecretStore::new(paths.clone()).get_secret(&user_token_key(&server_url))? {
+    if let Some(token) = load_user_token(paths, &server_url).await? {
         return Ok((server_url, token));
     }
     let (device_server, _device_id, token) = load_device_token(paths).await?;
@@ -5770,6 +5770,9 @@ mod tests {
 
     #[test]
     fn normalizes_new_server_error_families_without_leaking_raw_codes() {
+        let expired = map_api_error_fields(Some(401), "AUTH_TOKEN_EXPIRED", "upgrade").to_string();
+        assert!(expired.contains("error_code=login_required"));
+        assert!(expired.contains("next_command=agent-remote login"));
         let idempotency = format!(
             "{:#}",
             map_api_error_fields(Some(409), "EGO_BROWSER_IDEMPOTENCY_CONFLICT", "setup")

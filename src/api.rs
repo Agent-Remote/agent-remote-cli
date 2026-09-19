@@ -21,7 +21,10 @@ impl ApiClient {
         }
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(30))
+                .build()?,
         })
     }
 
@@ -74,6 +77,24 @@ impl ApiClient {
     pub async fn refresh_token(&self, token: &str) -> Result<AuthToken, ApiError> {
         let response: Envelope<AuthToken> =
             self.post_empty("/api/v1/auth/refresh", Some(token)).await?;
+        Ok(response.data)
+    }
+
+    pub async fn create_cli_session(&self, token: &str) -> Result<AuthToken, ApiError> {
+        let response: Envelope<AuthToken> = self
+            .post_empty("/api/v1/auth/cli/session", Some(token))
+            .await?;
+        Ok(response.data)
+    }
+
+    pub async fn refresh_cli_session(&self, refresh_token: &str) -> Result<AuthToken, ApiError> {
+        let response: Envelope<AuthToken> = self
+            .post(
+                "/api/v1/auth/cli/refresh",
+                None,
+                &serde_json::json!({"refresh_token": refresh_token}),
+            )
+            .await?;
         Ok(response.data)
     }
 
@@ -952,10 +973,14 @@ struct CliLoginCompleteRequest<'a> {
     device_code: &'a str,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct AuthToken {
     pub access_token: String,
     pub expires_in: u64,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub refresh_expires_in: Option<u64>,
 }
 
 impl fmt::Debug for AuthToken {
@@ -964,6 +989,10 @@ impl fmt::Debug for AuthToken {
             .debug_struct("AuthToken")
             .field("access_token", &"<redacted>")
             .field("expires_in", &self.expires_in)
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }

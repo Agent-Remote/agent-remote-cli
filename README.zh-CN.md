@@ -75,6 +75,11 @@ CLI 初始化流程不会创建用户。服务器完成 bootstrap 后，管理�
 
 `agent-remote login` 会在可用时把 token 保存到平台凭据存储：
 
+Server 支持 CLI 登录会话时，用户命令会将仍有效的旧登录迁移为可续期会话，自动轮换短期
+访问令牌。会话默认最长 30 天；过期、撤销或账号禁用后才需要重新登录。两种凭据都保存在
+凭据存储中，注销会撤销会话。普通设备登记也会保留浏览器管理需要的用户登录。旧版 Server
+继续使用原有短期登录行为。浏览器 connect/resume 的 full-trust 确认仍然单独执行。
+
 - macOS：通过 `security` 命令使用 Keychain
 - Linux：通过 `secret-tool` 使用 Secret Service
 - Windows：通过原生 Win32 API 使用 Windows 凭据管理器

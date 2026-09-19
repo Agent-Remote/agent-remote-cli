@@ -92,8 +92,14 @@ impl SecretStore {
     fn set_file_secret(&self, key: &str, value: &str) -> Result<()> {
         self.paths.ensure_base_dirs()?;
         let path = self.secret_path(key);
-        fs::write(&path, value).with_context(|| format!("failed to write {}", path.display()))?;
-        crate::platform::set_owner_only_permissions(&path)?;
+        use std::io::Write;
+        let mut staged = tempfile::NamedTempFile::new_in(self.paths.secrets_dir())?;
+        crate::platform::set_owner_only_permissions(staged.path())?;
+        staged.write_all(value.as_bytes())?;
+        staged.as_file().sync_all()?;
+        staged
+            .persist(&path)
+            .map_err(|_| anyhow::anyhow!("failed to replace stored credential"))?;
         Ok(())
     }
 

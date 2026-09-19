@@ -239,11 +239,9 @@ async fn device_revoke(paths: AppPaths, args: DeviceRevokeArgs) -> Result<()> {
         .or_else(|| config.active_device_id.clone())
         .context("no device selected; pass --device or register an active device")?;
     let secret_store = SecretStore::new(paths.clone());
-    let user_token = secret_store
-        .get_secret(&user_token_key(&server_url))?
-        .context(
-            "a user token is required; run agent-remote login --skip-device-registration first",
-        )?;
+    let user_token = auth::load_user_token(&paths, &server_url).await?.context(
+        "a user token is required; run agent-remote login --skip-device-registration first",
+    )?;
     if !args.yes
         && !prompt_yes_no(&format!(
             "Revoke device {device_id} and invalidate its remote access? [y/N] "
@@ -302,11 +300,9 @@ async fn device_rotate_token(paths: AppPaths, args: DeviceRotateTokenArgs) -> Re
     let device_id = config
         .active_device_id
         .context("no active device is configured")?;
-    let user_token = SecretStore::new(paths.clone())
-        .get_secret(&user_token_key(&server_url))?
-        .context(
-            "a user token is required; run agent-remote login --skip-device-registration first",
-        )?;
+    let user_token = auth::load_user_token(&paths, &server_url).await?.context(
+        "a user token is required; run agent-remote login --skip-device-registration first",
+    )?;
     if !args.yes
         && !prompt_yes_no(
             "Rotate the active device token and replace its local credential? [y/N] ",
@@ -340,8 +336,8 @@ async fn node_install(paths: AppPaths, args: NodeInstallArgs) -> Result<()> {
     if !valid_node_install_server_url(&server_url) {
         bail!("configured server URL is not a canonical HTTP(S) origin; run login again")
     }
-    let token = SecretStore::new(paths.clone())
-        .get_secret(&user_token_key(&server_url))?
+    let token = auth::load_user_token(&paths, &server_url)
+        .await?
         .context("a logged-in user credential is required; run agent-remote login first")?;
     let client = ApiClient::new(server_url.clone())?;
     let listed = client
@@ -1411,10 +1407,8 @@ async fn finalize_login(
     let state = LocalState::open(&paths)?;
     state.init_schema()?;
     DependencyManager::new(paths.clone()).ensure_manifest()?;
-    let secret_store = SecretStore::new(paths.clone());
     if options.skip_device_registration {
-        let key = user_token_key(&server_url);
-        let backend = secret_store.set_secret(&key, &user_token.access_token)?;
+        let backend = auth::store_user_token(&paths, &server_url, &user_token).await?;
         state.set_kv("last_login_mode", "user_token")?;
         terminal::success_line(format!("Logged in to {server_url}"));
         Details::new()
@@ -1468,7 +1462,7 @@ async fn finalize_login(
         &device.id,
         &registration.data.device_token,
     )?;
-    let _ = secret_store.delete_secret(&user_token_key(&server_url));
+    auth::store_user_token(&paths, &server_url, &user_token).await?;
 
     terminal::success_line(format!("Logged in to {server_url}"));
     Details::new()
@@ -1538,11 +1532,9 @@ async fn logout(paths: AppPaths, revoke_remote: bool) -> Result<()> {
         let _ = secret_store.delete_secret(&key);
         let _ = clear_device_token_refresh(&paths, &server_url, &device_id);
     }
-    let user_key = user_token_key(&server_url);
-    if token.is_none() {
-        token = secret_store.get_secret(&user_key)?;
+    if let Err(error) = auth::logout_user(&paths, &server_url, revoke_remote).await {
+        terminal::warning_line(format!("User logout could not be fully confirmed: {error}"));
     }
-    let _ = secret_store.delete_secret(&user_key);
 
     if revoke_remote {
         if let Some(access_token) = token {
