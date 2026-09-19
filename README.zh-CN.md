@@ -137,6 +137,10 @@ installer。固定的 `0.2.23` release 只有在 tag-bound 制品与 Sigstore ev
 token、session ID 或 full-trust claim。缺少或无效的 release asset 与 Sigstore evidence
 都会 fail closed。
 
+安装后，`upgrade` 会显式重新登记保留的设备，更新 Server 上的发布元数据，保留设备 ID、
+generation 与密钥。Server 必须支持规范接口的同身份重新登记；普通 `setup` 和 `repair`
+不能更新发布元数据。
+
 本机信任以 owner-only 文件绑定准确的 profile ID、profile version、Bridge version 与证书 pin。
 例行 `repair` 在四项完全匹配时无需 `--yes`；首次使用或任一项变化都重新确认，非交互调用若未
 显式传入 `--yes` 则返回 `trust_confirmation_required`。

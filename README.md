@@ -142,6 +142,10 @@ certificate `1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5`. 
 token, session ID, or full-trust claim. Missing or invalid release assets and Sigstore evidence
 fail closed.
 
+After installation, `upgrade` explicitly re-enrolls the retained device to update the Server's
+release metadata without changing its ID, generation, or keys. The Server must support canonical
+same-identity re-enrollment; ordinary `setup` and `repair` cannot update release metadata.
+
 Local trust is stored owner-only against the exact profile ID, profile version, Bridge version, and
 certificate pin. Routine `repair` reuses an exact match without `--yes`; first use or any tuple change
 requires confirmation, and non-interactive use returns `trust_confirmation_required` unless the

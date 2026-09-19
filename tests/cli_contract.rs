@@ -610,12 +610,26 @@ fn offline_forget_persists_revocation_and_preserves_local_identity() {
 #[cfg(unix)]
 #[test]
 fn ego_browser_routine_repair_reuses_exact_trust_without_confirmation() {
+    check_retained_device_registration("repair");
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_reenrollment_passes_explicit_mode_and_token_through_stdin() {
+    check_retained_device_registration("re-enroll");
+}
+
+#[cfg(unix)]
+fn check_retained_device_registration(operation: &str) {
     let temporary = tempfile::tempdir().unwrap();
     let state_home = temporary.path().join("agent-remote");
     fs::create_dir_all(&state_home).unwrap();
-    let (server_url, server) = spawn_http_exchange_responses(vec![serde_json::json!({
-        "data": {"items": []}
-    })]);
+    let responses = if operation == "repair" {
+        vec![serde_json::json!({"data": {"items": []}})]
+    } else {
+        vec![]
+    };
+    let (server_url, server) = spawn_http_exchange_responses(responses);
     write_private_file(
         &state_home.join("config.toml"),
         format!("server_url = \"{server_url}\"\n"),
@@ -699,8 +713,12 @@ fn ego_browser_routine_repair_reuses_exact_trust_without_confirmation() {
     .unwrap();
     fs::set_permissions(&device, fs::Permissions::from_mode(0o500)).unwrap();
 
-    let output = Command::new(AGENT_REMOTE)
-        .args(["--color", "never", "ego-browser", "repair"])
+    let mut command = Command::new(AGENT_REMOTE);
+    command.args(["--color", "never", "ego-browser", operation]);
+    if operation == "re-enroll" {
+        command.arg("--yes");
+    }
+    let output = command
         .env("HOME", temporary.path())
         .env("AGENT_REMOTE_HOME", &state_home)
         .env("AGENT_REMOTE_SECRET_BACKEND", "file")
@@ -713,21 +731,37 @@ fn ego_browser_routine_repair_reuses_exact_trust_without_confirmation() {
         .unwrap();
     assert!(
         output.status.success(),
-        "routine repair failed: {}",
+        "{operation} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(fs::read_to_string(installer_log).unwrap(), "--repair\n");
+    if operation == "repair" {
+        assert_eq!(fs::read_to_string(installer_log).unwrap(), "--repair\n");
+    } else {
+        assert!(!installer_log.exists());
+    }
     let device_calls = fs::read_to_string(device_log).unwrap();
     assert!(device_calls.lines().any(|line| line == "metadata"));
-    assert!(device_calls.lines().any(|line| line
-        == "ensure --server ".to_owned() + &server_url + " --token-stdin --force-refresh"));
+    let expected = format!(
+        "ensure --server {server_url} --token-stdin --force-refresh{}",
+        if operation == "re-enroll" {
+            " --re-enroll"
+        } else {
+            ""
+        }
+    );
+    assert!(device_calls.lines().any(|line| line == expected));
+    assert!(!device_calls.contains("art_repair-token"));
     assert_eq!(
         fs::read_to_string(device_stdin).unwrap(),
         "art_repair-token"
     );
     let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].starts_with("GET /api/v1/ego-browser/bindings HTTP/1.1"));
+    if operation == "repair" {
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET /api/v1/ego-browser/bindings HTTP/1.1"));
+    } else {
+        assert!(requests.is_empty());
+    }
 }
 
 #[cfg(unix)]

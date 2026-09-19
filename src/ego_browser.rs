@@ -539,19 +539,9 @@ async fn upgrade(paths: AppPaths, args: EgoBrowserUpgradeArgs) -> Result<()> {
         bail!("upgraded Bridge release does not match the confirmed profile")
     }
     write_trust_confirmation(&paths, &trust_confirmation(&installed_evidence))?;
-    run_device_client_with_token_at(
-        &paths,
-        [
-            OsString::from("ensure"),
-            OsString::from("--server"),
-            OsString::from(server_url),
-            OsString::from("--token-stdin"),
-            OsString::from("--force-refresh"),
-        ],
-        &token,
-    )
-    .await
-    .map_err(|error| map_operational_error(error, "upgrade"))?;
+    re_enroll_retained_device(&paths, server_url, &token)
+        .await
+        .map_err(|error| map_operational_error(error, "upgrade"))?;
     set_local_admission_state(&paths, "ready")?;
     terminal::success_line(
         "Ego-browser Bridge release verified; Device identity and device generation were preserved.",
@@ -1148,8 +1138,24 @@ async fn re_enroll(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()> {
         }
     }
     close_local_admission(&paths)?;
+    re_enroll_retained_device(&paths, server_url, &token)
+        .await
+        .map_err(|error| map_operational_error(error, "re-enroll"))?;
+    set_local_admission_state(&paths, "ready")?;
+    terminal::success_line(format!(
+        "Ego-browser Device {} was re-enrolled without changing its identity.",
+        short_id(&metadata.device_id)
+    ));
+    Ok(())
+}
+
+async fn re_enroll_retained_device(
+    paths: &AppPaths,
+    server_url: String,
+    token: &str,
+) -> Result<()> {
     run_device_client_with_token_at(
-        &paths,
+        paths,
         [
             OsString::from("ensure"),
             OsString::from("--server"),
@@ -1158,16 +1164,9 @@ async fn re_enroll(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()> {
             OsString::from("--force-refresh"),
             OsString::from("--re-enroll"),
         ],
-        &token,
+        token,
     )
     .await
-    .map_err(|error| map_operational_error(error, "re-enroll"))?;
-    set_local_admission_state(&paths, "ready")?;
-    terminal::success_line(format!(
-        "Ego-browser Device {} was re-enrolled without changing its identity.",
-        short_id(&metadata.device_id)
-    ));
-    Ok(())
 }
 
 /// Rotates retained keys after bindings stop, persisting retry state before the request.
