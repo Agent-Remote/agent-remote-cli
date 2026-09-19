@@ -7,13 +7,13 @@
   },
   "ego_browser_bridge": {
     "repository": "Agent-Remote/agent-remote-ego-browser",
-    "version": "0.1.13",
+    "version": "0.1.14",
     "protocol_version": "ego-browser-bridge-v1",
     "profile_id": "community-local-trust",
     "credential_profile": "community_file",
     "signer_certificate_sha256": "1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5",
     "bootstrap": {
-      "commit": "ed2b4cd316f1bcbf338e0dfef8766091b59cf003",
+      "commit": "51b9ddd3e64c91bf9069beefe7cb07b2c7eb71cb",
       "sha256": "a69b48c9acb1611f0a56ca6d47265ff01442f7af0e3072a2092137bf325cde07"
     }
   }
