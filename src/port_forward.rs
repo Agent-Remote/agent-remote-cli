@@ -924,6 +924,18 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
     use tokio::time::timeout;
 
+    #[cfg(unix)]
+    fn client_handshake_size(forward_id: &str, connect_token: &str) -> usize {
+        let payload = serde_json::to_vec(&super::ClientHandshake {
+            forward_id: forward_id.to_string(),
+            connect_token: connect_token.to_string(),
+            client_version: crate::cli::VERSION.to_string(),
+            max_streams: 128,
+        })
+        .unwrap();
+        super::PROTOCOL_MAGIC.len() + std::mem::size_of::<u32>() + payload.len()
+    }
+
     async fn fake_control_plane(
         response_bodies: Vec<String>,
     ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
@@ -1163,8 +1175,12 @@ mod tests {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = \"initial-connect-secret\" ] && touch '{}'; done\nprintf 'ARPF\\000\\001\\000\\000\\000\\050{{\"ok\":false,\"error_code\":\"AUTH_INVALID\"}}'\n",
-                leaked.display()
+                "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = \"initial-connect-secret\" ] && touch '{}'; done\ndd bs=1 count={} of=/dev/null 2>/dev/null\nprintf 'ARPF\\000\\001\\000\\000\\000\\050{{\"ok\":false,\"error_code\":\"AUTH_INVALID\"}}'\n",
+                leaked.display(),
+                client_handshake_size(
+                    "11111111-1111-4111-8111-111111111111",
+                    "initial-connect-secret"
+                )
             ),
         )
         .unwrap();
@@ -1292,8 +1308,9 @@ mod tests {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = \"secret-connect-token\" ] && touch '{}'; done\nprintf 'ARPF\\000\\001\\000\\000\\000\\050{{\"ok\":false,\"error_code\":\"AUTH_INVALID\"}}'\n",
-                leaked.display()
+                "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = \"secret-connect-token\" ] && touch '{}'; done\ndd bs=1 count={} of=/dev/null 2>/dev/null\nprintf 'ARPF\\000\\001\\000\\000\\000\\050{{\"ok\":false,\"error_code\":\"AUTH_INVALID\"}}'\n",
+                leaked.display(),
+                client_handshake_size("forward-1", "secret-connect-token")
             ),
         )
         .unwrap();
@@ -1359,10 +1376,11 @@ mod tests {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in initial-secret|reconnect-secret) touch '{}' ;; esac; done\ncount=$(cat '{}' 2>/dev/null || echo 0)\ncount=$((count + 1))\nprintf '%s' \"$count\" > '{}'\n[ \"$count\" -eq 1 ] && exit 1\nprintf 'ARPF\\000\\001\\000\\000\\000\\050{{\"ok\":false,\"error_code\":\"AUTH_INVALID\"}}'\n",
+                "#!/bin/sh\nfor arg in \"$@\"; do case \"$arg\" in initial-secret|reconnect-secret) touch '{}' ;; esac; done\ncount=$(cat '{}' 2>/dev/null || echo 0)\ncount=$((count + 1))\nprintf '%s' \"$count\" > '{}'\n[ \"$count\" -eq 1 ] && exit 1\ndd bs=1 count={} of=/dev/null 2>/dev/null\nprintf 'ARPF\\000\\001\\000\\000\\000\\050{{\"ok\":false,\"error_code\":\"AUTH_INVALID\"}}'\n",
                 leaked.display(),
                 count.display(),
                 count.display(),
+                client_handshake_size("forward-1", "reconnect-secret"),
             ),
         )
         .unwrap();
