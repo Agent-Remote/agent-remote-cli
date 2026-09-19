@@ -136,8 +136,8 @@ The normal flow is `agent-remote ego-browser setup`, followed by `agent-remote e
 
 With an existing verified installation, `setup` and `repair` run only that release's owner-only
 installer and never upgrade it. A missing installation or an explicit `upgrade` uses a bootstrap
-pinned by commit and SHA-256; that bootstrap is allowed to request only Bridge `0.1.15`, repository
-`Agent-Remote/agent-remote-ego-browser`, profile `community-local-trust` version `0.1.15`, and signer
+pinned by commit and SHA-256; that bootstrap is allowed to request only Bridge `0.1.16`, repository
+`Agent-Remote/agent-remote-ego-browser`, profile `community-local-trust` version `0.1.16`, and signer
 certificate `1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5`. It receives no Server URL,
 token, session ID, or full-trust claim. Missing or invalid release assets and Sigstore evidence
 fail closed.
