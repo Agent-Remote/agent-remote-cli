@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.19 - 2026-09-19
+
+- test(port-forward): drain fake ssh handshake (28521b4)
+- chore(ego-browser): pin bridge v0.1.14 (886516a)
+
 ## v0.2.18 - 2026-09-18
 
 - chore(release): pin managed node v0.2.22 (3f5b526)
