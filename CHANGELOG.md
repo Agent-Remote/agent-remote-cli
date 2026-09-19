@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.23 - 2026-09-19
+
+- fix(auth): renew remembered cli login sessions (616a04e)
+
 ## v0.2.22 - 2026-09-19
 
 - fix(deps): pin node 0.2.25 and ego-browser 0.1.16 (3c82cad)
