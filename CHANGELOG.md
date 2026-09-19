@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.21 - 2026-09-19
+
+- fix(deps): pin node 0.2.24 and ego-browser 0.1.15 (7fd2d5e)
+
 ## v0.2.20 - 2026-09-19
 
 - fix(release): align managed node with bridge v0.1.14 (be49047)
