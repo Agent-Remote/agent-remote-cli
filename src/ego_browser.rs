@@ -579,6 +579,7 @@ async fn drain_local_bindings(paths: &AppPaths, server_url: &str, token: &str) -
         .list_ego_browser_bindings(token)
         .await
         .map_err(|error| map_api_error(error, "upgrade"))?;
+    let handoff = load_local_active_binding_handoff(paths)?;
     for binding in bindings.into_iter().filter(|binding| {
         binding.ego_browser_device_id == metadata.device_id
             && matches!(
@@ -586,6 +587,23 @@ async fn drain_local_bindings(paths: &AppPaths, server_url: &str, token: &str) -
                 "active" | "connecting" | "probing_local_browser"
             )
     }) {
+        // The Device Client commits the paused generation to its lifecycle handoff.
+        if handoff.as_ref().is_some_and(|value| {
+            value.binding_id == binding.id && value.device_id == metadata.device_id
+        }) {
+            run_device_client_at(
+                paths,
+                [
+                    OsString::from("pause"),
+                    OsString::from(&binding.id),
+                    OsString::from("--binding-generation"),
+                    OsString::from(binding_generation(&binding).to_string()),
+                ],
+            )
+            .await
+            .map_err(|error| map_operational_error(error, "upgrade"))?;
+            continue;
+        }
         client
             .control_ego_browser_binding(
                 token,
@@ -4822,7 +4840,8 @@ async fn resolve_lifecycle_target(
     // Prefer the exact handoff because containment remains valid when broad listing is gated.
     if explicit_reference.is_none() {
         if let Some(handoff) = local_handoff.as_ref() {
-            return resolve_local_handoff_target(handoff, args, resume);
+            let current = refresh_lifecycle_handoff(paths, handoff, resume).await?;
+            return resolve_local_handoff_target(&current, args, resume);
         }
     }
 
@@ -4918,18 +4937,10 @@ async fn revalidate_lifecycle_target(
     let operation = if resume { "resume" } else { "lifecycle" };
     if let Some(handoff) = load_local_active_binding_handoff(paths)? {
         if handoff.binding_id == binding_id {
-            if handoff.generation != expected_generation {
-                return Err(lifecycle_error(
-                    "binding_generation_stale",
-                    "handoff_stale",
-                    "closed",
-                    "refresh_status",
-                    "agent-remote ego-browser status",
-                    true,
-                ));
-            }
             // The exact lifecycle mutation already rejects stale state; do not add a gated read.
-            return Ok(());
+            if handoff.generation == expected_generation {
+                return Ok(());
+            }
         }
     }
     let (server_url, token) = load_control_token(paths).await?;
@@ -4961,8 +4972,9 @@ async fn revalidate_lifecycle_target(
     }
     if let Some(handoff) = load_local_active_binding_handoff(paths)? {
         if handoff.binding_id == binding_id
-            && (handoff.generation != expected_generation
-                || current.ego_browser_device_id != handoff.device_id)
+            && (expected_generation < handoff.generation
+                || current.ego_browser_device_id != handoff.device_id
+                || handoff.task_space_label != format!("agent-remote:{}", current.tool_session_id))
         {
             return Err(lifecycle_error(
                 "binding_generation_stale",
@@ -4985,6 +4997,58 @@ async fn revalidate_lifecycle_target(
         ));
     }
     Ok(())
+}
+
+async fn refresh_lifecycle_handoff(
+    paths: &AppPaths,
+    handoff: &LocalActiveBindingHandoff,
+    resume: bool,
+) -> Result<LocalActiveBindingHandoff> {
+    let output = match run_device_client_at(
+        paths,
+        [
+            OsString::from("status"),
+            OsString::from(&handoff.binding_id),
+        ],
+    )
+    .await
+    {
+        Ok(output) => output,
+        // Containment may still use the exact cached generation during a read outage.
+        Err(_) => return Ok(handoff.clone()),
+    };
+    let response: serde_json::Value =
+        serde_json::from_str(&output).context("Device Client returned invalid binding status")?;
+    let data = response.get("data").context("binding status is missing")?;
+    let current: EgoBrowserBindingData = serde_json::from_value(data.clone())
+        .context("Device Client returned invalid binding data")?;
+    reconciled_lifecycle_handoff(handoff, &current, resume)
+}
+
+fn reconciled_lifecycle_handoff(
+    handoff: &LocalActiveBindingHandoff,
+    current: &EgoBrowserBindingData,
+    resume: bool,
+) -> Result<LocalActiveBindingHandoff> {
+    if current.id != handoff.binding_id
+        || current.ego_browser_device_id != handoff.device_id
+        || format!("agent-remote:{}", current.tool_session_id) != handoff.task_space_label
+        || current.authorization_mode != handoff.authorization_mode
+        || binding_generation(current) < handoff.generation
+        || !lifecycle_binding_is_eligible(current, resume)
+    {
+        return Err(lifecycle_error(
+            "binding_conflict",
+            &current.status,
+            "closed",
+            "refresh_status",
+            "agent-remote ego-browser status",
+            true,
+        ));
+    }
+    let mut current_handoff = handoff.clone();
+    current_handoff.generation = binding_generation(current);
+    Ok(current_handoff)
 }
 
 fn resolve_local_handoff_target(
@@ -6259,6 +6323,35 @@ mod tests {
         assert!(error.contains("error_code=confirmation_required"));
         assert!(error.contains("state=multiple_bindings"));
         assert!(error.contains("next_action=select_binding"));
+    }
+
+    #[test]
+    fn paused_handoff_recovers_newer_generation_without_changing_identity() {
+        let handoff = LocalActiveBindingHandoff {
+            version: 1,
+            binding_id: "binding-local".into(),
+            generation: 3,
+            device_id: "device-local".into(),
+            task_space_label: "agent-remote:session-local".into(),
+            authorization_mode: "ego_browser_script_full_trust".into(),
+            user_confirmation: true,
+        };
+        let mut current = status_server_binding("binding-local", "device-local", 4, "healthy");
+        current.status = "paused".into();
+        for resume in [true, false] {
+            let refreshed =
+                super::reconciled_lifecycle_handoff(&handoff, &current, resume).unwrap();
+            assert_eq!(refreshed.generation, 4);
+            assert_eq!(handoff.generation, 3);
+        }
+        current.ego_browser_device_id = "different-device".into();
+        assert!(super::reconciled_lifecycle_handoff(&handoff, &current, true).is_err());
+        current.ego_browser_device_id = handoff.device_id.clone();
+        current.tool_session_id = "different-session".into();
+        assert!(super::reconciled_lifecycle_handoff(&handoff, &current, true).is_err());
+        current.tool_session_id = "session-local".into();
+        current.binding_generation = Some(2);
+        assert!(super::reconciled_lifecycle_handoff(&handoff, &current, true).is_err());
     }
 
     #[test]

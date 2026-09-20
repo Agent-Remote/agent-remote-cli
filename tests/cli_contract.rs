@@ -635,7 +635,14 @@ fn check_retained_device_registration(operation: &str) {
     let state_home = temporary.path().join("agent-remote");
     fs::create_dir_all(&state_home).unwrap();
     let responses = if operation == "repair" {
-        vec![serde_json::json!({"data": {"items": []}})]
+        vec![serde_json::json!({"data": {"items": [{
+            "id": "binding-repair", "ego_browser_device_id": "device-repair",
+            "tool_session_id": "session-repair", "node_id": "node-repair", "status": "active",
+            "relay_binding_kind": "ego_browser", "authorization_mode": "ego_browser_script_full_trust",
+            "release_profile": "community-local-trust", "bridge_protocol_version": "ego-browser-bridge-v1",
+            "allowlist_revision": 1, "lease_health": "healthy", "generation": 3,
+            "binding_generation": 3
+        }]}})]
     } else {
         vec![]
     };
@@ -645,6 +652,20 @@ fn check_retained_device_registration(operation: &str) {
         format!("server_url = \"{server_url}\"\n"),
     );
     write_user_token(&state_home, &server_url, "art_repair-token");
+    let device_home = temporary.path().join("device-home");
+    fs::create_dir_all(&device_home).unwrap();
+    fs::set_permissions(&device_home, fs::Permissions::from_mode(0o700)).unwrap();
+    if operation == "repair" {
+        write_private_file(
+            &device_home.join("ego-browser-active-binding.json"),
+            serde_json::json!({
+                "version": 1, "binding_id": "binding-repair", "generation": 3,
+                "device_id": "device-repair", "task_space_label": "agent-remote:session-repair",
+                "authorization_mode": "ego_browser_script_full_trust", "user_confirmation": true
+            })
+            .to_string(),
+        );
+    }
     write_private_file(
         &state_home.join("ego-browser-trust.json"),
         serde_json::json!({
@@ -706,6 +727,8 @@ fn check_retained_device_registration(operation: &str) {
                printf '%s\\n' '{}'\n\
              elif [ \"$1\" = ensure ]; then\n\
                cat > \"$TEST_BRIDGE_DEVICE_STDIN\"\n\
+             elif [ \"$1\" = pause ]; then\n\
+               test \"$2\" = binding-repair && test \"$4\" = 3\n\
              else\n\
                exit 64\n\
              fi\n",
@@ -734,6 +757,8 @@ fn check_retained_device_registration(operation: &str) {
         .env("AGENT_REMOTE_SECRET_BACKEND", "file")
         .env("EGO_BROWSER_INSTALL_ROOT", &install_root)
         .env("AGENT_REMOTE_EGO_BROWSER_DEVICE", &device)
+        .env("AGENT_REMOTE_EGO_BROWSER_DEVICE_HOME", &device_home)
+        .env("EGO_BROWSER_DEVICE_HOME", &device_home)
         .env("TEST_BRIDGE_INSTALLER_LOG", &installer_log)
         .env("TEST_BRIDGE_DEVICE_LOG", &device_log)
         .env("TEST_BRIDGE_DEVICE_STDIN", &device_stdin)
@@ -767,6 +792,9 @@ fn check_retained_device_registration(operation: &str) {
     );
     let requests = server.join().unwrap();
     if operation == "repair" {
+        assert!(device_calls
+            .lines()
+            .any(|line| line == "pause binding-repair --binding-generation 3"));
         assert_eq!(requests.len(), 1);
         assert!(requests[0].starts_with("GET /api/v1/ego-browser/bindings HTTP/1.1"));
     } else {
@@ -1964,6 +1992,12 @@ fn ego_browser_claim_hides_device_client_output_and_reports_a_safe_summary() {
             "--yes",
         ])
         .env("AGENT_REMOTE_EGO_BROWSER_DEVICE", &device_client)
+        .env("HOME", temporary.path())
+        .env("AGENT_REMOTE_HOME", temporary.path().join("agent-remote"))
+        .env(
+            "AGENT_REMOTE_EGO_BROWSER_DEVICE_HOME",
+            temporary.path().join("device-home"),
+        )
         .output()
         .unwrap();
     assert!(
@@ -2162,6 +2196,12 @@ fn ego_browser_claim_reduces_device_client_failure_to_a_safe_error_code() {
             "--yes",
         ])
         .env("AGENT_REMOTE_EGO_BROWSER_DEVICE", &device_client)
+        .env("HOME", temporary.path())
+        .env("AGENT_REMOTE_HOME", temporary.path().join("agent-remote"))
+        .env(
+            "AGENT_REMOTE_EGO_BROWSER_DEVICE_HOME",
+            temporary.path().join("device-home"),
+        )
         .output()
         .unwrap();
     assert!(!output.status.success());

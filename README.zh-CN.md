@@ -142,6 +142,9 @@ installer。固定的 `0.2.23` release 只有在 tag-bound 制品与 Sigstore ev
 token、session ID 或 full-trust claim。缺少或无效的 release asset 与 Sigstore evidence
 都会 fail closed。
 
+`repair` 通过 Device Client 暂停绑定并保存新的本机 handoff 代次。生命周期恢复仅在
+绑定、设备、工具会话均一致时使用服务器的新代次；显式指定的过期代次仍会被拒绝。
+
 安装后，`upgrade` 会显式重新登记保留的设备，更新 Server 上的发布元数据，保留设备 ID、
 generation 与密钥。Server 必须支持规范接口的同身份重新登记；普通 `setup` 和 `repair`
 不能更新发布元数据。

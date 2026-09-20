@@ -150,6 +150,10 @@ certificate `1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5`. 
 token, session ID, or full-trust claim. Missing or invalid release assets and Sigstore evidence
 fail closed.
 
+Repair pauses through the Device Client so the local handoff retains the new binding generation.
+Lifecycle recovery verifies the same binding, device, and tool session before using a newer Server
+generation; explicit stale generations still fail closed.
+
 After installation, `upgrade` explicitly re-enrolls the retained device to update the Server's
 release metadata without changing its ID, generation, or keys. The Server must support canonical
 same-identity re-enrollment; ordinary `setup` and `repair` cannot update release metadata.
