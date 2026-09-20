@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.29 - 2026-09-20
+
+- fix(deps): pin bridge 0.1.19 and node 0.2.28 (13f585f)
+
 ## v0.2.28 - 2026-09-20
 
 - fix(ego-browser): normalize session ids and report lifecycle errors accurately (8d325a8)
