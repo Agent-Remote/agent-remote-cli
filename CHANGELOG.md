@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.25 - 2026-09-20
+
+- fix(ego-browser): preserve setup recovery and validate registration input (6b7a223)
+
 ## v0.2.24 - 2026-09-20
 
 - fix(ego-browser): reconcile lifecycle generations and isolate command tests (24a467b)
