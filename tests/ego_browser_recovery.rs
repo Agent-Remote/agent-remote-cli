@@ -10,6 +10,7 @@ const CLI: &str = env!("CARGO_BIN_EXE_agent-remote");
 const SESSION: &str = "149aef7a-ba99-4bd5-a0e9-baf1a2635c09";
 
 fn check_existing_binding(command: &str, status: &str, admission: &str, expected: &str) {
+    let confirmation = matches!(command, "pause" | "stop" | "revoke" | "resume");
     let temporary = tempfile::tempdir().unwrap();
     let home = temporary.path().join("cli");
     let store = temporary.path().join("device");
@@ -20,7 +21,7 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let binding = serde_json::json!({
-        "id":"binding-existing", "ego_browser_device_id":"device-existing",
+        "id":"8f8aab48-1c87-4f00-9af3-01ec41234567", "ego_browser_device_id":"device-existing",
         "tool_session_id":SESSION, "node_id":"node-test", "status":status,
         "relay_binding_kind":"ego_browser", "authorization_mode":"ego_browser_script_full_trust",
         "release_profile":"community-local-trust", "bridge_protocol_version":"ego-browser-bridge-v1",
@@ -32,6 +33,8 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
             serde_json::json!({"data":{"items":[binding]}}),
             serde_json::json!({"data":{"enabled":true,"enrollment_enabled":true,"execution_admission":true,"protocol":"ego-browser-bridge-v1"}}),
         ]
+    } else if confirmation {
+        vec![serde_json::json!({"data":{"items":[binding]}})]
     } else {
         vec![serde_json::json!({"data":binding})]
     };
@@ -81,7 +84,7 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
     }).to_string());
     let handoff_path = store.join("ego-browser-active-binding.json");
     write(&handoff_path,serde_json::json!({
-        "version":1,"binding_id":"binding-existing","generation":3,"device_id":"device-existing",
+        "version":1,"binding_id":"8f8aab48-1c87-4f00-9af3-01ec41234567","generation":3,"device_id":"device-existing",
         "task_space_label":format!("agent-remote:{SESSION}"),"authorization_mode":"ego_browser_script_full_trust","user_confirmation":true
     }).to_string());
     let admission_path = store.join("ego-browser-local-admission.json");
@@ -89,7 +92,7 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
         &admission_path,
         serde_json::json!({
             "version":1,"state":admission,"device_id":"device-existing","device_generation":1,
-            "binding_id":if admission=="open" {Some("binding-existing")} else {None},
+            "binding_id":if admission=="open" {Some("8f8aab48-1c87-4f00-9af3-01ec41234567")} else {None},
             "binding_generation":if admission=="open" {Some(3)} else {None},"updated_at_unix":1
         })
         .to_string(),
@@ -106,7 +109,9 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     let mut process = Command::new(CLI);
     process.args(["--json", "ego-browser", command]);
-    if command != "status" {
+    if confirmation {
+        process.arg("8f8aab48-1c87-4f00-9af3-01ec41234567");
+    } else if command != "status" {
         process.args([SESSION, "--yes"]);
     }
     let output = process
@@ -122,7 +127,14 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(output.status.success(), command == "status", "{result}");
     assert_eq!(result["next_action"], expected, "{result}");
-    if command != "status" {
+    if confirmation {
+        assert_eq!(result["error_code"], "confirmation_required");
+        assert_eq!(result["admission"]["local"], admission);
+        if admission != "closed" {
+            assert!(result["state"]["connected"].is_null(), "{result}");
+            assert!(result["state"]["available"].is_null(), "{result}");
+        }
+    } else if command != "status" {
         assert_eq!(result["error_code"], "binding_conflict");
     }
     if expected == "pause" && command == "status" {
@@ -171,4 +183,14 @@ fn closed_active_binding_offers_pause_before_resume() {
 #[test]
 fn connected_status_does_not_request_recovery() {
     check_existing_binding("status", "active", "open", "none");
+}
+
+#[test]
+fn unconfirmed_lifecycle_reports_observed_admission_without_changing_it() {
+    for command in ["pause", "stop", "revoke"] {
+        for admission in ["open", "ready", "closed"] {
+            check_existing_binding(command, "active", admission, "confirm_lifecycle");
+        }
+    }
+    check_existing_binding("resume", "paused", "ready", "confirm_full_trust");
 }

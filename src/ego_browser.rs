@@ -3629,6 +3629,25 @@ fn lifecycle_error(
     )
 }
 
+fn confirmation_error(
+    paths: &AppPaths,
+    state: &str,
+    next_action: &str,
+    next_command: &str,
+) -> anyhow::Error {
+    let admission = local_admission_snapshot(paths)
+        .map(|snapshot| snapshot.state)
+        .unwrap_or_else(|_| "unknown".into());
+    lifecycle_error(
+        "confirmation_required",
+        state,
+        &admission,
+        next_action,
+        next_command,
+        false,
+    )
+}
+
 fn map_api_error(error: crate::api::ApiError, operation: &str) -> anyhow::Error {
     map_api_error_fields(
         error.status_code(),
@@ -4695,13 +4714,11 @@ async fn cancel_request(paths: AppPaths, args: EgoBrowserCancelRequestArgs) -> R
         .context("resolved ego-browser request disappeared")?;
     if !args.yes {
         if !interactive_terminal() {
-            return Err(lifecycle_error(
-                "confirmation_required",
+            return Err(confirmation_error(
+                &paths,
                 "request_active",
-                "unknown",
                 "confirm_request_cancellation",
                 "agent-remote ego-browser cancel-request BINDING REQUEST --yes",
-                false,
             ));
         }
         if !super::prompt_yes_no(&format!(
@@ -4754,13 +4771,11 @@ async fn claim(paths: AppPaths, args: EgoBrowserClaimArgs) -> Result<()> {
     };
     if !args.yes {
         if !interactive_terminal() {
-            return Err(lifecycle_error(
-                "confirmation_required",
+            return Err(confirmation_error(
+                &paths,
                 "candidate_selected",
-                "closed",
                 "confirm_full_trust",
                 "agent-remote ego-browser claim TOOL_SESSION --yes",
-                false,
             ));
         }
         terminal::warning_line(FULL_TRUST_WARNING);
@@ -4807,13 +4822,11 @@ async fn resume(paths: AppPaths, args: EgoBrowserLifecycleArgs) -> Result<()> {
     }
     if !args.yes {
         if !interactive_terminal() {
-            return Err(lifecycle_error(
-                "confirmation_required",
+            return Err(confirmation_error(
+                &paths,
                 "paused",
-                "closed",
                 "confirm_full_trust",
                 "agent-remote ego-browser resume --yes",
-                false,
             ));
         }
         terminal::warning_line(FULL_TRUST_WARNING);
@@ -4850,13 +4863,11 @@ async fn lifecycle(paths: AppPaths, action: &str, args: EgoBrowserLifecycleArgs)
         resolve_lifecycle_target(&paths, &args, action == "resume").await?;
     if !args.yes {
         if !interactive_terminal() {
-            return Err(lifecycle_error(
-                "confirmation_required",
-                "connected",
-                "closed",
+            return Err(confirmation_error(
+                &paths,
+                "confirmation_pending",
                 "confirm_lifecycle",
-                &format!("agent-remote ego-browser {action} --yes"),
-                false,
+                &format!("agent-remote ego-browser {action} {binding_id} --yes"),
             ));
         }
         let prompt = match action {

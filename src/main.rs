@@ -109,7 +109,10 @@ fn json_error_value(error: &anyhow::Error) -> serde_json::Value {
         "enrollment": if admission == "server_enrollment_closed" { "denied" } else { "unknown_or_denied" },
         "server_execution": if admission == "server_execution_closed" { "denied" } else { "unknown_or_denied" },
         "binding": "unknown",
-        "local": if admission == "closed" { "closed" } else { "unknown" },
+        "local": match admission {
+            "open" | "ready" | "closed" | "uninstalled" => admission,
+            _ => "unknown",
+        },
         "reason": if error_code == "login_required" || error_code == "server_profile_required" {
             "login"
         } else if admission.starts_with("server_") {
