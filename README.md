@@ -228,6 +228,8 @@ Run the remote application on its runtime loopback, for example `npm run dev -- 
 
 `agent-remote account import-config --account <id>` waits for the selected node to finish writing the accepted Claude configuration and exits non-zero when the task fails, is cancelled, expires, or does not reach a terminal state within 120 seconds. The timeout message preserves the task ID because the remote task may still complete after the local wait ends. Use `--dry-run` to preview paths and `--include-resume-history` only when prompts, transcripts, and local paths are intentionally included.
 
+`connect` accepts the same displayed 12-character session ID as `fclaude list`, a unique hexadecimal prefix, or a full UUID (case-insensitive). An ambiguous prefix requires a more specific ID. Rejected lifecycle commands report the observed local admission; an unobserved connection state remains `null` in JSON. `request_not_active` means the requested execution has ended or is absent from the active ledger: refresh with the suggested `requests` command instead of repairing the Bridge. Ambiguous or malformed request IDs are reported separately.
+
 ## Development
 
 ```sh

@@ -216,6 +216,8 @@ agent-remote forward stop --session <session-id> --all
 
 `agent-remote account import-config --account <id>` 会等待目标节点完成已接受 Claude 配置的写入；任务失败、取消、过期或 120 秒内未进入终态时，命令以非零状态退出。超时信息会保留 task ID，因为本地停止等待后远端任务仍可能继续完成。可先用 `--dry-run` 预览路径；只有明确需要导入提示词、transcript 和本地路径时才使用 `--include-resume-history`。
 
+`connect` 支持 `fclaude list` 显示的 12 位会话 ID、唯一十六进制前缀或完整 UUID，大小写不敏感；前缀有歧义时需提供更完整的 ID。生命周期命令被拒绝时报告实际读取的本地准入状态，未观测到的连接状态在 JSON 中保持 `null`。`request_not_active` 表示请求已结束或不在活动账本中，应按提示运行 `requests` 刷新列表，无需修复 Bridge；有歧义或格式错误的请求 ID 会单独报告。
+
 ## 开发
 
 ```sh

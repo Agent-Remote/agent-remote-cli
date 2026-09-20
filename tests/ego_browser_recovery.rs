@@ -8,8 +8,20 @@ use std::process::Command;
 
 const CLI: &str = env!("CARGO_BIN_EXE_agent-remote");
 const SESSION: &str = "149aef7a-ba99-4bd5-a0e9-baf1a2635c09";
+const BINDING: &str = "8f8aab48-1c87-4f00-9af3-01ec41234567";
 
 fn check_existing_binding(command: &str, status: &str, admission: &str, expected: &str) {
+    check_binding_command(command, status, admission, expected, &[], vec![]);
+}
+
+fn check_binding_command(
+    command: &str,
+    status: &str,
+    admission: &str,
+    expected: &str,
+    arguments: &[&str],
+    request_responses: Vec<(u16, serde_json::Value)>,
+) -> serde_json::Value {
     let confirmation = matches!(command, "pause" | "stop" | "revoke" | "resume");
     let temporary = tempfile::tempdir().unwrap();
     let home = temporary.path().join("cli");
@@ -33,14 +45,19 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
             serde_json::json!({"data":{"items":[binding]}}),
             serde_json::json!({"data":{"enabled":true,"enrollment_enabled":true,"execution_admission":true,"protocol":"ego-browser-bridge-v1"}}),
         ]
-    } else if confirmation {
+    } else if confirmation || command == "cancel-request" {
         vec![serde_json::json!({"data":{"items":[binding]}})]
     } else {
         vec![serde_json::json!({"data":binding})]
     };
+    let responses: Vec<_> = responses
+        .into_iter()
+        .map(|body| (200, body))
+        .chain(request_responses)
+        .collect();
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
-        for response in responses {
+        for (status, response) in responses {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buffer = [0; 16384];
             let n = stream.read(&mut buffer).unwrap();
@@ -52,7 +69,7 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
                     .to_owned(),
             );
             let body = response.to_string();
-            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+            write!(stream,"HTTP/1.1 {status} Response\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
         }
         requests
     });
@@ -109,11 +126,12 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     let mut process = Command::new(CLI);
     process.args(["--json", "ego-browser", command]);
-    if confirmation {
+    if confirmation || command == "cancel-request" {
         process.arg("8f8aab48-1c87-4f00-9af3-01ec41234567");
     } else if command != "status" {
         process.args([SESSION, "--yes"]);
     }
+    process.args(arguments);
     let output = process
         .env("HOME", temporary.path())
         .env("AGENT_REMOTE_HOME", &home)
@@ -127,8 +145,10 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(output.status.success(), command == "status", "{result}");
     assert_eq!(result["next_action"], expected, "{result}");
-    if confirmation {
-        assert_eq!(result["error_code"], "confirmation_required");
+    if confirmation || command == "cancel-request" {
+        if arguments.is_empty() {
+            assert_eq!(result["error_code"], "confirmation_required");
+        }
         assert_eq!(result["admission"]["local"], admission);
         if admission != "closed" {
             assert!(result["state"]["connected"].is_null(), "{result}");
@@ -143,11 +163,14 @@ fn check_existing_binding(command: &str, status: &str, admission: &str, expected
     assert!(!marker.exists());
     assert_eq!(fs::read(&admission_path).unwrap(), original);
     assert_eq!(fs::read(&handoff_path).unwrap(), handoff);
-    assert!(server
-        .join()
-        .unwrap()
+    let requests = server.join().unwrap();
+    assert!(requests
         .iter()
-        .all(|request| request.starts_with("GET /api/v1/ego-browser/")));
+        .all(|request| request.starts_with("GET /api/v1/ego-browser/")
+            || (command == "cancel-request"
+                && request.starts_with("POST /api/v1/ego-browser/")
+                && request.contains("/cancel"))));
+    result
 }
 
 #[test]
@@ -193,4 +216,82 @@ fn unconfirmed_lifecycle_reports_observed_admission_without_changing_it() {
         }
     }
     check_existing_binding("resume", "paused", "ready", "confirm_full_trust");
+}
+
+#[test]
+fn stale_generation_preserves_observed_admission_and_binding() {
+    for command in ["pause", "stop", "revoke", "resume"] {
+        for admission in ["open", "ready", "closed"] {
+            let result = check_binding_command(
+                command,
+                if command == "resume" {
+                    "paused"
+                } else {
+                    "active"
+                },
+                admission,
+                "refresh_status",
+                &["--binding-generation", "1", "--yes"],
+                vec![],
+            );
+            assert_eq!(result["error_code"], "binding_generation_stale");
+            assert_eq!(result["stale"], true);
+        }
+    }
+}
+
+#[test]
+fn cancel_request_selection_errors_offer_request_refresh_without_mutation() {
+    let request = |id: &str| {
+        serde_json::json!({
+            "id":id,"request_id":"opaque-request","binding_id":BINDING,
+            "generation":3,"binding_generation":3,"sequence":143,
+            "message_type":"execute","payload_bytes":10,"status":"accepted","created_at":"2026-09-20T00:00:00Z"
+        })
+    };
+    let first = "aabbccdd-0000-4000-8000-000000000001";
+    let second = "aabbccdd-0000-4000-8000-000000000002";
+    for (reference, items, code) in [
+        (first, vec![], "request_not_active"),
+        (
+            "aabbccdd0000",
+            vec![request(first), request(second)],
+            "request_ambiguous",
+        ),
+        ("invalid", vec![], "invalid_request_reference"),
+    ] {
+        let result = check_binding_command(
+            "cancel-request",
+            "active",
+            "open",
+            "refresh_requests",
+            &[reference, "--yes"],
+            vec![(200, serde_json::json!({"data":{"items":items}}))],
+        );
+        assert_eq!(result["error_code"], code);
+        assert_eq!(
+            result["next_command"],
+            format!("agent-remote ego-browser requests {BINDING}")
+        );
+    }
+    for code in [
+        "EGO_BROWSER_REQUEST_NOT_FOUND",
+        "EGO_BROWSER_REQUEST_NOT_ACTIVE",
+    ] {
+        let result = check_binding_command(
+            "cancel-request",
+            "active",
+            "open",
+            "refresh_requests",
+            &["aabbccdd0000", "--yes"],
+            vec![
+                (200, serde_json::json!({"data":{"items":[request(first)]}})),
+                (
+                    409,
+                    serde_json::json!({"error":{"code":code,"message":"request ended"}}),
+                ),
+            ],
+        );
+        assert_eq!(result["error_code"], "request_not_active");
+    }
 }

@@ -32,7 +32,7 @@ use crate::cli::{
     EgoBrowserStatusArgs, EgoBrowserSwitchServerArgs, EgoBrowserUpgradeArgs, ListArgs,
 };
 use crate::config::{AppPaths, Config};
-use crate::identifiers::{resolve_id, short_id};
+use crate::identifiers::{match_id, resolve_id, short_id, IdMatch};
 use crate::local_state::{LocalEgoBrowserBinding, LocalState};
 use crate::terminal::{self, Details, Table};
 
@@ -3531,17 +3531,30 @@ fn select_candidate_with_interactivity(
         .filter(|candidate| candidate.controllable)
         .collect();
     if let Some(requested) = requested {
-        let matches: Vec<&EgoBrowserBindingCandidateData> = selectable
-            .iter()
-            .copied()
-            .filter(|candidate| {
-                candidate.tool_session_id == requested
-                    || candidate.tool_session_id.starts_with(requested)
-            })
-            .collect();
-        return match matches.as_slice() {
-            [candidate] => Ok((*candidate).clone()),
-            [] => Err(lifecycle_error(
+        let selection = match_id(
+            requested,
+            "Claude tool session",
+            selectable
+                .iter()
+                .map(|candidate| candidate.tool_session_id.as_str()),
+        )
+        .map_err(|_| {
+            lifecycle_error(
+                "invalid_session_reference",
+                "candidates",
+                "unknown",
+                "select_session",
+                "agent-remote ego-browser connect TOOL_SESSION",
+                false,
+            )
+        })?;
+        return match selection {
+            IdMatch::Unique(id) => selectable
+                .into_iter()
+                .find(|candidate| candidate.tool_session_id == id)
+                .cloned()
+                .context("resolved session candidate disappeared"),
+            IdMatch::NotFound => Err(lifecycle_error(
                 "no_session_candidate",
                 "candidates",
                 "unknown",
@@ -3549,7 +3562,7 @@ fn select_candidate_with_interactivity(
                 "agent-remote ego-browser connect",
                 false,
             )),
-            _ => Err(lifecycle_error(
+            IdMatch::Ambiguous => Err(lifecycle_error(
                 "confirmation_required",
                 "candidates",
                 "unknown",
@@ -3635,17 +3648,20 @@ fn confirmation_error(
     next_action: &str,
     next_command: &str,
 ) -> anyhow::Error {
-    let admission = local_admission_snapshot(paths)
-        .map(|snapshot| snapshot.state)
-        .unwrap_or_else(|_| "unknown".into());
     lifecycle_error(
         "confirmation_required",
         state,
-        &admission,
+        &observed_local_admission(paths),
         next_action,
         next_command,
         false,
     )
+}
+
+fn observed_local_admission(paths: &AppPaths) -> String {
+    local_admission_snapshot(paths)
+        .map(|snapshot| snapshot.state)
+        .unwrap_or_else(|_| "unknown".into())
 }
 
 fn map_api_error(error: crate::api::ApiError, operation: &str) -> anyhow::Error {
@@ -4703,11 +4719,22 @@ async fn cancel_request(paths: AppPaths, args: EgoBrowserCancelRequestArgs) -> R
         .list_ego_browser_requests(&token, &binding_id)
         .await?;
     ensure_requests_for_binding(&requests, &binding_id)?;
-    let ledger_id = resolve_id(
+    let selection = match_id(
         &args.request,
         "ego-browser request",
         requests.iter().map(|request| request.id.as_str()),
-    )?;
+    );
+    let ledger_id = match selection {
+        Ok(IdMatch::Unique(id)) => id,
+        result => {
+            let code = match result {
+                Ok(IdMatch::NotFound) => "request_not_active",
+                Ok(IdMatch::Ambiguous) => "request_ambiguous",
+                _ => "invalid_request_reference",
+            };
+            return Err(request_selection_error(&paths, &binding_id, code));
+        }
+    };
     let request = requests
         .iter()
         .find(|request| request.id == ledger_id)
@@ -4737,7 +4764,13 @@ async fn cancel_request(paths: AppPaths, args: EgoBrowserCancelRequestArgs) -> R
             request_binding_generation(request),
             request.sequence,
         )
-        .await?;
+        .await
+        .map_err(|error| match error.code() {
+            Some("EGO_BROWSER_REQUEST_NOT_FOUND" | "EGO_BROWSER_REQUEST_NOT_ACTIVE") => {
+                request_selection_error(&paths, &binding_id, "request_not_active")
+            }
+            _ => map_api_error(error, "cancel-request"),
+        })?;
     if result.status == "completed" {
         terminal::note(format!(
             "Ego-browser request {} completed before cancellation.",
@@ -4751,6 +4784,17 @@ async fn cancel_request(paths: AppPaths, args: EgoBrowserCancelRequestArgs) -> R
         ));
     }
     Ok(())
+}
+
+fn request_selection_error(paths: &AppPaths, binding_id: &str, code: &str) -> anyhow::Error {
+    lifecycle_error(
+        code,
+        "request_selection",
+        &observed_local_admission(paths),
+        "refresh_requests",
+        &format!("agent-remote ego-browser requests {binding_id}"),
+        code == "request_not_active",
+    )
 }
 
 async fn claim(paths: AppPaths, args: EgoBrowserClaimArgs) -> Result<()> {
@@ -4916,6 +4960,7 @@ async fn resolve_lifecycle_target(
     resume: bool,
 ) -> Result<(String, u64)> {
     let operation = if resume { "resume" } else { "lifecycle" };
+    let admission = observed_local_admission(paths);
     let local_handoff = load_local_active_binding_handoff(paths)?;
     let explicit_reference = args
         .binding
@@ -4927,7 +4972,7 @@ async fn resolve_lifecycle_target(
     if explicit_reference.is_none() {
         if let Some(handoff) = local_handoff.as_ref() {
             let current = refresh_lifecycle_handoff(paths, handoff, resume).await?;
-            return resolve_local_handoff_target(&current, args, resume);
+            return resolve_local_handoff_target(&current, args, &admission);
         }
     }
 
@@ -4945,7 +4990,7 @@ async fn resolve_lifecycle_target(
             return Err(lifecycle_error(
                 "no_active_binding",
                 "handoff_stale",
-                "closed",
+                &admission,
                 "refresh_status",
                 "agent-remote ego-browser status",
                 true,
@@ -4957,7 +5002,7 @@ async fn resolve_lifecycle_target(
             return Err(lifecycle_error(
                 "binding_generation_stale",
                 &binding.status,
-                "closed",
+                &admission,
                 "refresh_status",
                 "agent-remote ego-browser status",
                 true,
@@ -4969,7 +5014,9 @@ async fn resolve_lifecycle_target(
             .iter()
             .filter(|item| lifecycle_binding_is_eligible(item, resume))
             .collect();
-        select_lifecycle_binding(&eligible, resume)?.id.clone()
+        select_lifecycle_binding(&eligible, resume, &admission)?
+            .id
+            .clone()
     };
 
     let binding = bindings
@@ -4980,7 +5027,7 @@ async fn resolve_lifecycle_target(
         return Err(lifecycle_error(
             "binding_conflict",
             &binding.status,
-            "closed",
+            &admission,
             "refresh_status",
             "agent-remote ego-browser status",
             false,
@@ -4992,7 +5039,7 @@ async fn resolve_lifecycle_target(
             return Err(lifecycle_error(
                 "binding_generation_stale",
                 &binding.status,
-                "closed",
+                &admission,
                 "refresh_status",
                 "agent-remote ego-browser status",
                 true,
@@ -5005,7 +5052,7 @@ async fn resolve_lifecycle_target(
         return Err(lifecycle_error(
             "binding_generation_stale",
             &binding.status,
-            "closed",
+            &admission,
             "refresh_status",
             "agent-remote ego-browser status",
             true,
@@ -5021,6 +5068,7 @@ async fn revalidate_lifecycle_target(
     resume: bool,
 ) -> Result<()> {
     let operation = if resume { "resume" } else { "lifecycle" };
+    let admission = observed_local_admission(paths);
     if let Some(handoff) = load_local_active_binding_handoff(paths)? {
         if handoff.binding_id == binding_id {
             // The exact lifecycle mutation already rejects stale state; do not add a gated read.
@@ -5040,7 +5088,7 @@ async fn revalidate_lifecycle_target(
             lifecycle_error(
                 "no_active_binding",
                 "unknown",
-                "closed",
+                &admission,
                 "refresh_status",
                 "agent-remote ego-browser status",
                 true,
@@ -5050,7 +5098,7 @@ async fn revalidate_lifecycle_target(
         return Err(lifecycle_error(
             "binding_generation_stale",
             &current.status,
-            "closed",
+            &admission,
             "refresh_status",
             "agent-remote ego-browser status",
             true,
@@ -5065,7 +5113,7 @@ async fn revalidate_lifecycle_target(
             return Err(lifecycle_error(
                 "binding_generation_stale",
                 &current.status,
-                "closed",
+                &admission,
                 "refresh_status",
                 "agent-remote ego-browser status",
                 true,
@@ -5076,7 +5124,7 @@ async fn revalidate_lifecycle_target(
         return Err(lifecycle_error(
             "binding_conflict",
             &current.status,
-            "closed",
+            &admission,
             "refresh_status",
             "agent-remote ego-browser status",
             false,
@@ -5108,13 +5156,14 @@ async fn refresh_lifecycle_handoff(
     let data = response.get("data").context("binding status is missing")?;
     let current: EgoBrowserBindingData = serde_json::from_value(data.clone())
         .context("Device Client returned invalid binding data")?;
-    reconciled_lifecycle_handoff(handoff, &current, resume)
+    reconciled_lifecycle_handoff(handoff, &current, resume, &observed_local_admission(paths))
 }
 
 fn reconciled_lifecycle_handoff(
     handoff: &LocalActiveBindingHandoff,
     current: &EgoBrowserBindingData,
     resume: bool,
+    admission: &str,
 ) -> Result<LocalActiveBindingHandoff> {
     if current.id != handoff.binding_id
         || current.ego_browser_device_id != handoff.device_id
@@ -5126,7 +5175,7 @@ fn reconciled_lifecycle_handoff(
         return Err(lifecycle_error(
             "binding_conflict",
             &current.status,
-            "closed",
+            admission,
             "refresh_status",
             "agent-remote ego-browser status",
             true,
@@ -5140,14 +5189,14 @@ fn reconciled_lifecycle_handoff(
 fn resolve_local_handoff_target(
     handoff: &LocalActiveBindingHandoff,
     args: &EgoBrowserLifecycleArgs,
-    _resume: bool,
+    admission: &str,
 ) -> Result<(String, u64)> {
     let requested_generation = match (args.binding_generation, args.generation) {
         (Some(explicit), legacy) if legacy != 0 && explicit != legacy => {
             return Err(lifecycle_error(
                 "binding_generation_stale",
                 "handoff_stale",
-                "closed",
+                admission,
                 "refresh_status",
                 "agent-remote ego-browser status",
                 true,
@@ -5160,7 +5209,7 @@ fn resolve_local_handoff_target(
         return Err(lifecycle_error(
             "binding_generation_stale",
             "handoff_stale",
-            "closed",
+            admission,
             "refresh_status",
             "agent-remote ego-browser status",
             true,
@@ -5183,20 +5232,22 @@ fn lifecycle_binding_is_eligible(binding: &EgoBrowserBindingData, resume: bool) 
 fn select_lifecycle_binding<'a>(
     eligible: &[&'a EgoBrowserBindingData],
     resume: bool,
+    admission: &str,
 ) -> Result<&'a EgoBrowserBindingData> {
-    select_lifecycle_binding_with_interactivity(eligible, resume, interactive_terminal())
+    select_lifecycle_binding_with_interactivity(eligible, resume, interactive_terminal(), admission)
 }
 
 fn select_lifecycle_binding_with_interactivity<'a>(
     eligible: &[&'a EgoBrowserBindingData],
     resume: bool,
     interactive: bool,
+    admission: &str,
 ) -> Result<&'a EgoBrowserBindingData> {
     match eligible {
         [] => Err(lifecycle_error(
             "no_active_binding",
             "ready",
-            "closed",
+            admission,
             "connect",
             "agent-remote ego-browser connect",
             false,
@@ -5205,7 +5256,7 @@ fn select_lifecycle_binding_with_interactivity<'a>(
         _many if !interactive => Err(lifecycle_error(
             "confirmation_required",
             "multiple_bindings",
-            "closed",
+            admission,
             "select_binding",
             if resume {
                 "agent-remote ego-browser resume BINDING --yes"
@@ -5785,6 +5836,7 @@ mod tests {
     use crate::api::{EgoBrowserBindingCandidateData, EgoBrowserBindingData, EgoBrowserDeviceData};
     use crate::cli::EgoBrowserForgetArgs;
     use crate::config::{AppPaths, Config};
+    use crate::identifiers::short_id;
     use crate::local_state::LocalState;
 
     #[test]
@@ -6133,14 +6185,18 @@ mod tests {
             yes: true,
         };
         assert_eq!(
-            resolve_local_handoff_target(&handoff, &args, false).unwrap(),
+            resolve_local_handoff_target(&handoff, &args, "open").unwrap(),
             ("binding-local".to_owned(), 9)
         );
         let stale = crate::cli::EgoBrowserLifecycleArgs {
             binding_generation: Some(8),
             ..args
         };
-        assert!(resolve_local_handoff_target(&handoff, &stale, false).is_err());
+        let error = resolve_local_handoff_target(&handoff, &stale, "open")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("error_code=binding_generation_stale"));
+        assert!(error.contains("admission=open"));
     }
 
     #[test]
@@ -6304,8 +6360,8 @@ mod tests {
     #[test]
     fn candidate_selection_fails_closed_without_tty_and_for_ambiguous_prefixes() {
         let candidates = [
-            binding_candidate("session-alpha"),
-            binding_candidate("session-alpine"),
+            binding_candidate("149aef7a-ba99-4bd5-a0e9-baf1a2635c09"),
+            binding_candidate("149aef7a-ba99-4bd5-a0e9-baf1a2635c10"),
         ];
 
         let non_interactive = format!(
@@ -6317,10 +6373,41 @@ mod tests {
 
         let ambiguous = format!(
             "{:#}",
-            select_candidate_with_interactivity(&candidates, Some("session-al"), true).unwrap_err()
+            select_candidate_with_interactivity(&candidates, Some("149aef7aba99"), true)
+                .unwrap_err()
         );
         assert!(ambiguous.contains("error_code=confirmation_required"));
         assert!(ambiguous.contains("next_action=select_session"));
+    }
+
+    #[test]
+    fn candidate_selection_accepts_displayed_ids_and_rejects_uncontrollable_sessions() {
+        let id = "149aef7a-ba99-4bd5-a0e9-baf1a2635c09";
+        let mut hidden = binding_candidate("149aef7a-ba99-4bd5-a0e9-baf1a2635c10");
+        hidden.controllable = false;
+        let candidates = [binding_candidate(id), hidden];
+        for reference in [
+            id.to_owned(),
+            short_id(id),
+            short_id(id).to_uppercase(),
+            "149aef7a-ba99".into(),
+        ] {
+            let selected =
+                select_candidate_with_interactivity(&candidates, Some(&reference), false).unwrap();
+            assert_eq!(selected.tool_session_id, id);
+        }
+        for (reference, code) in [
+            (
+                "149aef7a-ba99-4bd5-a0e9-baf1a2635c10",
+                "no_session_candidate",
+            ),
+            ("not-a-uuid", "invalid_session_reference"),
+            ("149", "invalid_session_reference"),
+        ] {
+            let error = select_candidate_with_interactivity(&candidates, Some(reference), false)
+                .unwrap_err();
+            assert!(error.to_string().contains(&format!("error_code={code}")));
+        }
     }
 
     #[test]
@@ -6404,7 +6491,8 @@ mod tests {
 
         let error = format!(
             "{:#}",
-            select_lifecycle_binding_with_interactivity(&eligible, false, false).unwrap_err()
+            select_lifecycle_binding_with_interactivity(&eligible, false, false, "open")
+                .unwrap_err()
         );
         assert!(error.contains("error_code=confirmation_required"));
         assert!(error.contains("state=multiple_bindings"));
@@ -6426,18 +6514,18 @@ mod tests {
         current.status = "paused".into();
         for resume in [true, false] {
             let refreshed =
-                super::reconciled_lifecycle_handoff(&handoff, &current, resume).unwrap();
+                super::reconciled_lifecycle_handoff(&handoff, &current, resume, "ready").unwrap();
             assert_eq!(refreshed.generation, 4);
             assert_eq!(handoff.generation, 3);
         }
         current.ego_browser_device_id = "different-device".into();
-        assert!(super::reconciled_lifecycle_handoff(&handoff, &current, true).is_err());
+        assert!(super::reconciled_lifecycle_handoff(&handoff, &current, true, "ready").is_err());
         current.ego_browser_device_id = handoff.device_id.clone();
         current.tool_session_id = "different-session".into();
-        assert!(super::reconciled_lifecycle_handoff(&handoff, &current, true).is_err());
+        assert!(super::reconciled_lifecycle_handoff(&handoff, &current, true, "ready").is_err());
         current.tool_session_id = "session-local".into();
         current.binding_generation = Some(2);
-        assert!(super::reconciled_lifecycle_handoff(&handoff, &current, true).is_err());
+        assert!(super::reconciled_lifecycle_handoff(&handoff, &current, true, "ready").is_err());
     }
 
     #[test]
@@ -6446,7 +6534,7 @@ mod tests {
         let eligible = vec![&binding];
 
         let selected =
-            select_lifecycle_binding_with_interactivity(&eligible, false, false).unwrap();
+            select_lifecycle_binding_with_interactivity(&eligible, false, false, "open").unwrap();
         assert_eq!(selected.id, "binding-only");
     }
 
