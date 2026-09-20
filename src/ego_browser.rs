@@ -36,6 +36,9 @@ use crate::identifiers::{resolve_id, short_id};
 use crate::local_state::{LocalEgoBrowserBinding, LocalState};
 use crate::terminal::{self, Details, Table};
 
+mod binding_recovery;
+use binding_recovery::{reject_existing_local_binding, status_recovery};
+
 const FULL_TRUST_WARNING: &str = "Remote fclaude will execute complete ego-browser heredoc scripts as the current macOS user without an App Sandbox. Scripts can access that user's files, environment, network, browser login data, Node modules, subprocesses, and other tabs or Task Spaces, and can send data remotely. Stopping terminates supervised work only; it cannot roll back side effects or guarantee cleanup of deliberately detached processes.";
 const SAFE_DEVICE_CLIENT_ERROR_CODES: &[&str] = &[
     "credential_missing",
@@ -342,6 +345,7 @@ async fn connect(paths: AppPaths, args: EgoBrowserConnectArgs) -> Result<()> {
             false,
         ));
     }
+    reject_existing_local_binding(&paths).await?;
     if !local_admission_is_ready(&paths)? {
         return Err(lifecycle_error(
             "admission_disabled",
@@ -464,7 +468,7 @@ async fn connect(paths: AppPaths, args: EgoBrowserConnectArgs) -> Result<()> {
     Ok(())
 }
 
-async fn repair(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()> {
+async fn repair(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<bool> {
     reject_pending_revocation(&paths)?;
     let target_evidence = discover_bridge_trust_evidence(&paths)?.ok_or_else(|| {
         lifecycle_error(
@@ -483,12 +487,12 @@ async fn repair(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()> {
         "agent-remote ego-browser repair --yes",
     )? {
         terminal::note("Ego-browser repair cancelled.");
-        return Ok(());
+        return Ok(false);
     }
     // Repair keeps execution closed until local and control-plane checks both succeed.
     close_local_admission(&paths)?;
     let (server_url, token) = load_user_control_token(&paths).await?;
-    drain_local_bindings(&paths, &server_url, &token, "repair").await?;
+    let resume_available = drain_local_bindings(&paths, &server_url, &token, "repair").await?;
     run_bridge_installer(&paths, "repair", args.yes)
         .await
         .map_err(|error| map_operational_error(error, "repair"))?;
@@ -513,10 +517,15 @@ async fn repair(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()> {
     .map_err(|error| map_operational_error(error, "repair"))?;
     set_local_admission_state(&paths, "ready")?;
     terminal::success_line("Ego-browser Bridge repair completed; Device identity was preserved.");
-    Ok(())
+    terminal::note(if resume_available {
+        "Existing bindings remain paused; run `agent-remote ego-browser resume`."
+    } else {
+        "Run `agent-remote ego-browser connect` to select a remote session."
+    });
+    Ok(resume_available)
 }
 
-async fn upgrade(paths: AppPaths, args: EgoBrowserUpgradeArgs) -> Result<()> {
+async fn upgrade(paths: AppPaths, args: EgoBrowserUpgradeArgs) -> Result<bool> {
     reject_pending_revocation(&paths)?;
     let target_evidence = managed_bridge_trust_evidence();
     if !confirm_bridge_trust(
@@ -526,12 +535,12 @@ async fn upgrade(paths: AppPaths, args: EgoBrowserUpgradeArgs) -> Result<()> {
         "agent-remote ego-browser upgrade --yes",
     )? {
         terminal::note("Ego-browser upgrade cancelled.");
-        return Ok(());
+        return Ok(false);
     }
     // Drain before switching `current`; identity and generation live in a separate store.
     close_local_admission(&paths)?;
     let (server_url, token) = load_user_control_token(&paths).await?;
-    drain_local_bindings(&paths, &server_url, &token, "upgrade").await?;
+    let resume_available = drain_local_bindings(&paths, &server_url, &token, "upgrade").await?;
     run_bridge_installer(&paths, "upgrade", args.yes)
         .await
         .map_err(|error| map_operational_error(error, "upgrade"))?;
@@ -548,7 +557,12 @@ async fn upgrade(paths: AppPaths, args: EgoBrowserUpgradeArgs) -> Result<()> {
     terminal::success_line(
         "Ego-browser Bridge release verified; Device identity and device generation were preserved.",
     );
-    Ok(())
+    terminal::note(if resume_available {
+        "Existing bindings remain paused; run `agent-remote ego-browser resume`."
+    } else {
+        "Run `agent-remote ego-browser connect` to select a remote session."
+    });
+    Ok(resume_available)
 }
 
 /// Invalidates exact Device binding generations before changing the Bridge release.
@@ -3875,21 +3889,37 @@ pub async fn run(paths: AppPaths, command: EgoBrowserCommand, json: bool) -> Res
             })
         }
         EgoBrowserCommand::Repair(args) => {
-            repair(paths, args).await?;
+            let resume_available = repair(paths, args).await?;
             Some(JsonCommandSuccess {
                 command: "repair",
                 result: "ready",
-                next_action: "connect",
-                next_command: Some("agent-remote ego-browser connect"),
+                next_action: if resume_available {
+                    "resume"
+                } else {
+                    "connect"
+                },
+                next_command: Some(if resume_available {
+                    "agent-remote ego-browser resume"
+                } else {
+                    "agent-remote ego-browser connect"
+                }),
             })
         }
         EgoBrowserCommand::Upgrade(args) => {
-            upgrade(paths, args).await?;
+            let resume_available = upgrade(paths, args).await?;
             Some(JsonCommandSuccess {
                 command: "upgrade",
                 result: "ready",
-                next_action: "connect",
-                next_command: Some("agent-remote ego-browser connect"),
+                next_action: if resume_available {
+                    "resume"
+                } else {
+                    "connect"
+                },
+                next_command: Some(if resume_available {
+                    "agent-remote ego-browser resume"
+                } else {
+                    "agent-remote ego-browser connect"
+                }),
             })
         }
         EgoBrowserCommand::Remove(args) => {
@@ -4168,6 +4198,14 @@ async fn status(paths: AppPaths, args: EgoBrowserStatusArgs, json: bool) -> Resu
 
     terminal::section("Ego Browser Bindings");
     render_bindings(&bindings, args.no_trunc);
+    let metadata = load_local_device_metadata(&paths)?;
+    let local = local_admission_snapshot(&paths)?;
+    let connected = local_binding_is_connected(&local, metadata.as_ref(), &server_url, &bindings);
+    if let Some((_, command)) =
+        status_recovery(metadata.as_ref(), &server_url, &bindings, connected)
+    {
+        terminal::note(format!("Local binding requires recovery; run `{command}`."));
+    }
     Ok(())
 }
 
@@ -4202,6 +4240,10 @@ fn render_status_json(
     let enabled = projection.enabled;
     let available = projection.available;
     let connected = projection.connected;
+    let recovery = status_recovery(metadata.as_ref(), server_url, bindings, connected);
+    let admission_disabled = recovery
+        .as_ref()
+        .is_some_and(|(action, _)| *action == "pause");
     let binding_admission = if connected {
         "established"
     } else {
@@ -4244,7 +4286,7 @@ fn render_status_json(
     println!(
         "{}",
         serde_json::json!({
-            "error_code": serde_json::Value::Null,
+            "error_code": if admission_disabled { Some("admission_disabled") } else { None },
             "state": {
                 "installed": installed,
                 "enabled": enabled,
@@ -4262,11 +4304,11 @@ fn render_status_json(
                 "server_execution": if execution { "allowed" } else { "unknown_or_denied" },
                 "binding": binding_admission,
                 "local": local_admission,
-                "reason": if pending.is_some() { "local" } else { "server" },
+                "reason": if pending.is_some() || recovery.is_some() { "local" } else { "server" },
             },
             "stale": stale,
-            "next_action": if pending.is_some() { "retry_revocation" } else { "none" },
-            "next_command": pending.map(pending_revocation_next_command),
+            "next_action": if pending.is_some() { "retry_revocation" } else { recovery.as_ref().map_or("none", |(action, _)| *action) },
+            "next_command": pending.map(pending_revocation_next_command).map(str::to_owned).or_else(|| recovery.map(|(_, command)| command)),
             "devices": device_items,
             "bindings": binding_items,
         })
@@ -4696,6 +4738,7 @@ async fn cancel_request(paths: AppPaths, args: EgoBrowserCancelRequestArgs) -> R
 
 async fn claim(paths: AppPaths, args: EgoBrowserClaimArgs) -> Result<()> {
     reject_pending_revocation(&paths)?;
+    reject_existing_local_binding(&paths).await?;
     let tool_session_id = if let Some(canonical_id) = canonical_full_uuid(&args.tool_session) {
         canonical_id
     } else {

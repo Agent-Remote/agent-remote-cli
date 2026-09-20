@@ -134,13 +134,11 @@ installer。固定的 `0.2.23` release 只有在 tag-bound 制品与 Sigstore ev
 
 普通流程先运行 `agent-remote ego-browser setup`；准备连接时，再运行 `agent-remote ego-browser connect` 选择并授权一个远端 session。`setup` 复用 `agent-remote login` 保存的服务器与凭据，自动发现已验证 release profile 和证书 pin，确保复用现有 Device identity，且不会自动 claim session。普通使用不需要输入 Server URL、registration token、Device ID 或证书摘要。
 
-重复运行 `setup` 时，会先暂停本机已有的可执行绑定，再重启 Bridge，并保留恢复所需的 generation。存在暂停绑定时，按提示运行 `resume`；没有时再运行 `connect`。暂停失败会阻止安装继续。高级 `register` 命令要求通过参数或 `EGO_BROWSER_SIGNER_CERTIFICATE_SHA256` 提供已核验的 64 位十六进制证书摘要；缺少或格式错误时，在读取登录凭据前即返回 `signer_certificate_required` 或 `signer_certificate_invalid`，文本和 JSON 使用相同错误码。
+运行 `setup`、`repair` 或 `upgrade` 时，会先暂停本机已有的可执行绑定，再重启 Bridge，并保留恢复所需的 generation。存在暂停绑定时，按提示运行 `resume`；没有时再运行 `connect`。暂停失败会阻止安装继续。重复执行 `claim` 或 `connect` 会先检查保留的绑定，再决定是否修改本机执行入口；已有连接保持可用，暂停绑定提示 `resume`。若服务端显示 active 但本机入口关闭，`status` 会提示先 `pause` 对应绑定，再执行 `resume`。高级 `register` 命令要求通过参数或 `EGO_BROWSER_SIGNER_CERTIFICATE_SHA256` 提供已核验的 64 位十六进制证书摘要；缺少或格式错误时，在读取登录凭据前即返回 `signer_certificate_required` 或 `signer_certificate_invalid`，文本和 JSON 使用相同错误码。
 
 已有验证安装时，`setup` 与 `repair` 只运行该 current release 的 owner-only installer，绝不
 隐式升级。缺少安装或显式执行 `upgrade` 时使用由 commit 与 SHA-256 固定的 bootstrap；它只能
-请求 Bridge `0.1.16`、仓库 `Agent-Remote/agent-remote-ego-browser`、profile
-`community-local-trust` version `0.1.16`，以及 signer certificate
-`1b1527d1c0ac6b3a1e95ccd7d4e6462ece9f5a42d2f4d309d09170588a4197e5`，且不会收到 Server URL、
+请求 `release-dependencies.json` 指定的 Bridge 版本、仓库、profile 和签名证书，且不会收到 Server URL、
 token、session ID 或 full-trust claim。缺少或无效的 release asset 与 Sigstore evidence
 都会 fail closed。
 

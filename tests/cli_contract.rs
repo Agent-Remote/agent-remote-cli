@@ -625,6 +625,18 @@ fn ego_browser_routine_repair_reuses_exact_trust_without_confirmation() {
 
 #[cfg(unix)]
 #[test]
+fn ego_browser_repair_preserves_paused_binding_and_offers_resume() {
+    check_retained_device_registration("repair", "paused", false);
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_repair_with_terminal_binding_offers_connect() {
+    check_retained_device_registration("repair", "stopped", false);
+}
+
+#[cfg(unix)]
+#[test]
 fn ego_browser_reenrollment_passes_explicit_mode_and_token_through_stdin() {
     check_retained_device_registration("re-enroll", "active", false);
 }
@@ -878,7 +890,7 @@ fn check_retained_device_registration(operation: &str, binding_status: &str, pau
             .last()
             .unwrap()
             .starts_with("GET /api/v1/ego-browser/bindings HTTP/1.1"));
-        if operation == "setup" {
+        if matches!(operation, "setup" | "repair") {
             let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
             let next = if binding_status == "stopped" {
                 "connect"
