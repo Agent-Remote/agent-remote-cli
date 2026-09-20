@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.24 - 2026-09-20
+
+- fix(ego-browser): reconcile lifecycle generations and isolate command tests (24a467b)
+
 ## v0.2.23 - 2026-09-19
 
 - fix(auth): renew remembered cli login sessions (616a04e)
