@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.27 - 2026-09-20
+
+- fix(ego-browser): preserve admission in confirmation errors (da39eff)
+
 ## v0.2.26 - 2026-09-20
 
 - fix(ego-browser): preserve live bindings and guide lifecycle recovery (990f5de)
