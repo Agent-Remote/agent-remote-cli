@@ -255,7 +255,7 @@ fn trust_confirmation(evidence: &BridgeTrustEvidence) -> LocalTrustConfirmation 
     }
 }
 
-async fn setup(paths: AppPaths, args: EgoBrowserSetupArgs) -> Result<()> {
+async fn setup(paths: AppPaths, args: EgoBrowserSetupArgs) -> Result<bool> {
     if let Some(pending) = load_pending_revocation(&paths)? {
         close_local_admission(&paths)?;
         let next_command = pending_revocation_next_command(&pending);
@@ -294,8 +294,9 @@ async fn setup(paths: AppPaths, args: EgoBrowserSetupArgs) -> Result<()> {
         "agent-remote ego-browser setup --yes",
     )? {
         terminal::note("Ego-browser setup cancelled.");
-        return Ok(());
+        return Ok(false);
     }
+    let resume_available = drain_local_bindings(&paths, &server_url, &token, "setup").await?;
     run_bridge_installer(&paths, "setup", args.yes)
         .await
         .map_err(|error| map_operational_error(error, "setup"))?;
@@ -319,10 +320,12 @@ async fn setup(paths: AppPaths, args: EgoBrowserSetupArgs) -> Result<()> {
     .map_err(|error| map_operational_error(error, "setup"))?;
     // Setup proves readiness only; an explicit binding claim opens execution.
     set_local_admission_state(&paths, "ready")?;
-    terminal::success_line(
-        "Ego-browser Bridge is ready; no remote session was claimed (run `agent-remote ego-browser connect`).",
-    );
-    Ok(())
+    terminal::success_line(if resume_available {
+        "Ego-browser Bridge is ready; existing bindings remain paused (run `agent-remote ego-browser resume`)."
+    } else {
+        "Ego-browser Bridge is ready; no remote session was claimed (run `agent-remote ego-browser connect`)."
+    });
+    Ok(resume_available)
 }
 
 async fn connect(paths: AppPaths, args: EgoBrowserConnectArgs) -> Result<()> {
@@ -485,7 +488,7 @@ async fn repair(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()> {
     // Repair keeps execution closed until local and control-plane checks both succeed.
     close_local_admission(&paths)?;
     let (server_url, token) = load_user_control_token(&paths).await?;
-    drain_local_bindings(&paths, &server_url, &token).await?;
+    drain_local_bindings(&paths, &server_url, &token, "repair").await?;
     run_bridge_installer(&paths, "repair", args.yes)
         .await
         .map_err(|error| map_operational_error(error, "repair"))?;
@@ -528,7 +531,7 @@ async fn upgrade(paths: AppPaths, args: EgoBrowserUpgradeArgs) -> Result<()> {
     // Drain before switching `current`; identity and generation live in a separate store.
     close_local_admission(&paths)?;
     let (server_url, token) = load_user_control_token(&paths).await?;
-    drain_local_bindings(&paths, &server_url, &token).await?;
+    drain_local_bindings(&paths, &server_url, &token, "upgrade").await?;
     run_bridge_installer(&paths, "upgrade", args.yes)
         .await
         .map_err(|error| map_operational_error(error, "upgrade"))?;
@@ -549,10 +552,15 @@ async fn upgrade(paths: AppPaths, args: EgoBrowserUpgradeArgs) -> Result<()> {
 }
 
 /// Invalidates exact Device binding generations before changing the Bridge release.
-async fn drain_local_bindings(paths: &AppPaths, server_url: &str, token: &str) -> Result<()> {
+async fn drain_local_bindings(
+    paths: &AppPaths,
+    server_url: &str,
+    token: &str,
+    operation: &str,
+) -> Result<bool> {
     let metadata = match discover_device_metadata(paths).await {
         Ok(value) => value,
-        Err(_) if !local_identity_artifacts_exist(paths) => return Ok(()),
+        Err(_) if !local_identity_artifacts_exist(paths) => return Ok(false),
         Err(_) => {
             return Err(lifecycle_error(
                 "identity_corrupt",
@@ -570,7 +578,7 @@ async fn drain_local_bindings(paths: &AppPaths, server_url: &str, token: &str) -
             "admission_closed",
             "closed",
             "switch_server",
-            "agent-remote ego-browser upgrade",
+            &format!("agent-remote ego-browser {operation}"),
             false,
         ));
     }
@@ -578,8 +586,15 @@ async fn drain_local_bindings(paths: &AppPaths, server_url: &str, token: &str) -
     let bindings = client
         .list_ego_browser_bindings(token)
         .await
-        .map_err(|error| map_api_error(error, "upgrade"))?;
+        .map_err(|error| map_api_error(error, operation))?;
     let handoff = load_local_active_binding_handoff(paths)?;
+    let resume_available = bindings.iter().any(|binding| {
+        binding.ego_browser_device_id == metadata.device_id
+            && matches!(
+                binding.status.as_str(),
+                "active" | "connecting" | "probing_local_browser" | "paused"
+            )
+    });
     for binding in bindings.into_iter().filter(|binding| {
         binding.ego_browser_device_id == metadata.device_id
             && matches!(
@@ -601,7 +616,7 @@ async fn drain_local_bindings(paths: &AppPaths, server_url: &str, token: &str) -
                 ],
             )
             .await
-            .map_err(|error| map_operational_error(error, "upgrade"))?;
+            .map_err(|error| map_operational_error(error, operation))?;
             continue;
         }
         client
@@ -610,12 +625,12 @@ async fn drain_local_bindings(paths: &AppPaths, server_url: &str, token: &str) -
                 &binding.id,
                 binding_generation(&binding),
                 "pause",
-                "bridge_upgrade",
+                &format!("bridge_{operation}"),
             )
             .await
-            .map_err(|error| map_api_error(error, "upgrade"))?;
+            .map_err(|error| map_api_error(error, operation))?;
     }
-    Ok(())
+    Ok(resume_available)
 }
 
 async fn remove(paths: AppPaths, args: EgoBrowserRemoveArgs) -> Result<()> {
@@ -3834,12 +3849,20 @@ pub async fn run(paths: AppPaths, command: EgoBrowserCommand, json: bool) -> Res
     migrate_legacy_device_store(&paths)?;
     let success = match command {
         EgoBrowserCommand::Setup(args) => {
-            setup(paths, args).await?;
+            let resume_available = setup(paths, args).await?;
             Some(JsonCommandSuccess {
                 command: "setup",
                 result: "ready",
-                next_action: "connect",
-                next_command: Some("agent-remote ego-browser connect"),
+                next_action: if resume_available {
+                    "resume"
+                } else {
+                    "connect"
+                },
+                next_command: Some(if resume_available {
+                    "agent-remote ego-browser resume"
+                } else {
+                    "agent-remote ego-browser connect"
+                }),
             })
         }
         EgoBrowserCommand::Connect(args) => {
@@ -4018,18 +4041,16 @@ pub async fn run(paths: AppPaths, command: EgoBrowserCommand, json: bool) -> Res
 
 async fn register(paths: AppPaths, args: EgoBrowserRegisterArgs) -> Result<()> {
     reject_pending_revocation(&paths)?;
-    let (server_url, token) =
-        load_control_token_for_server(&paths, args.server_url.as_deref()).await?;
     let certificate = args
         .signer_certificate_sha256
         .or_else(|| std::env::var("EGO_BROWSER_SIGNER_CERTIFICATE_SHA256").ok())
-        .context(
-            "Bridge signing-certificate SHA-256 is required; pass --signer-certificate-sha256",
-        )?;
+        .ok_or_else(|| signer_certificate_error("signer_certificate_required"))?;
     let certificate = certificate.trim().to_ascii_lowercase();
     if certificate.len() != 64 || !certificate.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        bail!("Bridge signing-certificate SHA-256 is invalid")
+        return Err(signer_certificate_error("signer_certificate_invalid"));
     }
+    let (server_url, token) =
+        load_control_token_for_server(&paths, args.server_url.as_deref()).await?;
 
     terminal::note(
         "Registering the ego-browser Device Client with the agent-remote credential store.",
@@ -4048,6 +4069,17 @@ async fn register(paths: AppPaths, args: EgoBrowserRegisterArgs) -> Result<()> {
     .await?;
     terminal::success_line("Ego-browser Device Client registered");
     Ok(())
+}
+
+fn signer_certificate_error(code: &str) -> anyhow::Error {
+    lifecycle_error(
+        code,
+        "invalid_arguments",
+        "unknown",
+        "provide_signer_certificate",
+        "agent-remote ego-browser register --signer-certificate-sha256 <HEX>",
+        false,
+    )
 }
 
 async fn status(paths: AppPaths, args: EgoBrowserStatusArgs, json: bool) -> Result<()> {

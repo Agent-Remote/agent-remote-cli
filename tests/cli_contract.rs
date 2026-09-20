@@ -620,24 +620,48 @@ fn offline_forget_persists_revocation_and_preserves_local_identity() {
 #[cfg(unix)]
 #[test]
 fn ego_browser_routine_repair_reuses_exact_trust_without_confirmation() {
-    check_retained_device_registration("repair");
+    check_retained_device_registration("repair", "active", false);
 }
 
 #[cfg(unix)]
 #[test]
 fn ego_browser_reenrollment_passes_explicit_mode_and_token_through_stdin() {
-    check_retained_device_registration("re-enroll");
+    check_retained_device_registration("re-enroll", "active", false);
 }
 
 #[cfg(unix)]
-fn check_retained_device_registration(operation: &str) {
+#[test]
+fn ego_browser_setup_pauses_before_install_and_preserves_resume_generation() {
+    check_retained_device_registration("setup", "active", false);
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_setup_preserves_paused_bindings_without_pausing_again() {
+    check_retained_device_registration("setup", "paused", false);
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_setup_with_terminal_binding_offers_connect() {
+    check_retained_device_registration("setup", "stopped", false);
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_setup_stops_before_install_when_pause_fails() {
+    check_retained_device_registration("setup", "active", true);
+}
+
+#[cfg(unix)]
+fn check_retained_device_registration(operation: &str, binding_status: &str, pause_fails: bool) {
     let temporary = tempfile::tempdir().unwrap();
     let state_home = temporary.path().join("agent-remote");
     fs::create_dir_all(&state_home).unwrap();
-    let responses = if operation == "repair" {
+    let mut responses = if matches!(operation, "repair" | "setup") {
         vec![serde_json::json!({"data": {"items": [{
             "id": "binding-repair", "ego_browser_device_id": "device-repair",
-            "tool_session_id": "session-repair", "node_id": "node-repair", "status": "active",
+            "tool_session_id": "session-repair", "node_id": "node-repair", "status": binding_status,
             "relay_binding_kind": "ego_browser", "authorization_mode": "ego_browser_script_full_trust",
             "release_profile": "community-local-trust", "bridge_protocol_version": "ego-browser-bridge-v1",
             "allowlist_revision": 1, "lease_health": "healthy", "generation": 3,
@@ -646,6 +670,15 @@ fn check_retained_device_registration(operation: &str) {
     } else {
         vec![]
     };
+    if operation == "setup" {
+        responses.insert(
+            0,
+            serde_json::json!({"data": {
+                "enabled": true, "enrollment_enabled": true, "execution_admission": true,
+                "protocol": "ego-browser-bridge-v1"
+            }}),
+        );
+    }
     let (server_url, server) = spawn_http_exchange_responses(responses);
     write_private_file(
         &state_home.join("config.toml"),
@@ -655,7 +688,7 @@ fn check_retained_device_registration(operation: &str) {
     let device_home = temporary.path().join("device-home");
     fs::create_dir_all(&device_home).unwrap();
     fs::set_permissions(&device_home, fs::Permissions::from_mode(0o700)).unwrap();
-    if operation == "repair" {
+    if matches!(operation, "repair" | "setup") {
         write_private_file(
             &device_home.join("ego-browser-active-binding.json"),
             serde_json::json!({
@@ -666,6 +699,16 @@ fn check_retained_device_registration(operation: &str) {
             .to_string(),
         );
     }
+    let paused_handoff = temporary.path().join("paused-handoff.json");
+    write_private_file(
+        &paused_handoff,
+        serde_json::json!({
+            "version": 1, "binding_id": "binding-repair", "generation": 4,
+            "device_id": "device-repair", "task_space_label": "agent-remote:session-repair",
+            "authorization_mode": "ego_browser_script_full_trust", "user_confirmation": true
+        })
+        .to_string(),
+    );
     write_private_file(
         &state_home.join("ego-browser-trust.json"),
         serde_json::json!({
@@ -712,7 +755,11 @@ fn check_retained_device_registration(operation: &str) {
     let installer = release.join("installer/install-macos.sh");
     fs::write(
         &installer,
-        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" > \"$TEST_BRIDGE_INSTALLER_LOG\"\n",
+        "#!/bin/sh\nset -eu\n\
+         if [ \"$TEST_EXPECT_PAUSE\" = 1 ]; then\n\
+           cmp \"$EGO_BROWSER_DEVICE_HOME/ego-browser-active-binding.json\" \"$TEST_PAUSED_HANDOFF\"\n\
+         fi\n\
+         printf '%s\\n' \"$*\" > \"$TEST_BRIDGE_INSTALLER_LOG\"\n",
     )
     .unwrap();
     fs::set_permissions(&installer, fs::Permissions::from_mode(0o500)).unwrap();
@@ -729,6 +776,8 @@ fn check_retained_device_registration(operation: &str) {
                cat > \"$TEST_BRIDGE_DEVICE_STDIN\"\n\
              elif [ \"$1\" = pause ]; then\n\
                test \"$2\" = binding-repair && test \"$4\" = 3\n\
+               test \"$TEST_PAUSE_FAILS\" = 0 || exit 43\n\
+               cp \"$TEST_PAUSED_HANDOFF\" \"$EGO_BROWSER_DEVICE_HOME/ego-browser-active-binding.json\"\n\
              else\n\
                exit 64\n\
              fi\n",
@@ -747,7 +796,7 @@ fn check_retained_device_registration(operation: &str) {
     fs::set_permissions(&device, fs::Permissions::from_mode(0o500)).unwrap();
 
     let mut command = Command::new(AGENT_REMOTE);
-    command.args(["--color", "never", "ego-browser", operation]);
+    command.args(["--json", "--color", "never", "ego-browser", operation]);
     if operation == "re-enroll" {
         command.arg("--yes");
     }
@@ -762,22 +811,48 @@ fn check_retained_device_registration(operation: &str) {
         .env("TEST_BRIDGE_INSTALLER_LOG", &installer_log)
         .env("TEST_BRIDGE_DEVICE_LOG", &device_log)
         .env("TEST_BRIDGE_DEVICE_STDIN", &device_stdin)
+        .env("TEST_PAUSED_HANDOFF", &paused_handoff)
+        .env("TEST_PAUSE_FAILS", if pause_fails { "1" } else { "0" })
+        .env(
+            "TEST_EXPECT_PAUSE",
+            if binding_status == "active" { "1" } else { "0" },
+        )
         .output()
         .unwrap();
+    if pause_fails {
+        assert!(!output.status.success());
+        assert!(!installer_log.exists());
+        assert!(!device_stdin.exists());
+        let admission: serde_json::Value = serde_json::from_slice(
+            &fs::read(device_home.join("ego-browser-local-admission.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(admission["state"], "closed");
+        assert_eq!(server.join().unwrap().len(), 2);
+        return;
+    }
     assert!(
         output.status.success(),
         "{operation} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    if operation == "repair" {
-        assert_eq!(fs::read_to_string(installer_log).unwrap(), "--repair\n");
+    if matches!(operation, "repair" | "setup") {
+        assert_eq!(
+            fs::read_to_string(installer_log).unwrap(),
+            format!("--{operation}\n")
+        );
     } else {
         assert!(!installer_log.exists());
     }
     let device_calls = fs::read_to_string(device_log).unwrap();
     assert!(device_calls.lines().any(|line| line == "metadata"));
     let expected = format!(
-        "ensure --server {server_url} --token-stdin --force-refresh{}",
+        "ensure --server {server_url} --token-stdin{}{}",
+        if operation == "setup" {
+            ""
+        } else {
+            " --force-refresh"
+        },
         if operation == "re-enroll" {
             " --re-enroll"
         } else {
@@ -791,14 +866,89 @@ fn check_retained_device_registration(operation: &str) {
         "art_repair-token"
     );
     let requests = server.join().unwrap();
-    if operation == "repair" {
-        assert!(device_calls
-            .lines()
-            .any(|line| line == "pause binding-repair --binding-generation 3"));
-        assert_eq!(requests.len(), 1);
-        assert!(requests[0].starts_with("GET /api/v1/ego-browser/bindings HTTP/1.1"));
+    if matches!(operation, "repair" | "setup") {
+        assert_eq!(
+            device_calls
+                .lines()
+                .any(|line| line == "pause binding-repair --binding-generation 3"),
+            binding_status == "active"
+        );
+        assert_eq!(requests.len(), if operation == "setup" { 2 } else { 1 });
+        assert!(requests
+            .last()
+            .unwrap()
+            .starts_with("GET /api/v1/ego-browser/bindings HTTP/1.1"));
+        if operation == "setup" {
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            let next = if binding_status == "stopped" {
+                "connect"
+            } else {
+                "resume"
+            };
+            assert_eq!(result["next_action"], next);
+            assert_eq!(
+                result["next_command"],
+                format!("agent-remote ego-browser {next}")
+            );
+            if binding_status == "active" {
+                assert_eq!(
+                    fs::read(device_home.join("ego-browser-active-binding.json")).unwrap(),
+                    fs::read(paused_handoff).unwrap()
+                );
+            }
+        }
     } else {
         assert!(requests.is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ego_browser_register_reports_certificate_errors_before_loading_credentials() {
+    for (certificate, expected) in [
+        (None, "signer_certificate_required"),
+        (Some(""), "signer_certificate_invalid"),
+        (Some("not-a-certificate"), "signer_certificate_invalid"),
+        (Some("abc"), "signer_certificate_invalid"),
+    ] {
+        for json in [false, true] {
+            let temporary = tempfile::tempdir().unwrap();
+            let mut command = Command::new(AGENT_REMOTE);
+            command.args(["ego-browser", "register"]);
+            if json {
+                command.arg("--json");
+            }
+            if let Some(certificate) = certificate {
+                command.args(["--signer-certificate-sha256", certificate]);
+            }
+            let output = command
+                .env("HOME", temporary.path())
+                .env("AGENT_REMOTE_HOME", temporary.path().join("state"))
+                .env(
+                    "AGENT_REMOTE_EGO_BROWSER_DEVICE_HOME",
+                    temporary.path().join("device"),
+                )
+                .env("EGO_BROWSER_DEVICE_HOME", temporary.path().join("device"))
+                .env("AGENT_REMOTE_SECRET_BACKEND", "file")
+                .env_remove("EGO_BROWSER_SIGNER_CERTIFICATE_SHA256")
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            if json {
+                let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(result["error_code"], expected);
+                assert_eq!(result["next_action"], "provide_signer_certificate");
+                assert_eq!(
+                    result["next_command"],
+                    "agent-remote ego-browser register --signer-certificate-sha256 <HEX>"
+                );
+            } else {
+                let error = String::from_utf8_lossy(&output.stderr);
+                assert!(error.contains(expected), "{error}");
+                assert!(error.contains("--signer-certificate-sha256"));
+                assert!(!error.contains("not-a-certificate"));
+            }
+        }
     }
 }
 

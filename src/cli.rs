@@ -215,7 +215,7 @@ pub struct EgoBrowserRegisterArgs {
     #[arg(long = "server-url", alias = "server", value_name = "URL")]
     pub server_url: Option<String>,
 
-    /// Verified Bridge signing-certificate SHA-256 fingerprint.
+    /// Required verified Bridge signing-certificate SHA-256 fingerprint (64 hexadecimal characters).
     #[arg(
         long,
         env = "EGO_BROWSER_SIGNER_CERTIFICATE_SHA256",

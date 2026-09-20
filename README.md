@@ -51,7 +51,7 @@ agent-remote ego-browser repair|upgrade
 agent-remote ego-browser pause|resume|stop [<binding-id>] [--binding-generation <generation>]
 agent-remote ego-browser remove
 agent-remote ego-browser forget-this-mac
-agent-remote ego-browser register [--server-url URL] [--signer-certificate-sha256 HEX] # advanced compatibility
+agent-remote ego-browser register --signer-certificate-sha256 HEX [--server-url URL] # advanced compatibility
 agent-remote ego-browser requests <binding-id>
 agent-remote ego-browser cancel-request <binding-id> <request-ledger-id> [--yes]
 agent-remote ego-browser revoke [<binding-id>] [--binding-generation <generation>] [--yes]
@@ -141,6 +141,8 @@ and Sigstore evidence.
 ## Ego Browser Bridge Control
 
 The normal flow is `agent-remote ego-browser setup`, followed by `agent-remote ego-browser connect` when the user is ready to select and authorize one remote session. `setup` reuses the server and credential from `agent-remote login`, discovers the verified release profile and certificate pin, ensures the existing Device identity, and never claims a session. Ordinary use does not require a Server URL, registration token, Device ID, or certificate digest.
+
+Running `setup` again pauses this Mac's existing executable bindings before restarting the Bridge and preserves their recovery generation. If a paused binding remains, follow its `resume` instruction; otherwise use `connect`. A failed pause stops setup before installation. The advanced `register` command requires a verified 64-character certificate fingerprint through its flag or `EGO_BROWSER_SIGNER_CERTIFICATE_SHA256`; missing or malformed values produce `signer_certificate_required` or `signer_certificate_invalid` in both text and JSON output before loading login credentials.
 
 With an existing verified installation, `setup` and `repair` run only that release's owner-only
 installer and never upgrade it. A missing installation or an explicit `upgrade` uses a bootstrap
