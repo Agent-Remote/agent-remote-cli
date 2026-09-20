@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.26 - 2026-09-20
+
+- fix(ego-browser): preserve live bindings and guide lifecycle recovery (990f5de)
+
 ## v0.2.25 - 2026-09-20
 
 - fix(ego-browser): preserve setup recovery and validate registration input (6b7a223)
