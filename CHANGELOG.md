@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.28 - 2026-09-20
+
+- fix(ego-browser): normalize session ids and report lifecycle errors accurately (8d325a8)
+
 ## v0.2.27 - 2026-09-20
 
 - fix(ego-browser): preserve admission in confirmation errors (da39eff)
