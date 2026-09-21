@@ -9,6 +9,7 @@ use std::process::Command;
 const CLI: &str = env!("CARGO_BIN_EXE_agent-remote");
 const SESSION: &str = "149aef7a-ba99-4bd5-a0e9-baf1a2635c09";
 const BINDING: &str = "8f8aab48-1c87-4f00-9af3-01ec41234567";
+const DEVICE: &str = "149aef7a-ba99-4bd5-a0e9-baf1a2635c10";
 
 fn check_existing_binding(command: &str, status: &str, admission: &str, expected: &str) {
     check_binding_command(command, status, admission, expected, &[], vec![]);
@@ -23,6 +24,11 @@ fn check_binding_command(
     request_responses: Vec<(u16, serde_json::Value)>,
 ) -> serde_json::Value {
     let confirmation = matches!(command, "pause" | "stop" | "revoke" | "resume");
+    let identity = matches!(
+        command,
+        "forget-this-mac" | "re-enroll" | "device-rotate" | "switch-server"
+    );
+    let deletion = matches!(command, "delete-device" | "delete-binding");
     let temporary = tempfile::tempdir().unwrap();
     let home = temporary.path().join("cli");
     let store = temporary.path().join("device");
@@ -33,7 +39,7 @@ fn check_binding_command(
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let binding = serde_json::json!({
-        "id":"8f8aab48-1c87-4f00-9af3-01ec41234567", "ego_browser_device_id":"device-existing",
+        "id":BINDING, "ego_browser_device_id":DEVICE,
         "tool_session_id":SESSION, "node_id":"node-test", "status":status,
         "relay_binding_kind":"ego_browser", "authorization_mode":"ego_browser_script_full_trust",
         "release_profile":"community-local-trust", "bridge_protocol_version":"ego-browser-bridge-v1",
@@ -41,12 +47,23 @@ fn check_binding_command(
     });
     let responses = if command == "status" {
         vec![
-            serde_json::json!({"data":{"items":[{"id":"device-existing","generation":1,"device_generation":1,"status":"active","release_profile":"community-local-trust"}]}}),
+            serde_json::json!({"data":{"items":[{"id":DEVICE,"generation":1,"device_generation":1,"status":"active","release_profile":"community-local-trust"}]}}),
             serde_json::json!({"data":{"items":[binding]}}),
             serde_json::json!({"data":{"enabled":true,"enrollment_enabled":true,"execution_admission":true,"protocol":"ego-browser-bridge-v1"}}),
         ]
-    } else if confirmation || command == "cancel-request" {
+    } else if command == "delete-device" {
+        vec![
+            serde_json::json!({"data":{"items":[{"id":DEVICE,"generation":1,"device_generation":1,"status":status,"release_profile":"community-local-trust"}]}}),
+        ]
+    } else if confirmation
+        || matches!(
+            command,
+            "cancel-request" | "device-rotate" | "delete-binding"
+        )
+    {
         vec![serde_json::json!({"data":{"items":[binding]}})]
+    } else if identity {
+        vec![]
     } else {
         vec![serde_json::json!({"data":binding})]
     };
@@ -96,19 +113,19 @@ fn check_binding_command(
         "refresh_at":4102444800_u64,"expires_at":4102444800_u64,"session_expires_at":4102444800_u64
     }).to_string());
     write(&store.join("ego-browser-credential.json"),serde_json::json!({
-        "version":1,"device_id":"device-existing","server_url":origin,"revision":1,"expires_at_unix":4102444800_u64,
+        "version":1,"device_id":DEVICE,"server_url":origin,"revision":1,"expires_at_unix":4102444800_u64,
         "release_profile":"community-local-trust","credential_profile":"community_file","device_generation":1
     }).to_string());
     let handoff_path = store.join("ego-browser-active-binding.json");
     write(&handoff_path,serde_json::json!({
-        "version":1,"binding_id":"8f8aab48-1c87-4f00-9af3-01ec41234567","generation":3,"device_id":"device-existing",
+        "version":1,"binding_id":BINDING,"generation":3,"device_id":DEVICE,
         "task_space_label":format!("agent-remote:{SESSION}"),"authorization_mode":"ego_browser_script_full_trust","user_confirmation":true
     }).to_string());
     let admission_path = store.join("ego-browser-local-admission.json");
     write(
         &admission_path,
         serde_json::json!({
-            "version":1,"state":admission,"device_id":"device-existing","device_generation":1,
+            "version":1,"state":admission,"device_id":DEVICE,"device_generation":1,
             "binding_id":if admission=="open" {Some("8f8aab48-1c87-4f00-9af3-01ec41234567")} else {None},
             "binding_generation":if admission=="open" {Some(3)} else {None},"updated_at_unix":1
         })
@@ -116,19 +133,33 @@ fn check_binding_command(
     );
     let original = fs::read(&admission_path).unwrap();
     let handoff = fs::read(&handoff_path).unwrap();
+    let credential = fs::read(store.join("ego-browser-credential.json")).unwrap();
+    let config = fs::read(home.join("config.toml")).unwrap();
+    let metadata_path = temporary.path().join("metadata.json");
+    write(
+        &metadata_path,
+        serde_json::json!({
+            "device_id":DEVICE,"device_generation":1,"server_url":origin,
+            "release_profile":"community-local-trust","credential_profile":"community_file",
+            "credential_revision":1,"credential_expires_at_unix":4102444800_u64
+        })
+        .to_string(),
+    );
     let marker = temporary.path().join("device-called");
     let executable = home.join("bin/ego-browser-device");
     fs::write(
         &executable,
-        "#!/bin/sh\ntouch \"$TEST_DEVICE_CALLED\"\nexit 99\n",
+        "#!/bin/sh\nif [ \"$1\" = metadata ]; then\ncat \"$TEST_DEVICE_METADATA\"\nexit 0\nfi\ntouch \"$TEST_DEVICE_CALLED\"\nexit 99\n",
     )
     .unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     let mut process = Command::new(CLI);
     process.args(["--json", "ego-browser", command]);
-    if confirmation || command == "cancel-request" {
-        process.arg("8f8aab48-1c87-4f00-9af3-01ec41234567");
-    } else if command != "status" {
+    if confirmation || matches!(command, "cancel-request" | "delete-binding") {
+        process.arg(BINDING);
+    } else if command == "delete-device" {
+        process.arg(DEVICE);
+    } else if command != "status" && !identity {
         process.args([SESSION, "--yes"]);
     }
     process.args(arguments);
@@ -140,13 +171,14 @@ fn check_binding_command(
         .env("EGO_BROWSER_DEVICE_HOME", &store)
         .env("AGENT_REMOTE_EGO_BROWSER_DEVICE", &executable)
         .env("TEST_DEVICE_CALLED", &marker)
+        .env("TEST_DEVICE_METADATA", &metadata_path)
         .output()
         .unwrap();
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(output.status.success(), command == "status", "{result}");
     assert_eq!(result["next_action"], expected, "{result}");
-    if confirmation || command == "cancel-request" {
-        if arguments.is_empty() {
+    if confirmation || command == "cancel-request" || identity || deletion {
+        if (confirmation || command == "cancel-request") && arguments.is_empty() {
             assert_eq!(result["error_code"], "confirmation_required");
         }
         assert_eq!(result["admission"]["local"], admission);
@@ -163,6 +195,12 @@ fn check_binding_command(
     assert!(!marker.exists());
     assert_eq!(fs::read(&admission_path).unwrap(), original);
     assert_eq!(fs::read(&handoff_path).unwrap(), handoff);
+    assert_eq!(
+        fs::read(store.join("ego-browser-credential.json")).unwrap(),
+        credential
+    );
+    assert_eq!(fs::read(home.join("config.toml")).unwrap(), config);
+    assert!(!home.join("ego-browser-pending-revocation.json").exists());
     let requests = server.join().unwrap();
     assert!(requests
         .iter()
@@ -171,6 +209,114 @@ fn check_binding_command(
                 && request.starts_with("POST /api/v1/ego-browser/")
                 && request.contains("/cancel"))));
     result
+}
+
+#[test]
+fn identity_guards_preserve_admission_without_reporting_corrupt_identity() {
+    for admission in ["open", "ready", "closed"] {
+        for (command, status, arguments, code, action) in [
+            (
+                "forget-this-mac",
+                "active",
+                vec![],
+                "confirmation_required",
+                "confirm_forget",
+            ),
+            (
+                "forget-this-mac",
+                "active",
+                vec!["--device-id", "ffff"],
+                "device_conflict",
+                "select_device",
+            ),
+            (
+                "re-enroll",
+                "active",
+                vec![],
+                "confirmation_required",
+                "confirm_re_enroll",
+            ),
+            (
+                "device-rotate",
+                "active",
+                vec![],
+                "binding_conflict",
+                "stop_existing_binding",
+            ),
+            (
+                "device-rotate",
+                "stopped",
+                vec![],
+                "confirmation_required",
+                "confirm_device_rotate",
+            ),
+            (
+                "switch-server",
+                "active",
+                vec!["--server-url", "https://example.invalid"],
+                "server_profile_required",
+                "login",
+            ),
+            (
+                "switch-server",
+                "active",
+                vec!["--server-url", "file:///invalid"],
+                "configuration_invalid",
+                "login",
+            ),
+        ] {
+            let result =
+                check_binding_command(command, status, admission, action, &arguments, vec![]);
+            assert_eq!(result["error_code"], code, "{result}");
+            assert_ne!(result["state"]["phase"], "identity_corrupt", "{result}");
+        }
+    }
+}
+
+#[test]
+fn deletion_preconditions_report_recovery_without_changing_local_admission() {
+    for admission in ["open", "ready", "closed"] {
+        for arguments in [vec![], vec!["--yes"]] {
+            let result = check_binding_command(
+                "delete-device",
+                "active",
+                admission,
+                "revoke_device",
+                &arguments,
+                vec![],
+            );
+            assert_eq!(result["error_code"], "device_not_revoked");
+            for status in [
+                "pending_device",
+                "connecting",
+                "active",
+                "paused",
+                "stopping",
+            ] {
+                let result = check_binding_command(
+                    "delete-binding",
+                    status,
+                    admission,
+                    "stop_existing_binding",
+                    &arguments,
+                    vec![],
+                );
+                assert_eq!(result["error_code"], "binding_not_terminal");
+                assert_eq!(
+                    result["next_command"],
+                    format!("agent-remote ego-browser stop {BINDING}")
+                );
+            }
+        }
+        for (command, status, action) in [
+            ("delete-device", "revoked", "confirm_device_deletion"),
+            ("delete-binding", "stopped", "confirm_binding_deletion"),
+            ("delete-binding", "revoked", "confirm_binding_deletion"),
+        ] {
+            let result = check_binding_command(command, status, admission, action, &[], vec![]);
+            assert_eq!(result["error_code"], "confirmation_required");
+        }
+    }
 }
 
 #[test]

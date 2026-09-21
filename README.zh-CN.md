@@ -157,6 +157,10 @@ generation 与密钥。Server 必须支持规范接口的同身份重新登记�
 
 `register`、显式 `--server-url` 与 `--signer-certificate-sha256` 仅作为自定义或旧版 release 的高级兼容入口保留。`register` 仍通过 stdin 将保存的 token 传给 Device Client，因此不会出现在进程参数或 CLI 输出中。`status` 显示本地 Bridge 设备与 binding；`status <binding>` 还会显示该 binding 的活动 request。`requests <binding>` 会刷新活动 request ledger，`cancel-request <binding> <request-ledger-id>` 只停止这一条准确执行，不会使整个 binding 失效。binding、request、claim session 和删除命令的 ID 都支持唯一十六进制前缀；`--no-trunc` 显示完整 ID。`delete-binding` 会在 binding 进入终态且撤销通知投递完成后永久删除 binding 及其请求账本；`delete-device` 会在设备已撤销且其全部 binding 历史已删除后永久删除设备。两个删除命令默认要求确认，使用 `--yes` 可跳过确认。
 
+设备尚未撤销或 binding 尚未进入终态时，删除命令返回 `device_not_revoked` 或
+`binding_not_terminal` 及对应恢复操作，`--yes` 不会绕过这些条件。身份操作被拒绝时报告实际
+本地准入状态，不关闭准入；未经核实的连接和可用性字段保持 `null`。
+
 全局添加 `--json` 可获得机器可读的生命周期输出。成功变更、status、binding 列表和 request
 列表都只输出一个 JSON 文档；JSON 模式不会提示输入或猜测候选。该投影明确排除 credential、
 private key、脚本、页面数据、Cookie、URL 和 relay ciphertext。

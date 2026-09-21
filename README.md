@@ -168,6 +168,10 @@ caller explicitly supplies `--yes`.
 
 `register`, explicit `--server-url`, and `--signer-certificate-sha256` remain advanced compatibility surfaces for custom or older releases. `register` still passes the stored token to the Device Client over stdin, so it never appears in process arguments or CLI output. `status` shows local Bridge devices and bindings, while `status <binding>` also shows that binding's active requests. Use `requests <binding>` to refresh the active request ledger and `cancel-request <binding> <request-ledger-id>` to stop only that exact execution without invalidating the binding. Binding, request, claim-session, and deletion identifiers accept unique hexadecimal prefixes; `--no-trunc` prints full values. `delete-binding` permanently removes a terminal binding and its retained request ledger after revocation delivery has completed. `delete-device` permanently removes a revoked device after all of its binding history has been deleted. Both deletion commands ask for confirmation unless `--yes` is supplied.
 
+Deletion before revocation or termination returns `device_not_revoked` or `binding_not_terminal`
+with a recovery action, even with `--yes`. Rejected identity operations report the observed local
+admission without closing it; unverified connection and availability fields remain `null`.
+
 Add global `--json` for machine-readable lifecycle output. Successful mutations, status, binding
 lists, and request lists each emit exactly one JSON document; JSON mode never prompts or guesses a
 candidate. The projection deliberately excludes credentials, keys, scripts, page data, cookies,

@@ -920,18 +920,16 @@ async fn remove(paths: AppPaths, args: EgoBrowserRemoveArgs) -> Result<()> {
     Ok(())
 }
 
-fn confirm_forget_this_mac(device_id: &str, yes: bool) -> Result<bool> {
+fn confirm_forget_this_mac(paths: &AppPaths, device_id: &str, yes: bool) -> Result<bool> {
     if yes {
         return Ok(true);
     }
     if !interactive_terminal() {
-        return Err(lifecycle_error(
-            "confirmation_required",
-            "identity_corrupt",
-            "closed",
+        return Err(confirmation_error(
+            paths,
+            "registered",
             "confirm_forget",
             "agent-remote ego-browser forget-this-mac --yes",
-            false,
         ));
     }
     if !super::prompt_yes_no(&format!(
@@ -991,7 +989,7 @@ async fn forget_this_mac(paths: AppPaths, args: EgoBrowserForgetArgs) -> Result<
                     false,
                 ));
             };
-            if !confirm_forget_this_mac(&metadata.device_id, args.yes)? {
+            if !confirm_forget_this_mac(&paths, &metadata.device_id, args.yes)? {
                 return Ok(());
             }
             close_local_admission(&paths)?;
@@ -1048,8 +1046,8 @@ async fn forget_this_mac(paths: AppPaths, args: EgoBrowserForgetArgs) -> Result<
                     .map_err(|_| {
                         lifecycle_error(
                             "device_conflict",
-                            "identity_corrupt",
-                            "closed",
+                            "registered",
+                            &observed_local_admission(&paths),
                             "select_device",
                             "agent-remote ego-browser forget-this-mac --device-id DEVICE_ID",
                             false,
@@ -1058,8 +1056,8 @@ async fn forget_this_mac(paths: AppPaths, args: EgoBrowserForgetArgs) -> Result<
                     if resolved != metadata.device_id {
                         return Err(lifecycle_error(
                             "device_conflict",
-                            "identity_corrupt",
-                            "closed",
+                            "registered",
+                            &observed_local_admission(&paths),
                             "select_device",
                             "agent-remote ego-browser forget-this-mac --device-id DEVICE_ID",
                             false,
@@ -1077,14 +1075,16 @@ async fn forget_this_mac(paths: AppPaths, args: EgoBrowserForgetArgs) -> Result<
     if server_url != metadata.server_url {
         return Err(lifecycle_error(
             "identity_origin_conflict",
-            "admission_closed",
-            "closed",
+            "registered",
+            &observed_local_admission(&paths),
             "switch_server",
             "agent-remote ego-browser forget-this-mac",
             false,
         ));
     }
-    if existing_pending.is_none() && !confirm_forget_this_mac(&metadata.device_id, args.yes)? {
+    if existing_pending.is_none()
+        && !confirm_forget_this_mac(&paths, &metadata.device_id, args.yes)?
+    {
         return Ok(());
     }
     close_local_admission(&paths)?;
@@ -1156,8 +1156,8 @@ async fn re_enroll(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()> {
     if metadata.server_url != server_url {
         return Err(lifecycle_error(
             "identity_origin_conflict",
-            "identity_corrupt",
-            "closed",
+            "registered",
+            &observed_local_admission(&paths),
             "switch_server",
             "agent-remote ego-browser switch-server --server-url SERVER",
             false,
@@ -1165,13 +1165,11 @@ async fn re_enroll(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()> {
     }
     if !args.yes {
         if !interactive_terminal() {
-            return Err(lifecycle_error(
-                "confirmation_required",
-                "identity_corrupt",
-                "closed",
+            return Err(confirmation_error(
+                &paths,
+                "registered",
                 "confirm_re_enroll",
                 "agent-remote ego-browser re-enroll --yes",
-                false,
             ));
         }
         if !super::prompt_yes_no(&format!(
@@ -1236,8 +1234,8 @@ async fn device_rotate(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()
     if metadata.server_url != server_url {
         return Err(lifecycle_error(
             "identity_origin_conflict",
-            "identity_corrupt",
-            "closed",
+            "registered",
+            &observed_local_admission(&paths),
             "switch_server",
             "agent-remote ego-browser switch-server --server-url SERVER",
             false,
@@ -1263,7 +1261,7 @@ async fn device_rotate(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()
         return Err(lifecycle_error(
             "binding_conflict",
             "connected",
-            "closed",
+            &observed_local_admission(&paths),
             "stop_existing_binding",
             "agent-remote ego-browser status",
             false,
@@ -1271,13 +1269,11 @@ async fn device_rotate(paths: AppPaths, args: EgoBrowserActionArgs) -> Result<()
     }
     if !args.yes {
         if !interactive_terminal() {
-            return Err(lifecycle_error(
-                "confirmation_required",
+            return Err(confirmation_error(
+                &paths,
                 "registered",
-                "closed",
                 "confirm_device_rotate",
                 "agent-remote ego-browser device-rotate --yes",
-                false,
             ));
         }
         if !super::prompt_yes_no(&format!(
@@ -1486,8 +1482,8 @@ async fn switch_server(paths: AppPaths, args: EgoBrowserSwitchServerArgs) -> Res
     if !valid_lifecycle_server_url(&new_server) {
         return Err(lifecycle_error(
             "configuration_invalid",
-            "identity_corrupt",
-            "closed",
+            "unknown",
+            &observed_local_admission(&paths),
             "login",
             "agent-remote login",
             false,
@@ -1544,7 +1540,7 @@ async fn switch_server(paths: AppPaths, args: EgoBrowserSwitchServerArgs) -> Res
             return Err(lifecycle_error(
                 "identity_origin_conflict",
                 "registered",
-                "closed",
+                &observed_local_admission(&paths),
                 "status",
                 "agent-remote ego-browser status",
                 false,
@@ -1555,8 +1551,8 @@ async fn switch_server(paths: AppPaths, args: EgoBrowserSwitchServerArgs) -> Res
         if new_token.as_deref().is_none_or(str::is_empty) {
             return Err(lifecycle_error(
                 "server_profile_required",
-                "identity_corrupt",
-                "closed",
+                "registered",
+                &observed_local_admission(&paths),
                 "login",
                 "agent-remote login",
                 false,
@@ -1566,8 +1562,8 @@ async fn switch_server(paths: AppPaths, args: EgoBrowserSwitchServerArgs) -> Res
         if old_token.as_deref().is_none_or(str::is_empty) {
             return Err(lifecycle_error(
                 "login_required",
-                "identity_corrupt",
-                "closed",
+                "registered",
+                &observed_local_admission(&paths),
                 "login",
                 "agent-remote login",
                 false,
@@ -1575,13 +1571,11 @@ async fn switch_server(paths: AppPaths, args: EgoBrowserSwitchServerArgs) -> Res
         }
         if !args.yes {
             if !interactive_terminal() {
-                return Err(lifecycle_error(
-                    "confirmation_required",
+                return Err(confirmation_error(
+                    &paths,
                     "registered",
-                    "closed",
                     "confirm_switch_server",
                     "agent-remote ego-browser switch-server --server-url SERVER --yes",
-                    false,
                 ));
             }
             if !super::prompt_yes_no(&format!(
@@ -5313,20 +5307,22 @@ async fn delete_device(paths: AppPaths, args: EgoBrowserDeleteArgs) -> Result<()
         .find(|device| device.id == device_id)
         .context("resolved ego-browser device disappeared")?;
     if device.status != "revoked" {
-        bail!(
-            "ego-browser device {} must be revoked before deletion",
-            short_id(&device.id)
-        );
+        return Err(lifecycle_error(
+            "device_not_revoked",
+            &device.status,
+            &observed_local_admission(&paths),
+            "revoke_device",
+            "agent-remote ego-browser status",
+            false,
+        ));
     }
     if !args.yes {
         if !interactive_terminal() {
-            return Err(lifecycle_error(
-                "confirmation_required",
+            return Err(confirmation_error(
+                &paths,
                 "revoked",
-                "closed",
                 "confirm_device_deletion",
                 "agent-remote ego-browser delete-device DEVICE --yes",
-                false,
             ));
         }
         if !super::prompt_yes_no(&format!(
@@ -5361,20 +5357,22 @@ async fn delete_binding(paths: AppPaths, args: EgoBrowserDeleteArgs) -> Result<(
         .find(|binding| binding.id == binding_id)
         .context("resolved ego-browser binding disappeared")?;
     if !terminal_statuses().contains(&binding.status.as_str()) {
-        bail!(
-            "ego-browser binding {} must be stopped or revoked before deletion",
-            short_id(&binding.id)
-        );
+        return Err(lifecycle_error(
+            "binding_not_terminal",
+            &binding.status,
+            &observed_local_admission(&paths),
+            "stop_existing_binding",
+            &format!("agent-remote ego-browser stop {}", binding.id),
+            false,
+        ));
     }
     if !args.yes {
         if !interactive_terminal() {
-            return Err(lifecycle_error(
-                "confirmation_required",
+            return Err(confirmation_error(
+                &paths,
                 &binding.status,
-                "closed",
                 "confirm_binding_deletion",
                 "agent-remote ego-browser delete-binding BINDING --yes",
-                false,
             ));
         }
         if !super::prompt_yes_no(&format!(
