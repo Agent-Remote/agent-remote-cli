@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.30 - 2026-09-21
+
+- fix(ego-browser): preserve state in identity and deletion guards (d435cfe)
+
 ## v0.2.29 - 2026-09-20
 
 - fix(deps): pin bridge 0.1.19 and node 0.2.28 (13f585f)
