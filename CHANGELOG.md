@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.34 - 2026-09-27
+
+- fix: install node with skill management enabled by default (272b504)
+
 ## v0.2.33 - 2026-09-27
 
 - fix(release): align managed node with native skill capability release (1545bf5)
