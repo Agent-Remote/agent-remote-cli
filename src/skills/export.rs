@@ -130,12 +130,14 @@ fn require_empty(parent: &Dir, name: &Path) -> Result<()> {
 }
 
 pub(super) fn private_directory(path: &Path) -> Result<()> {
-    let mut builder = fs::DirBuilder::new();
+    let builder = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
         builder.mode(0o700);
-    }
+        builder
+    };
     builder.create(path)?;
     Ok(())
 }
