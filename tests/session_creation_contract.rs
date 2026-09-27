@@ -279,7 +279,9 @@ async fn ctrl_c_interrupts_status_http_without_replaying_creation() {
         .kill_on_drop(true)
         .spawn()
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), async {
+    // Process startup can queue behind other test binaries; measure interruption only
+    // after the status request is in flight, retaining its separate three-second bound.
+    tokio::time::timeout(Duration::from_secs(10), async {
         while server.requests().len() < 2 {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
