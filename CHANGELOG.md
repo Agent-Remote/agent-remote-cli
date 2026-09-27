@@ -2,6 +2,12 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.33 - 2026-09-27
+
+- fix(release): align managed node with native skill capability release (1545bf5)
+- test: separate process startup from interruption deadlines (68bacc4)
+- perf(test): parallelize cli suites with isolated nextest processes (d4368fa)
+
 ## v0.2.32 - 2026-09-27
 
 - fix(skills): bound command dispatch futures for small stacks (0330bcb)
