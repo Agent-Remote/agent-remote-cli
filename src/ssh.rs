@@ -112,6 +112,49 @@ pub fn tunnel_args(
     ]
 }
 
+/// Fixed frozen export command; no server text can enable SSH configuration execution.
+pub fn skill_export_args(
+    host: &str,
+    port: u16,
+    user: &str,
+    snapshot: &str,
+    known_hosts: &std::path::Path,
+) -> Vec<String> {
+    vec![
+        "-F".into(),
+        "none".into(),
+        "-T".into(),
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "ForwardAgent=no".into(),
+        "-o".into(),
+        "ForwardX11=no".into(),
+        "-o".into(),
+        "ClearAllForwardings=yes".into(),
+        "-o".into(),
+        "PermitLocalCommand=no".into(),
+        "-o".into(),
+        "ConnectTimeout=10".into(),
+        "-o".into(),
+        "ServerAliveInterval=10".into(),
+        "-o".into(),
+        "ServerAliveCountMax=2".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=accept-new".into(),
+        "-o".into(),
+        format!("UserKnownHostsFile={}", known_hosts.to_string_lossy()),
+        "-p".into(),
+        port.to_string(),
+        format!("{user}@{host}"),
+        "agent-remote-skill-export".into(),
+        "--snapshot".into(),
+        snapshot.into(),
+        "--protocol".into(),
+        "1".into(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,6 @@
 [package]
 name = "agent-remote-cli"
-version = "0.2.30"
+version = "0.2.31"
 edition = "2021"
 license = "GPL-3.0-only"
 repository = "https://github.com/Agent-Remote/agent-remote-cli"
@@ -34,7 +34,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 h2 = "0.4"
 http = "1.3"
 libc = "0.2"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rpassword = "7.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -44,12 +44,17 @@ semver = "1.0"
 sha2 = "0.10"
 sha1 = "0.10"
 tempfile = "3.12"
-tokio = { version = "1.40", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.40", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
 toml = "0.8"
 unicode-width = "0.2"
+unicode-normalization = "0.1"
 uuid = "1.18"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+cap-std = "3.4.5"
+cap-fs-ext = "3.4.5"
+yaml-rust2 = { version = "0.10", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
@@ -72,3 +77,6 @@ windows-sys = { version = "0.61", features = [
 semver = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+[dev-dependencies]
+tokio = { version = "1.40", features = ["test-util"] }

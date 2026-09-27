@@ -1,3 +1,5 @@
+pub mod skills;
+
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -42,6 +44,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Query the authenticated user's remote skill library and operations.
+    #[command(subcommand)]
+    Skill(skills::SkillCommand),
     /// Configure a new client, authenticate, and optionally set up WireGuard.
     Init(InitArgs),
     /// Authenticate this client with an existing account.
@@ -667,6 +672,10 @@ pub struct SyncActionArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AccountCommand {
+    /// Ask an administrator-only passive check of an exact original backend migration.
+    RecoverRuntime(AccountRecoverRuntimeArgs),
+    /// Read one backend migration recovery request without submitting work.
+    RecoveryStatus(AccountRecoveryStatusArgs),
     /// List remote tool accounts in a compact table.
     List(ListArgs),
     /// Create a remote tool account.
@@ -743,6 +752,10 @@ pub struct AccountImportConfigArgs {
     /// Include history that may contain prompts, transcripts, and local paths.
     #[arg(long)]
     pub include_resume_history: bool,
+
+    /// Skip account-level skills while importing other configuration.
+    #[arg(long)]
+    pub exclude_skills: bool,
 
     /// Show discovered paths without reading or uploading file contents.
     #[arg(long)]
@@ -1152,4 +1165,33 @@ mod tests {
             Cli::try_parse_from(["agent-remote", "ego-browser", "status", "--json"]).unwrap();
         assert!(after.json);
     }
+}
+
+#[derive(Debug, Args)]
+pub struct AccountRecoverRuntimeArgs {
+    /// Verify an already completed exact source rollback and reopen its original profile.
+    #[arg(long, conflicts_with = "repair_source")]
+    pub verify_source: bool,
+    /// Repair interrupted source permissions using the retained original backup.
+    #[arg(long, conflicts_with = "verify_source")]
+    pub repair_source: bool,
+    /// Full lowercase account UUID; administrator access is required.
+    #[arg(value_name = "ACCOUNT_ID")]
+    pub account_id: String,
+    /// Exact original migrate_tool_account_runtime logical task ID.
+    #[arg(long, value_name = "TASK_ID")]
+    pub original_task: String,
+    /// Retain this independent UUID for same-request replay and status queries.
+    #[arg(long, value_name = "UUID")]
+    pub request_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AccountRecoveryStatusArgs {
+    /// Full lowercase account UUID; administrator access is required.
+    #[arg(value_name = "ACCOUNT_ID")]
+    pub account_id: String,
+    /// Original recovery request UUID.
+    #[arg(long, value_name = "UUID")]
+    pub request_id: String,
 }

@@ -1,3 +1,5 @@
+use agent_remote_cli::skills;
+
 mod api;
 mod auth;
 mod bridge_release;
@@ -16,7 +18,9 @@ mod node_install_state;
 mod node_release;
 mod platform;
 mod port_forward;
+mod runtime_recovery_commands;
 mod secrets;
+mod skill_commands;
 mod ssh;
 mod terminal;
 mod wireguard;
@@ -72,7 +76,20 @@ async fn main() {
     let cli = Cli::parse();
     terminal::configure(cli.color);
     let json = cli.json;
+    let skill = matches!(&cli.command, Command::Skill(_));
+    let recovery = runtime_recovery_commands::RecoveryContext::from_command(&cli.command);
     if let Err(error) = run(cli).await {
+        if let Some(exit) = error.downcast_ref::<skill_commands::SkillExit>() {
+            std::process::exit(exit.0);
+        }
+        if skill {
+            skill_commands::print_failure(&error, json);
+            std::process::exit(1);
+        }
+        if let Some(context) = recovery {
+            context.print_failure(&error, json);
+            std::process::exit(1);
+        }
         if json {
             print_json_error(&error);
         } else {
@@ -161,6 +178,7 @@ async fn run(cli: Cli) -> Result<()> {
     let json = cli.json;
     let paths = AppPaths::new(cli.home)?;
     match cli.command {
+        Command::Skill(command) => skill_commands::run(paths, command, json).await,
         Command::Init(args) => init(paths, args).await,
         Command::Login(args) => login(paths, args).await,
         Command::Logout(args) => logout(paths, args.revoke_remote).await,
@@ -187,6 +205,12 @@ async fn run(cli: Cli) -> Result<()> {
             account_import_config(paths, args).await
         }
         Command::Account(AccountCommand::Verify(args)) => account_verify(paths, args).await,
+        Command::Account(AccountCommand::RecoverRuntime(args)) => {
+            runtime_recovery_commands::submit(paths, args, cli.json).await
+        }
+        Command::Account(AccountCommand::RecoveryStatus(args)) => {
+            runtime_recovery_commands::status(paths, args, cli.json).await
+        }
         Command::Account(AccountCommand::Status(args)) => account_status(paths, args).await,
         Command::Account(AccountCommand::Disable(args)) => account_disable(paths, args).await,
         Command::Account(AccountCommand::Default(AccountDefaultCommand::Set(args))) => {
@@ -1817,7 +1841,7 @@ async fn account_import_config(
     let (server_url, _device_id, token) = load_device_token(&paths).await?;
     let client = ApiClient::new(server_url)?;
     let account_id = resolve_account_reference(&client, &token, &args.account).await?;
-    let include = discover_claude_config_paths(args.include_resume_history)?;
+    let include = discover_claude_config_paths(args.include_resume_history, args.exclude_skills)?;
     if include.is_empty() {
         terminal::note("No supported local Claude configuration paths found.");
         return Ok(());
@@ -1851,12 +1875,7 @@ async fn account_import_config(
                 tool_type: args.tool,
                 source: "local_cli".to_string(),
                 include,
-                exclude: vec![
-                    "~/.claude.json".to_string(),
-                    "~/.claude/cache".to_string(),
-                    "~/.claude/logs".to_string(),
-                    "~/.claude/transcripts".to_string(),
-                ],
+                exclude: config_import_exclusions(args.exclude_skills),
                 files,
                 include_resume_history: args.include_resume_history,
                 dry_run: args.dry_run,
@@ -2140,8 +2159,31 @@ fn print_developer_credential_profile(profile: &DeveloperCredentialProfileData) 
     details.render();
 }
 
-fn discover_claude_config_paths(include_resume_history: bool) -> Result<Vec<String>> {
-    let home = home_dir()?;
+fn config_import_exclusions(exclude_skills: bool) -> Vec<String> {
+    let mut paths = vec![
+        "~/.claude.json".to_string(),
+        "~/.claude/cache".to_string(),
+        "~/.claude/logs".to_string(),
+        "~/.claude/transcripts".to_string(),
+    ];
+    if exclude_skills {
+        paths.push("~/.claude/skills".to_string());
+    }
+    paths
+}
+
+fn discover_claude_config_paths(
+    include_resume_history: bool,
+    exclude_skills: bool,
+) -> Result<Vec<String>> {
+    discover_claude_config_paths_at(&home_dir()?, include_resume_history, exclude_skills)
+}
+
+fn discover_claude_config_paths_at(
+    home: &Path,
+    include_resume_history: bool,
+    exclude_skills: bool,
+) -> Result<Vec<String>> {
     let claude = home.join(".claude");
     let mut paths = Vec::new();
     for relative in [
@@ -2153,7 +2195,9 @@ fn discover_claude_config_paths(include_resume_history: bool) -> Result<Vec<Stri
         "hooks",
         "rules",
     ] {
-        push_if_exists(&claude, relative, &mut paths);
+        if relative != "skills" || !exclude_skills {
+            push_if_exists(&claude, relative, &mut paths);
+        }
     }
     for entry in std::fs::read_dir(&claude)
         .with_context(|| format!("failed to read {}", claude.display()))?
@@ -2194,15 +2238,21 @@ fn push_if_exists(root: &Path, relative: &str, output: &mut Vec<String>) {
 }
 
 fn collect_claude_config_files(include: &[String]) -> Result<Vec<ToolAccountConfigImportFile>> {
-    let home = home_dir()?;
+    collect_claude_config_files_at(&home_dir()?, include)
+}
+
+fn collect_claude_config_files_at(
+    home: &Path,
+    include: &[String],
+) -> Result<Vec<ToolAccountConfigImportFile>> {
     let mut files = Vec::new();
     let mut total_bytes = 0_u64;
     for path in include {
-        let local_path = expand_claude_config_path(&home, path)?;
+        let local_path = expand_claude_config_path(home, path)?;
         if local_path.is_file() {
-            push_config_file(&home, &local_path, &mut files, &mut total_bytes)?;
+            push_config_file(home, &local_path, &mut files, &mut total_bytes)?;
         } else if local_path.is_dir() {
-            collect_config_dir(&home, &local_path, &mut files, &mut total_bytes)?;
+            collect_config_dir(home, &local_path, &mut files, &mut total_bytes)?;
         }
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -2734,9 +2784,10 @@ fn resolve_ssh_public_key(explicit: Option<&std::path::Path>) -> Result<String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        config_import_complete, json_error_value, normalize_server_url, parse_rfc3339_seconds,
-        posix_shell_quote, valid_join_code, valid_join_code_expiry, valid_managed_ssh_host,
-        valid_managed_ssh_user, valid_node_install_server_url,
+        collect_claude_config_files_at, config_import_complete, config_import_exclusions,
+        discover_claude_config_paths_at, json_error_value, normalize_server_url,
+        parse_rfc3339_seconds, posix_shell_quote, valid_join_code, valid_join_code_expiry,
+        valid_managed_ssh_host, valid_managed_ssh_user, valid_node_install_server_url,
     };
     use anyhow::anyhow;
 
@@ -2746,6 +2797,68 @@ mod tests {
             normalize_server_url(" https://example.test/// "),
             "https://example.test"
         );
+    }
+
+    #[test]
+    fn config_import_default_keeps_skills_and_exclusion_is_explicit() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude");
+        std::fs::create_dir_all(claude.join("skills/example")).unwrap();
+        std::fs::write(claude.join("skills/example/SKILL.md"), "skill").unwrap();
+        std::fs::write(claude.join("settings.json"), "{}").unwrap();
+        let included = discover_claude_config_paths_at(home.path(), false, false).unwrap();
+        let files = collect_claude_config_files_at(home.path(), &included).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files
+            .iter()
+            .any(|file| file.path == "~/.claude/skills/example/SKILL.md"));
+        assert!(!config_import_exclusions(false)
+            .iter()
+            .any(|path| path == "~/.claude/skills"));
+        assert!(config_import_exclusions(true)
+            .iter()
+            .any(|path| path == "~/.claude/skills"));
+    }
+
+    #[test]
+    fn config_import_excludes_skills_before_reading_and_preserves_other_scopes() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude");
+        for path in ["skills/example", "plugins/example/skills", "projects"] {
+            std::fs::create_dir_all(claude.join(path)).unwrap();
+        }
+        std::fs::File::create(claude.join("skills/example/large.bin"))
+            .unwrap()
+            .set_len(super::CONFIG_IMPORT_MAX_FILE_BYTES + 1)
+            .unwrap();
+        std::fs::write(claude.join("settings.json"), "{}").unwrap();
+        std::fs::write(claude.join("plugins/example/skills/SKILL.md"), "plugin").unwrap();
+        std::fs::write(claude.join("projects/history.jsonl"), "history").unwrap();
+        for history in [false, true] {
+            let included = discover_claude_config_paths_at(home.path(), history, true).unwrap();
+            assert!(!included.iter().any(|path| path == "~/.claude/skills"));
+            let files = collect_claude_config_files_at(home.path(), &included).unwrap();
+            assert_eq!(files.len(), if history { 3 } else { 2 });
+            assert!(files
+                .iter()
+                .all(|file| !file.path.starts_with("~/.claude/skills/")));
+            assert!(files
+                .iter()
+                .any(|file| file.path == "~/.claude/plugins/example/skills/SKILL.md"));
+        }
+        let all = discover_claude_config_paths_at(home.path(), false, false).unwrap();
+        assert!(collect_claude_config_files_at(home.path(), &all).is_err());
+    }
+
+    #[test]
+    fn config_import_only_skills_becomes_empty_when_excluded() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".claude/skills")).unwrap();
+        let included = discover_claude_config_paths_at(home.path(), true, true).unwrap();
+        assert!(included.is_empty());
+        assert!(collect_claude_config_files_at(home.path(), &included)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

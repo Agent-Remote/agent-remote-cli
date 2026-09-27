@@ -1,3 +1,23 @@
+mod error_response;
+#[cfg(test)]
+mod error_response_tests;
+pub mod runtime_recovery;
+// This transport is consumed by the separate fclaude launcher.
+#[allow(dead_code)]
+pub mod session_saving;
+#[allow(dead_code)]
+pub mod session_takeover;
+pub mod skill_content;
+pub mod skill_diagnostics;
+pub mod skill_effective;
+pub mod skill_git;
+pub mod skill_mutations;
+pub mod skill_node_export;
+pub mod skill_retry;
+pub mod skill_state;
+pub mod skills;
+mod utf8_text;
+
 use std::fmt;
 use std::time::Duration;
 
@@ -933,18 +953,25 @@ fn decode_ego_browser_policy(value: serde_json::Value) -> Result<EgoBrowserPolic
         .map_err(|error| ApiError::decode(StatusCode::OK, String::new(), error))
 }
 
-async fn read_response_body(mut response: reqwest::Response) -> Result<String, ApiError> {
+async fn read_response_body(response: reqwest::Response) -> Result<String, ApiError> {
+    read_response_body_bounded(response, MAX_API_RESPONSE_BYTES).await
+}
+
+async fn read_response_body_bounded(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<String, ApiError> {
     let status = response.status();
     if response
         .content_length()
-        .is_some_and(|length| length > MAX_API_RESPONSE_BYTES as u64)
+        .is_some_and(|length| length > limit as u64)
     {
-        return Err(ApiError::response_too_large(status));
+        return Err(ApiError::response_too_large(status, limit));
     }
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(ApiError::transport)? {
-        if body.len().saturating_add(chunk.len()) > MAX_API_RESPONSE_BYTES {
-            return Err(ApiError::response_too_large(status));
+        if body.len().saturating_add(chunk.len()) > limit {
+            return Err(ApiError::response_too_large(status, limit));
         }
         body.extend_from_slice(&chunk);
     }
@@ -1336,6 +1363,7 @@ pub struct SessionData {
     pub replaces_session_id: Option<String>,
     pub create_task_id: Option<String>,
     pub stop_task_id: Option<String>,
+    pub skill_finalization_operation_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1682,22 +1710,22 @@ impl ApiError {
         }
     }
 
-    fn response_too_large(status: StatusCode) -> Self {
+    fn response_too_large(status: StatusCode, limit: usize) -> Self {
         Self {
             status: Some(status),
             code: None,
-            message: "API response exceeds the 1 MiB safety limit".to_string(),
+            message: format!("API response exceeds the {} byte safety limit", limit),
         }
     }
 
     fn from_error_response(status: StatusCode, body: String) -> Self {
-        match serde_json::from_str::<ErrorEnvelope>(&body) {
-            Ok(error) => Self {
+        match error_response::decode(&body) {
+            Some(error) => Self {
                 status: Some(status),
-                code: Some(error.error.code),
-                message: error.error.message,
+                code: Some(error.code),
+                message: error.message,
             },
-            Err(_) => Self {
+            None => Self {
                 status: Some(status),
                 code: None,
                 message: "server returned an invalid error response".to_string(),

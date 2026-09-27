@@ -2,6 +2,13 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.31 - 2026-09-27
+
+- Add Skill installation, updates, effective-state inspection, conflict resolution, export, retention and session save commands.
+- Add explicit runtime recovery with mutually exclusive --verify-source and --repair-source actions and structured results.
+- Pin managed Node downloads to 0.2.29; use Server 0.2.27 for the new Skill contracts.
+- Validation: repository quality gates and component contracts; remaining real Linux, genuine Docker Sandbox and actual model acceptance are deferred until after release with user assistance. Deferred tests are not certified as passed.
+
 ## v0.2.30 - 2026-09-21
 
 - fix(ego-browser): preserve state in identity and deletion guards (d435cfe)

@@ -1,3 +1,6 @@
+mod skill_commands;
+pub use skill_commands::{skill_command_state, SkillCommandRecord};
+
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -123,7 +126,8 @@ impl LocalState {
              CREATE INDEX IF NOT EXISTS ego_browser_bindings_server_status_idx
                  ON ego_browser_bindings (server_url, status);",
         )?;
-        self.connection.pragma_update(None, "user_version", 3)?;
+        self.init_skill_commands()?;
+        self.connection.pragma_update(None, "user_version", 4)?;
         Ok(())
     }
 

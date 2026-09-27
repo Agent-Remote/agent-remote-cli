@@ -2557,3 +2557,339 @@ fn wireguard_status_retries_with_sudo_after_permission_denied() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("interface: elevated-agent-remote"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("Permission denied"));
 }
+
+#[test]
+fn account_import_config_help_exposes_explicit_skill_exclusion() {
+    let output = run(AGENT_REMOTE, &["account", "import-config", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--exclude-skills"));
+    assert!(stdout.contains("--include-resume-history"));
+    assert!(stdout.contains("--dry-run"));
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_recovery_uses_user_token_exact_request_and_typed_status() {
+    for version in [1, 2, 3] {
+        runtime_recovery_contract(version);
+    }
+}
+
+#[cfg(unix)]
+fn runtime_recovery_contract(version: u8) {
+    let source = version > 1;
+    let action = if version == 3 {
+        "repair_source"
+    } else {
+        "verify_source"
+    };
+    let flag = if version == 3 {
+        "--repair-source"
+    } else {
+        "--verify-source"
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    let state_home = temporary.path().join("state");
+    fs::create_dir_all(&state_home).unwrap();
+    let account = "11111111-1111-4111-8111-111111111111";
+    let key = "22222222-2222-4222-8222-222222222222";
+    let original = format!("migrate_tool_account_runtime:{account}:{key}");
+    let mut binding = serde_json::json!({
+        "version":1, "task_id":format!("recover_tool_account_runtime:{account}:{key}"),
+        "task_record_id":"33333333-3333-4333-8333-333333333333",
+        "original_task_id":original, "original_task_record_id":"44444444-4444-4444-8444-444444444444",
+        "node_id":key,"user_id":key,"tool_account_id":account,"tool_type":"claude",
+        "source_runtime_backend":"docker_sandbox","target_runtime_backend":"native"
+    });
+    if source {
+        binding["version"] = version.into();
+        binding["action"] = action.into();
+    }
+    let (server_url, server) = spawn_http_exchange_responses(vec![
+        serde_json::json!({"data":{"binding":binding,"status":"pending"}}),
+        serde_json::json!({"data":{"binding":binding,"status":"succeeded"}}),
+    ]);
+    write_private_file(
+        &state_home.join("config.toml"),
+        format!("server_url = \"{server_url}\"\n"),
+    );
+    write_user_token(&state_home, &server_url, "recovery-admin-test-token");
+    for command in ["recover-runtime", "recovery-status"] {
+        let mut cli = Command::new(AGENT_REMOTE);
+        cli.args(["--json", "account", command, account, "--request-id", key]);
+        if command == "recover-runtime" {
+            cli.args(["--original-task", &original]);
+            if source {
+                cli.arg(flag);
+            }
+        }
+        let output = cli
+            .env("AGENT_REMOTE_HOME", &state_home)
+            .env("AGENT_REMOTE_SECRET_BACKEND", "file")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["schema_version"], version);
+        assert_eq!(value["request_id"], key);
+        assert_eq!(value["recovery"]["binding"], binding);
+        assert_eq!(
+            value["target_completion_confirmed"],
+            command == "recovery-status" && !source
+        );
+        if source {
+            assert_eq!(
+                value["source_restoration_confirmed"],
+                command == "recovery-status"
+            );
+        } else {
+            assert!(value.get("source_restoration_confirmed").is_none());
+        }
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("recovery-admin-test-token"));
+    }
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with(&format!(
+        "POST /api/v1/tool-accounts/{account}/runtime-migration/recover HTTP/1.1"
+    )));
+    assert!(requests[0]
+        .to_lowercase()
+        .contains("authorization: bearer recovery-admin-test-token"));
+    let body: serde_json::Value =
+        serde_json::from_str(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    let mut expected = serde_json::json!({"original_task_id":original,"request_id":key});
+    if source {
+        expected["action"] = action.into();
+    }
+    assert_eq!(body, expected);
+    assert!(requests[1].starts_with(&format!(
+        "GET /api/v1/tool-accounts/{account}/runtime-migration/recover/{key} HTTP/1.1"
+    )));
+}
+
+#[test]
+fn runtime_recovery_requires_explicit_original_identity_and_retained_key() {
+    assert_help(AGENT_REMOTE, &["account", "recover-runtime"]);
+    assert_help(AGENT_REMOTE, &["account", "recovery-status"]);
+    let conflicting = run(
+        AGENT_REMOTE,
+        &[
+            "account",
+            "recover-runtime",
+            "account",
+            "--original-task",
+            "original",
+            "--request-id",
+            "key",
+            "--verify-source",
+            "--repair-source",
+        ],
+    );
+    assert_eq!(conflicting.status.code(), Some(2));
+    let missing = run(AGENT_REMOTE, &["account", "recover-runtime", "account"]);
+    assert_eq!(missing.status.code(), Some(2));
+    let invalid = run(
+        AGENT_REMOTE,
+        &[
+            "account",
+            "recover-runtime",
+            "account",
+            "--request-id",
+            "bad",
+            "--original-task",
+            "bad",
+        ],
+    );
+    assert_eq!(invalid.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("full, lowercase, nonzero UUIDs"));
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_recovery_json_errors_preserve_original_identity_and_unknown_acceptance() {
+    for version in [1, 2, 3] {
+        runtime_recovery_error_contract(version);
+    }
+}
+
+#[cfg(unix)]
+fn runtime_recovery_error_contract(version: u8) {
+    let source = version > 1;
+    let action = if version == 3 {
+        "repair_source"
+    } else {
+        "verify_source"
+    };
+    let flag = if version == 3 {
+        "--repair-source"
+    } else {
+        "--verify-source"
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    let state_home = temporary.path().join("state");
+    fs::create_dir_all(&state_home).unwrap();
+    let account = "11111111-1111-4111-8111-111111111111";
+    let key = "22222222-2222-4222-8222-222222222222";
+    let original = format!("migrate_tool_account_runtime:{account}:{key}");
+    let (server_url, server) = spawn_http_exchange_responses(vec![
+        serde_json::json!({"data":{"private":"private-response-do-not-render"}}),
+        serde_json::json!({"data":{"private":"private-response-do-not-render"}}),
+    ]);
+    write_private_file(
+        &state_home.join("config.toml"),
+        format!("server_url = \"{server_url}\"\n"),
+    );
+    write_user_token(&state_home, &server_url, "recovery-admin-test-token");
+    for command in ["recover-runtime", "recovery-status"] {
+        let mut cli = Command::new(AGENT_REMOTE);
+        cli.args(["--json", "account", command, account, "--request-id", key]);
+        if command == "recover-runtime" {
+            cli.args(["--original-task", &original]);
+            if source {
+                cli.arg(flag);
+            }
+        }
+        let output = cli
+            .env("AGENT_REMOTE_HOME", &state_home)
+            .env("AGENT_REMOTE_SECRET_BACKEND", "file")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            value["schema_version"],
+            if source && command == "recover-runtime" {
+                version
+            } else {
+                1
+            }
+        );
+        if source && command == "recover-runtime" {
+            assert_eq!(value["action"], action);
+            assert_eq!(
+                value.get("source_restoration_confirmed"),
+                Some(&serde_json::Value::Null)
+            );
+        } else {
+            assert!(value.get("action").is_none());
+            assert!(value.get("source_restoration_confirmed").is_none());
+        }
+        assert_eq!(value["request_id"], key);
+        assert_eq!(value["account_id"], account);
+        assert_eq!(value["acceptance"], "unknown");
+        assert!(value["target_completion_confirmed"].is_null());
+        assert!(value["recovery"].is_null());
+        assert_eq!(
+            value["next_command"],
+            format!("agent-remote account recovery-status {account} --request-id {key}")
+        );
+        if command == "recover-runtime" {
+            assert_eq!(value["original_task_id"], original);
+            assert_eq!(value["error_code"], "RECOVERY_ACCEPTANCE_UNKNOWN");
+        } else {
+            assert!(value["original_task_id"].is_null());
+            assert_eq!(value["error_code"], "RECOVERY_STATUS_UNAVAILABLE");
+        }
+        assert!(value.get("admission").is_none());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(!text.contains("private-response-do-not-render"));
+        assert!(!text.contains("recovery-admin-test-token"));
+    }
+    assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn runtime_recovery_preparation_errors_keep_safe_identity_without_claiming_prior_absence() {
+    let temporary = tempfile::tempdir().unwrap();
+    let account = "11111111-1111-4111-8111-111111111111";
+    let key = "22222222-2222-4222-8222-222222222222";
+    let original = format!("migrate_tool_account_runtime:{account}:{key}");
+    let private = "private-invalid-input-do-not-render";
+    write_private_file(&temporary.path().join("config.toml"), private);
+    for (command, selected_account, selected_key, selected_original, code, acceptance) in [
+        (
+            "recover-runtime",
+            account,
+            key,
+            original.as_str(),
+            "RECOVERY_PREPARATION_FAILED",
+            "not_submitted",
+        ),
+        (
+            "recovery-status",
+            account,
+            key,
+            original.as_str(),
+            "RECOVERY_PREPARATION_FAILED",
+            "unknown",
+        ),
+        (
+            "recover-runtime",
+            private,
+            private,
+            private,
+            "RECOVERY_INVALID_IDENTITY",
+            "not_submitted",
+        ),
+        (
+            "recover-runtime",
+            account,
+            key,
+            private,
+            "RECOVERY_INVALID_ORIGINAL_TASK",
+            "not_submitted",
+        ),
+    ] {
+        let mut cli = Command::new(AGENT_REMOTE);
+        cli.args([
+            "--json",
+            "account",
+            command,
+            selected_account,
+            "--request-id",
+            selected_key,
+        ]);
+        if command == "recover-runtime" {
+            cli.args(["--original-task", selected_original]);
+        }
+        let output = cli
+            .env("AGENT_REMOTE_HOME", temporary.path())
+            .env("AGENT_REMOTE_SECRET_BACKEND", "file")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stderr.is_empty());
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["error_code"], code);
+        assert_eq!(value["acceptance"], acceptance);
+        assert!(value["recovery"].is_null());
+        assert!(value["target_completion_confirmed"].is_null());
+        if selected_account == account {
+            assert_eq!(value["account_id"], account);
+            assert_eq!(value["request_id"], key);
+            assert_eq!(
+                value["next_command"],
+                format!("agent-remote account recovery-status {account} --request-id {key}")
+            );
+        } else {
+            assert!(value["account_id"].is_null());
+            assert!(value["request_id"].is_null());
+            assert!(value["next_command"].is_null());
+        }
+        if command == "recover-runtime" && selected_original == original {
+            assert_eq!(value["original_task_id"], original);
+        } else {
+            assert!(value["original_task_id"].is_null());
+        }
+        assert!(value.get("admission").is_none());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(private));
+    }
+}

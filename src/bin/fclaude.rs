@@ -11,6 +11,7 @@ use agent_remote_cli::cli::VERSION;
 use agent_remote_cli::config::AppPaths;
 use agent_remote_cli::identifiers::{resolve_id, short_id};
 use agent_remote_cli::local_state::{LocalState, LocalSyncSession, LocalWorkspace};
+use agent_remote_cli::session_creation::create_with_takeover_wait;
 use agent_remote_cli::terminal::{self, ColorChoice, Details, Table};
 use agent_remote_cli::{mutagen, ssh, workspace};
 use anyhow::{bail, Context, Result};
@@ -25,7 +26,8 @@ enum Mode {
     New,
     List(SessionListArgs),
     Attach(String),
-    Stop(String),
+    Stop(StopArgs),
+    StopStatus(StopStatusArgs),
     Delete(DeleteTarget),
     Forward(ForwardArgs),
 }
@@ -61,7 +63,7 @@ struct FClaudeArgs {
     long_about = "Start Claude Code in the synchronized current workspace, resume the matching remote session, or explicitly list, attach, stop, and delete sessions.",
     after_help = "Examples:\n  fclaude\n  fclaude --model opus\n  fclaude new -- --model sonnet\n  fclaude list --running\n  fclaude attach b68873d48e07\n  fclaude stop b68873d48e07\n  fclaude delete b68873d48e07\n  fclaude delete --all",
     trailing_var_arg = true,
-    args_conflicts_with_subcommands = true
+    subcommand_precedence_over_arg = true
 )]
 struct FClaudeCli {
     /// Override the agent-remote state and configuration directory.
@@ -109,7 +111,9 @@ enum FClaudeCommand {
     /// Attach to a session using its displayed short ID or full UUID.
     Attach(AttachArgs),
     /// Stop a session using its displayed short ID or full UUID.
-    Stop(SessionReferenceArgs),
+    Stop(StopArgs),
+    /// Query a managed session saving operation, including after session deletion.
+    StopStatus(StopStatusArgs),
     /// Delete a stopped, interrupted, or failed session, or all sessions in those states.
     Delete(DeleteArgs),
     /// Forward a local loopback port to this workspace's remote session.
@@ -174,11 +178,26 @@ struct AttachArgs {
     print_only: bool,
 }
 
-#[derive(Debug, ClapArgs)]
-struct SessionReferenceArgs {
+#[derive(Debug, PartialEq, Eq, ClapArgs)]
+struct StopArgs {
     /// Unique session ID prefix or full UUID.
     #[arg(value_name = "SESSION")]
     session_id: String,
+    /// Maximum seconds to wait for managed Skill saving after requesting stop.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=86400))]
+    timeout: u64,
+}
+
+#[derive(Debug, PartialEq, Eq, ClapArgs)]
+struct StopStatusArgs {
+    /// Original snapshot UUID printed by stop.
+    operation_id: String,
+    /// Wait for publication or a reviewable terminal saving outcome.
+    #[arg(long)]
+    wait: bool,
+    /// Maximum seconds to wait for saving status.
+    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=86400))]
+    timeout: u64,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -202,7 +221,17 @@ async fn main() {
     terminal::configure(cli.color);
     if let Err(error) = run(cli.into_args()).await {
         eprintln!("{} {error:#}", terminal::failure("ERROR"));
-        std::process::exit(1);
+        std::process::exit(
+            error
+                .downcast_ref::<agent_remote_cli::session_saving::SavingExit>()
+                .map(|exit| exit.0)
+                .or_else(|| {
+                    error
+                        .downcast_ref::<agent_remote_cli::session_creation::CreationExit>()
+                        .map(|exit| exit.0)
+                })
+                .unwrap_or(1),
+        );
     }
 }
 
@@ -222,7 +251,8 @@ impl FClaudeCli {
             Some(FClaudeCommand::Attach(args)) => {
                 (Mode::Attach(args.session_id), Vec::new(), args.print_only)
             }
-            Some(FClaudeCommand::Stop(args)) => (Mode::Stop(args.session_id), Vec::new(), false),
+            Some(FClaudeCommand::Stop(args)) => (Mode::Stop(args), Vec::new(), false),
+            Some(FClaudeCommand::StopStatus(args)) => (Mode::StopStatus(args), Vec::new(), false),
             Some(FClaudeCommand::Delete(args)) => {
                 let target = match args.session_id {
                     Some(session_id) => DeleteTarget::Session(session_id),
@@ -270,7 +300,20 @@ async fn run(args: FClaudeArgs) -> Result<()> {
     match &args.mode {
         Mode::List(list_args) => list_sessions(&paths, list_args).await,
         Mode::Attach(session_id) => attach_session(&paths, session_id, args.print_only).await,
-        Mode::Stop(session_id) => stop_session(&paths, session_id).await,
+        Mode::Stop(args) => stop_session(&paths, &args.session_id, args.timeout).await,
+        Mode::StopStatus(args) => {
+            let (server_url, _device_id, token) = load_device_token(&paths).await?;
+            let client = ApiClient::new(server_url)?;
+            agent_remote_cli::session_saving::observe(
+                &client,
+                &token,
+                &args.operation_id,
+                None,
+                args.wait,
+                args.timeout,
+            )
+            .await
+        }
         Mode::Delete(target) => delete_sessions(&paths, target).await,
         Mode::Forward(forward_args) => {
             agent_remote_cli::port_forward::run(&paths, forward_args, Some(TOOL_TYPE)).await
@@ -302,37 +345,39 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
 
     let session = match existing {
         Some(session) if session.status == "interrupted" => {
-            client
-                .create_tool_session(
-                    &token,
-                    &CreateSessionRequest {
-                        tool_type: TOOL_TYPE.to_string(),
-                        tool_account_id: session.tool_account_id.clone(),
-                        workspace_id: session.workspace_id.clone(),
-                        project_key: session.project_key.clone(),
-                        argv: args.claude_args,
-                        replaces_session_id: Some(session.id),
-                    },
-                )
-                .await?
+            create_with_takeover_wait(
+                &client,
+                &token,
+                &CreateSessionRequest {
+                    tool_type: TOOL_TYPE.to_string(),
+                    tool_account_id: session.tool_account_id.clone(),
+                    workspace_id: session.workspace_id.clone(),
+                    project_key: session.project_key.clone(),
+                    argv: args.claude_args,
+                    replaces_session_id: Some(session.id),
+                },
+                Duration::from_secs(60),
+            )
+            .await?
         }
         Some(session) => session,
         None => {
             let account =
                 choose_account(paths, &client, &token, args.account_id.as_deref()).await?;
-            client
-                .create_tool_session(
-                    &token,
-                    &CreateSessionRequest {
-                        tool_type: TOOL_TYPE.to_string(),
-                        tool_account_id: account.id,
-                        workspace_id: sync.workspace_id.clone(),
-                        project_key: identity.project_key,
-                        argv: args.claude_args,
-                        replaces_session_id: None,
-                    },
-                )
-                .await?
+            create_with_takeover_wait(
+                &client,
+                &token,
+                &CreateSessionRequest {
+                    tool_type: TOOL_TYPE.to_string(),
+                    tool_account_id: account.id,
+                    workspace_id: sync.workspace_id.clone(),
+                    project_key: identity.project_key,
+                    argv: args.claude_args,
+                    replaces_session_id: None,
+                },
+                Duration::from_secs(60),
+            )
+            .await?
         }
     };
     let session = wait_until_attachable(&client, &token, session).await?;
@@ -459,19 +504,33 @@ async fn attach_session(paths: &AppPaths, session_id: &str, print_only: bool) ->
     attach_with_client(paths, &client, &token, &session_id, print_only).await
 }
 
-async fn stop_session(paths: &AppPaths, session_id: &str) -> Result<()> {
+async fn stop_session(paths: &AppPaths, session_id: &str, timeout: u64) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(paths).await?;
     let client = ApiClient::new(server_url)?;
     let session_id = resolve_session_id(&client, &token, session_id).await?;
     let session = client.stop_tool_session(&token, &session_id).await?;
     terminal::success_line("Claude session stop requested");
     let mut details = Details::new()
-        .field("Session", session.id)
+        .field("Session", &session.id)
         .status("Status", session.status);
     if let Some(task_id) = session.stop_task_id {
         details = details.field("Stop task", task_id);
     }
+    if let Some(operation) = &session.skill_finalization_operation_id {
+        details = details.field("Operation", operation);
+    }
     details.render();
+    if let Some(operation) = &session.skill_finalization_operation_id {
+        agent_remote_cli::session_saving::observe(
+            &client,
+            &token,
+            operation,
+            Some(&session.id),
+            true,
+            timeout,
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -850,9 +909,49 @@ mod tests {
     }
 
     #[test]
+    fn global_options_preserve_claude_passthrough() {
+        for values in [
+            vec!["--model", "opus"],
+            vec!["--", "stop", "prompt text"],
+            vec!["prompt", "new", "stop"],
+        ] {
+            let expected = parse_args(&values);
+            let actual = parse_args(
+                &["--home", "/tmp/launcher-contract"]
+                    .into_iter()
+                    .chain(values)
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(actual.mode, Mode::Run);
+            assert_eq!(actual.claude_args, expected.claude_args);
+        }
+    }
+
+    #[test]
     fn parses_attach_mode() {
         let args = parse_args(&["attach", "01234567"]);
         assert_eq!(args.mode, Mode::Attach("01234567".into()));
+    }
+
+    #[test]
+    fn global_options_preserve_explicit_session_commands() {
+        for command in [
+            vec!["stop", "01234567", "--timeout", "5"],
+            vec!["stop-status", "original-operation", "--wait"],
+            vec!["new", "--", "--model", "sonnet"],
+            vec!["delete", "01234567"],
+            vec!["list", "--running"],
+            vec!["attach", "01234567"],
+        ] {
+            let expected = parse_args(&command);
+            let values: Vec<_> = ["--home", "/tmp/launcher-contract", "--color", "never"]
+                .into_iter()
+                .chain(command)
+                .collect();
+            let actual = parse_args(&values);
+            assert_eq!(actual.mode, expected.mode);
+            assert_eq!(actual.claude_args, expected.claude_args);
+        }
     }
 
     #[test]

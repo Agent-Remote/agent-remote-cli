@@ -1,3 +1,5 @@
+pub mod git;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
