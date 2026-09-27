@@ -26,6 +26,9 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2.9.2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.146
       - name: Normalize version
         id: version
         run: |
@@ -44,7 +47,7 @@ jobs:
       - name: Prepare version files
         run: scripts/prepare-release.sh "${{ steps.version.outputs.value }}"
       - name: Test
-        run: cargo test
+        run: scripts/run-tests.sh
       - name: Commit and tag
         run: |
           set -euo pipefail

@@ -2,4 +2,4 @@
 set -euo pipefail
 
 scripts/run-static-checks.sh
-cargo test -- --test-threads=1
+scripts/run-tests.sh
