@@ -69,7 +69,7 @@ pub async fn run(paths: AppPaths, command: SkillCommand, json: bool) -> Result<(
             | SkillCommand::State { .. }
             | SkillCommand::Check(_)
     ) {
-        run_command(paths, command, json).await
+        Box::pin(run_command(paths, command, json)).await
     } else {
         interruption::scope(Box::pin(run_command(paths, command, json))).await
     }

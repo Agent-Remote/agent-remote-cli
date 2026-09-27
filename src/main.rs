@@ -78,7 +78,8 @@ async fn main() {
     let json = cli.json;
     let skill = matches!(&cli.command, Command::Skill(_));
     let recovery = runtime_recovery_commands::RecoveryContext::from_command(&cli.command);
-    if let Err(error) = run(cli).await {
+    // Keep the command tree out of Tokio's entry future on Windows' small main stack.
+    if let Err(error) = Box::pin(run(cli)).await {
         if let Some(exit) = error.downcast_ref::<skill_commands::SkillExit>() {
             std::process::exit(exit.0);
         }
@@ -178,7 +179,7 @@ async fn run(cli: Cli) -> Result<()> {
     let json = cli.json;
     let paths = AppPaths::new(cli.home)?;
     match cli.command {
-        Command::Skill(command) => skill_commands::run(paths, command, json).await,
+        Command::Skill(command) => Box::pin(skill_commands::run(paths, command, json)).await,
         Command::Init(args) => init(paths, args).await,
         Command::Login(args) => login(paths, args).await,
         Command::Logout(args) => logout(paths, args.revoke_remote).await,
@@ -2783,6 +2784,25 @@ fn resolve_ssh_public_key(explicit: Option<&std::path::Path>) -> Result<String> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn command_future_fits_small_platform_stacks() {
+        fn future_size<F: std::future::Future>(_: impl FnOnce() -> F) -> usize {
+            std::mem::size_of::<F>()
+        }
+        // Inspect the type without first placing an oversized future on this test's stack.
+        let size = future_size(|| {
+            super::run(<super::Cli as clap::Parser>::parse_from([
+                "agent-remote",
+                "skill",
+                "list",
+            ]))
+        });
+        assert!(
+            size <= 128 * 1024,
+            "command dispatch future uses {size} bytes"
+        );
+    }
+
     use super::{
         collect_claude_config_files_at, config_import_complete, config_import_exclusions,
         discover_claude_config_paths_at, json_error_value, normalize_server_url,
