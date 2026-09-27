@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.32 - 2026-09-27
+
+- fix(skills): bound command dispatch futures for small stacks (0330bcb)
+- fix(skills): scope private directory mutability to unix (8e99120)
+
 ## v0.2.31 - 2026-09-27
 
 - feat(skills): release skill management commands in cli 0.2.31 (8a902b1)
