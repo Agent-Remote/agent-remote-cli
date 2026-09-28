@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.39 - 2026-09-28
+
+- fix(release): pin node account disablement recovery (eb5dabe)
+
 ## v0.2.38 - 2026-09-28
 
 - fix(release): pin skill reclamation fixes and stabilize retry test (7237617)
