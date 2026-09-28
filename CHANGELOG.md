@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.35 - 2026-09-28
+
+- fix(release): pin node with native skill takeover repair (ebf81dc)
+- docs: consolidate skill documentation and current acceptance (0b9eda4)
+
 ## v0.2.34 - 2026-09-27
 
 - fix: install node with skill management enabled by default (272b504)
