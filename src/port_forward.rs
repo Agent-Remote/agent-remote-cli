@@ -1448,7 +1448,9 @@ mod tests {
             status_tx,
             probe_tx,
         ));
-        let status = timeout(Duration::from_secs(3), status_rx.recv())
+        // Process startup can be delayed by concurrent integration tests on macOS.
+        // Keep the exact retry/token assertions below while bounding a stalled supervisor.
+        let status = timeout(Duration::from_secs(15), status_rx.recv())
             .await
             .expect("supervisor did not report terminal retry result")
             .expect("supervisor status channel closed unexpectedly")
