@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.36 - 2026-09-28
+
+- fix(release): pin complete native skill takeover repair (e984518)
+
 ## v0.2.35 - 2026-09-28
 
 - fix(release): pin node with native skill takeover repair (ebf81dc)
