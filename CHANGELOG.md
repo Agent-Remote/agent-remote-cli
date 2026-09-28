@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.38 - 2026-09-28
+
+- fix(release): pin skill reclamation fixes and stabilize retry test (7237617)
+
 ## v0.2.37 - 2026-09-28
 
 - fix(release): pin node launch inventory repair (27d2ebd)
