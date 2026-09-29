@@ -380,7 +380,6 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
             .await?
         }
     };
-    let session = wait_until_attachable(&client, &token, session).await?;
     attach_with_client(paths, &client, &token, &session.id, args.print_only).await
 }
 
@@ -653,28 +652,6 @@ fn account_matches(session: &SessionData, account_id: Option<&str>) -> bool {
         Some(account_id) => session.tool_account_id == account_id,
         None => true,
     }
-}
-
-async fn wait_until_attachable(
-    client: &ApiClient,
-    token: &str,
-    initial: SessionData,
-) -> Result<SessionData> {
-    if initial.status == "running" || initial.status == "active" {
-        return Ok(initial);
-    }
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while Instant::now() < deadline {
-        sleep(Duration::from_secs(1)).await;
-        let session = client.get_tool_session(token, &initial.id).await?;
-        if session.status == "running" || session.status == "active" {
-            return Ok(session);
-        }
-        if session.status == "failed" || session.status == "stopped" {
-            bail!("session {} became {}", session.id, session.status);
-        }
-    }
-    Ok(initial)
 }
 
 async fn ensure_workspace_sync(

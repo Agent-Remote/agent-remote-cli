@@ -2,6 +2,7 @@ mod error_response;
 #[cfg(test)]
 mod error_response_tests;
 pub mod runtime_recovery;
+mod session_readiness;
 // This transport is consumed by the separate fclaude launcher.
 #[allow(dead_code)]
 pub mod session_saving;
@@ -411,6 +412,8 @@ impl ApiClient {
         token: &str,
         session_id: &str,
     ) -> Result<AttachSessionData, ApiError> {
+        self.wait_for_session_readiness(token, session_id, Duration::from_secs(120))
+            .await?;
         let response: Envelope<AttachSessionData> = self
             .post_empty(
                 &format!("/api/v1/sessions/{session_id}/attach"),
