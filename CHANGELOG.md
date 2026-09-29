@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.40 - 2026-09-29
+
+- fix: wait for session readiness before authorizing ssh attach (eb018ba)
+
 ## v0.2.39 - 2026-09-28
 
 - fix(release): pin node account disablement recovery (eb5dabe)
