@@ -28,6 +28,12 @@ const GUI_EXECUTOR_EXECUTABLE: &str = "AgentRemoteGUIExecutor";
 const DEVICE_TEAM_IDENTIFIER: Option<&str> = option_env!("AGENT_REMOTE_DEVICE_TEAM_IDENTIFIER");
 const DEVICE_SIGNER_CERTIFICATE_SHA1: Option<&str> =
     option_env!("AGENT_REMOTE_DEVICE_SIGNER_CERTIFICATE_SHA1");
+// Keep the pinned identity in every macOS release binary, including Intel
+// builds whose linker may otherwise dead-strip the validation path.
+#[allow(dead_code)]
+#[used]
+#[cfg_attr(target_os = "macos", link_section = "__DATA,__const")]
+static DEVICE_SIGNING_IDENTITY_MARKER: Option<&'static str> = DEVICE_SIGNER_CERTIFICATE_SHA1;
 const MAX_DEVICE_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_DEVICE_ARCHIVE_ENTRIES: usize = 50_000;
 const MAX_DEVICE_ARCHIVE_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
