@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.41 - 2026-10-02
+
+- feat: improve claude terminal interaction and clipboard handling (6ab230d)
+
 ## v0.2.40 - 2026-09-29
 
 - fix: wait for session readiness before authorizing ssh attach (eb018ba)
