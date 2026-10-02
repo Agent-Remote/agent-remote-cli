@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.42 - 2026-10-02
+
+- fix: retain macos signing identity marker (98420d4)
+
 ## v0.2.41 - 2026-10-02
 
 - feat: improve claude terminal interaction and clipboard handling (6ab230d)
