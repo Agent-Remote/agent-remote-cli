@@ -150,7 +150,7 @@ for target in $TARGETS; do
   install -m 0755 "$CARGO_TARGET_DIR/$target/release/fclaude" "$work/bin/fclaude"
   install -m 0755 "$CARGO_TARGET_DIR/$target/release/agent-remote-wireguard" "$work/bin/agent-remote-wireguard"
   install -m 0755 scripts/mutagen-scp "$work/bin/scp"
-  install -m 0755 scripts/mutagen-ssh "$work/bin/ssh"
+  install -m 0755 "$CARGO_TARGET_DIR/$target/release/agent-remote-ssh" "$work/bin/ssh"
   download_mutagen "$target" "$work/bin/mutagen"
   managed_tools_work="$work/.managed-tools"
   mkdir -p "$managed_tools_work/bin" "$managed_tools_work/sources" "$managed_tools_work/licenses"

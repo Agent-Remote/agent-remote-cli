@@ -63,6 +63,33 @@ agent-remote logout [--no-revoke-remote]
 `--color auto|always|never`；`auto` 同时遵循 `NO_COLOR` 和 `TERM=dumb`。
 错误、警告、成功操作、分区标题、详情和状态表格使用统一的终端样式。
 
+首次绑定 Claude 账户，以及在 `fclaude` / `agent-remote attach` 中重新登录时，登录链接会自动
+复制到本机剪贴板。执行 `account bind` / `account status` 显示的连接命令时，请使用安装包放入
+PATH 的 `ssh`，不要绕过它调用 `/usr/bin/ssh`。CLI 会识别完整登录页面、拼接换行链接，每个新
+链接只复制一次；普通 SSH、文件同步、输出重定向和 `--print-only` 不会触发复制。
+
+macOS 使用 `pbcopy`，Windows 使用 PowerShell `Set-Clipboard`，WSL 使用 Windows 剪贴板，
+Linux 使用 `wl-copy` / `xclip` / `xsel`，不依赖具体桌面终端品牌。没有可用桌面剪贴板，或 CLI
+本身运行在 SSH 远端时，回退到 OSC 52，兼容 tmux / screen 透传。回退需要终端支持并允许
+剪贴板访问，提示仅表示已发送请求，不代表复制已成功；被禁止时仍可使用页面中的原始链接。
+登录链接不会保存到本地文件或日志。设置 `AGENT_REMOTE_LOGIN_CLIPBOARD=0` 可关闭自动复制。
+
+升级 Node 和 CLI 后，在 Claude 回复上拖选文字，松开鼠标即可自动复制到本机剪贴板。普通点击
+和滚轮保留原有行为。本机 CLI 会把 tmux 的 OSC 52 写入请求转交系统剪贴板，因此桌面终端
+本身不支持 OSC 52 也能复制。支持中文、缩进和换行，单次最多 64 KiB；剪贴板读取请求会被
+丢弃，选中文本不会写入本地文件或日志。也可按住终端的原生选择修饰键（通常 Shift，iTerm2
+通常 Option）绕过 tmux。Ctrl+B 后按 `[` 进入受管历史模式；方向键／PageUp／PageDown
+移动，空格开始选择，Enter／Y 复制，Esc／Q 返回 Claude。受管 tmux 禁止命令入口、新建窗口、菜单和跨会话切换。
+`AGENT_REMOTE_CLIPBOARD=0` 可单独关闭本机
+选区复制桥接，不影响登录链接自动复制。两端升级后，Native 会话重新连接即可应用鼠标设置；旧版 Docker 终端需要停止并重建，
+登录终端需要重新发起账户绑定。新 pane 保留 20,000 行历史。
+SSH 输出结束后，CLI 最多等待 3 秒完成当前复制及最后一个待复制选区。被拒绝或超大选区会触发
+终端响铃，退出交互后显示拒绝／超时说明。Node 的短暂提示仅表示已发送选区，不代表本机剪贴板写入成功。
+
+启动新的 Claude 进程前，会等待 Mutagen 完成同步周期，最多 30 秒；失败、冲突或取消时不启动 Claude。
+恢复运行中的会话不重复等待。恢复时传入新的启动参数会明确提示未应用，可用 `fclaude new` 创建新进程。
+新终端连接会接管旧终端；Ctrl+B 后按 D 断开但保留 Claude，重新执行 `fclaude` 即可连接，不会重放启动命令。
+
 `agent-remote init` 是推荐的首次运行路径。它会引导用户完成：
 
 - 选择控制平面 API URL

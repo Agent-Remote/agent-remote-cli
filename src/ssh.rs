@@ -1,5 +1,10 @@
 use std::process::Command;
 
+mod clipboard;
+mod clipboard_stream;
+mod interactive;
+mod login_clipboard;
+
 use anyhow::{bail, Context, Result};
 
 use crate::api::AttachSessionData;
@@ -22,7 +27,7 @@ pub fn check_ssh_available() -> Result<String> {
     Ok(version)
 }
 
-pub fn execute_attach(paths: &AppPaths, attach: &AttachSessionData) -> Result<()> {
+pub async fn execute_attach(paths: &AppPaths, attach: &AttachSessionData) -> Result<()> {
     paths.ensure_base_dirs()?;
     let known_hosts = paths.ssh_dir().join("known_hosts");
     let remote_command = if attach.command_args.is_empty() {
@@ -34,15 +39,92 @@ pub fn execute_attach(paths: &AppPaths, attach: &AttachSessionData) -> Result<()
     } else {
         attach.command_args.clone()
     };
+    let managed = is_managed_attach(&remote_command.iter().map(Into::into).collect::<Vec<_>>());
     let ssh = crate::platform::ssh_binary();
-    let status = Command::new(&ssh)
-        .args(attach_args(attach, remote_command, &known_hosts))
-        .status()
-        .with_context(|| format!("failed to execute SSH attach with {}", ssh.display()))?;
+    let mut command = tokio::process::Command::new(&ssh);
+    command.args(attach_args(attach, remote_command, &known_hosts));
+    let status = if managed {
+        execute_interactive(&mut command).await
+    } else {
+        command.status().await.map_err(Into::into)
+    }
+    .with_context(|| format!("failed to execute SSH attach with {}", ssh.display()))?;
     if !status.success() {
         bail!("ssh attach exited with {status}");
     }
     Ok(())
+}
+
+/// Runs managed SSH attachment with local login-link copying and unchanged terminal bytes.
+pub async fn execute_interactive(
+    command: &mut tokio::process::Command,
+) -> Result<std::process::ExitStatus> {
+    use std::io::IsTerminal;
+
+    let login_copy = std::env::var_os("AGENT_REMOTE_LOGIN_CLIPBOARD").is_none_or(|v| v != "0");
+    let selection_copy = std::env::var_os("AGENT_REMOTE_CLIPBOARD").is_none_or(|v| v != "0");
+    if !std::io::stdin().is_terminal()
+        || !std::io::stdout().is_terminal()
+        || std::env::var_os("AGENT_REMOTE_LOGIN_CLIPBOARD_ACTIVE").is_some()
+        || !(login_copy || selection_copy)
+    {
+        return command.status().await.context("failed to run SSH");
+    }
+    // Only stdout is observed. OpenSSH retains the real stdin TTY, raw-mode
+    // ownership, window-size signals, keyboard input and its escape handling.
+    command
+        .env("AGENT_REMOTE_LOGIN_CLIPBOARD_ACTIVE", "1")
+        .stdout(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    if login_copy {
+        crate::terminal::note("Claude login links copy automatically. Terminal clipboard permission may be required when no desktop clipboard is available.");
+    }
+    if selection_copy {
+        crate::terminal::note("Drag to select remote text; release to copy (requires an updated Node). Selections are limited to 64 KiB; a bell signals rejected text. Your terminal may support Shift/Option-drag for native selection.");
+    }
+    let mut child = command.spawn().context("failed to start SSH")?;
+    let mut output = child.stdout.take().context("missing SSH output")?;
+    let size = || match terminal_size::terminal_size() {
+        Some((terminal_size::Width(cols), terminal_size::Height(rows))) => (rows, cols),
+        None => (48, 160),
+    };
+    let feedback = interactive::observe(
+        &mut output,
+        &mut std::io::stdout(),
+        login_copy,
+        selection_copy,
+        size,
+        |text| async move { clipboard::copy(&text).await },
+    )
+    .await?;
+    let status = child.wait().await.context("failed to wait for SSH")?;
+    // Feedback outside the TUI avoids moving its cursor, scrolling its screen,
+    // or overwriting Claude's code-entry prompt while SSH owns raw mode.
+    if feedback.incomplete {
+        crate::terminal::note("Some clipboard requests were rejected or timed out. Select at most 64 KiB of text and try again, or use native terminal selection.");
+    }
+    match feedback.native_copy {
+        Some(true) => crate::terminal::note("Remote text copied to your clipboard."),
+        Some(false) => crate::terminal::note("Copy sent to terminal clipboard (OSC 52). If paste failed, enable terminal clipboard access or use native terminal selection."),
+        None => {}
+    }
+    Ok(status)
+}
+
+/// Limits clipboard observation in the packaged SSH proxy to managed attach commands.
+pub fn is_managed_attach(arguments: &[std::ffi::OsString]) -> bool {
+    let words: Vec<_> = arguments
+        .iter()
+        .filter_map(|value| value.to_str())
+        .flat_map(str::split_whitespace)
+        .collect();
+    words.len() >= 3
+        && words[words.len() - 3] == "agent-remote-attach"
+        && matches!(words[words.len() - 2], "--binding" | "--session")
+        && words[words.len() - 1].len() <= 128
+        && words[words.len() - 1]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_:".contains(&b))
 }
 
 fn attach_args(
@@ -158,6 +240,42 @@ pub fn skill_export_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_proxy_only_observes_managed_session_and_binding_attach() {
+        for target in ["--session", "--binding"] {
+            let args = [
+                "-tt",
+                "user@host",
+                "agent-remote-attach",
+                target,
+                "account-123",
+            ]
+            .map(Into::into);
+            assert!(is_managed_attach(&args));
+            assert!(is_managed_attach(&[format!(
+                "agent-remote-attach {target} account-123"
+            )
+            .into()]));
+        }
+        for args in [
+            vec!["user@host", "mutagen-agent", "synchronizer"],
+            vec!["user@host", "agent-remote-tunnel", "--forward", "id"],
+            vec!["user@host", "agent-remote-attach", "--session", "id;sh"],
+            vec![
+                "user@host",
+                "agent-remote-attach",
+                "--session",
+                "id",
+                "extra",
+            ],
+            vec!["-V"],
+        ] {
+            assert!(!is_managed_attach(
+                &args.into_iter().map(Into::into).collect::<Vec<_>>()
+            ));
+        }
+    }
 
     fn attach(forward_ssh_agent: bool) -> AttachSessionData {
         AttachSessionData {

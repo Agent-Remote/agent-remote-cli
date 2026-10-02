@@ -55,6 +55,8 @@ zip = { version = "4.6", default-features = false, features = ["deflate-flate2-z
 cap-std = "3.4.5"
 cap-fs-ext = "3.4.5"
 yaml-rust2 = { version = "0.10", default-features = false }
+vt100 = "0.16"
+terminal_size = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

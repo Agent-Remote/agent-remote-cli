@@ -1735,7 +1735,7 @@ async fn attach(paths: AppPaths, args: crate::cli::AttachArgs) -> Result<()> {
         return Ok(());
     }
     let attach = client.wait_for_attach_authorization(&token, attach).await?;
-    ssh::execute_attach(&paths, &attach)
+    ssh::execute_attach(&paths, &attach).await
 }
 
 async fn resolve_session_reference(

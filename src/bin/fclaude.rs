@@ -345,6 +345,7 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
 
     let session = match existing {
         Some(session) if session.status == "interrupted" => {
+            wait_for_launch_sync(paths, &sync, args.dry_run).await?;
             create_with_takeover_wait(
                 &client,
                 &token,
@@ -360,10 +361,16 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
             )
             .await?
         }
-        Some(session) => session,
+        Some(session) => {
+            if let Some(message) = resumed_arguments_notice(&args.claude_args) {
+                terminal::note(message);
+            }
+            session
+        }
         None => {
             let account =
                 choose_account(paths, &client, &token, args.account_id.as_deref()).await?;
+            wait_for_launch_sync(paths, &sync, args.dry_run).await?;
             create_with_takeover_wait(
                 &client,
                 &token,
@@ -381,6 +388,18 @@ async fn run_or_create_session(paths: &AppPaths, args: FClaudeArgs) -> Result<()
         }
     };
     attach_with_client(paths, &client, &token, &session.id, args.print_only).await
+}
+
+async fn wait_for_launch_sync(
+    paths: &AppPaths,
+    sync: &SyncSessionData,
+    dry_run: bool,
+) -> Result<()> {
+    terminal::note("Waiting for workspace changes to finish syncing before starting Claude (up to 30 seconds)...");
+    agent_remote_cli::session_sync::flush_before_launch(paths, sync, dry_run).await?;
+    // A forced synchronization cycle can discover conflicts that did not exist
+    // during the earlier workspace readiness check.
+    ensure_sync_ready(paths, sync)
 }
 
 async fn list_sessions(paths: &AppPaths, args: &SessionListArgs) -> Result<()> {
@@ -577,7 +596,14 @@ async fn attach_with_client(
         return Ok(());
     }
     let attach = client.wait_for_attach_authorization(token, attach).await?;
-    ssh::execute_attach(paths, &attach)
+    terminal::note("This connection takes over the session from any other terminal. Ctrl+B then D detaches and keeps Claude running.");
+    let result = ssh::execute_attach(paths, &attach).await;
+    terminal::note("Connection ended. If another terminal connected, it now controls the session. Run fclaude to reconnect; detaching does not stop Claude.");
+    result
+}
+
+fn resumed_arguments_notice(arguments: &[String]) -> Option<&'static str> {
+    (!arguments.is_empty()).then_some("Resumed the existing Claude session; new startup arguments were not applied. Use fclaude new with those arguments to start a new session.")
 }
 
 async fn choose_account(
@@ -835,6 +861,16 @@ fn default_account_key() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resumed_session_explains_unapplied_arguments_without_echoing_values() {
+        assert!(super::resumed_arguments_notice(&[]).is_none());
+        let message =
+            super::resumed_arguments_notice(&["--model".into(), "private-value".into()]).unwrap();
+        assert!(message.contains("not applied"));
+        assert!(message.contains("fclaude new"));
+        assert!(!message.contains("private-value"));
+    }
+
     use super::{compact_workdir, DeleteTarget, FClaudeCli, Mode, SessionListArgs};
     use clap::{Command, CommandFactory, Parser};
 

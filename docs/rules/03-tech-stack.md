@@ -10,6 +10,10 @@
 
 Use the standard library before adding a dependency. Keep default features narrow, explain security-sensitive or platform-specific dependencies, and commit lockfile changes with manifest changes. CI must cover supported behavior on Linux and Windows; installer workflows cover the wider release matrix.
 
+`vt100` reconstructs the bounded visible SSH screen for Claude login-link detection, including
+cursor movement, ANSI styling and wrapped URLs. `terminal_size` supplies portable terminal geometry.
+The observer does not retain scrollback, persist terminal content, or change SSH input handling.
+
 `unicode-normalization` supplies NFC validation for the shared skill manifest contract; Rust's
 standard library does not expose Unicode normalization. Matching Python and Go prevents the same
 portable path from receiving incompatible content identities across the three components.

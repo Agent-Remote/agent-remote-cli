@@ -200,7 +200,7 @@ pub fn terminate_session(paths: &AppPaths, name: &str, dry_run: bool) -> Result<
     .map(|_| ())
 }
 
-fn session_name(sync: &SyncSessionData) -> Result<&str> {
+pub(crate) fn session_name(sync: &SyncSessionData) -> Result<&str> {
     sync.mutagen_session_id
         .as_deref()
         .context("sync session has no Mutagen session name")
@@ -244,7 +244,7 @@ fn mutagen_command(paths: &AppPaths, binary: &Path) -> Result<Command> {
     configured_mutagen_command(paths, binary, &ssh_directory)
 }
 
-fn configured_mutagen_command(
+pub(crate) fn configured_mutagen_command(
     paths: &AppPaths,
     binary: &Path,
     ssh_directory: &Path,

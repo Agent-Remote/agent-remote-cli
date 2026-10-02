@@ -65,6 +65,42 @@ Every command and nested command provides `--help`. Runtime output supports
 Errors, warnings, successful actions, section headings, details, and status
 tables use consistent terminal styling.
 
+Claude login links are automatically copied to the local clipboard during first account binding
+and subsequent logins in `fclaude` / `agent-remote attach`. For the connection command shown by
+`account bind` / `account status`, use the packaged `ssh` on your PATH (not `/usr/bin/ssh`).
+The CLI recognizes the completed login screen, joins wrapped links, and copies each new link once;
+ordinary SSH, sync, redirected output, and `--print-only` do not copy anything.
+
+Copying uses macOS `pbcopy`, Windows PowerShell `Set-Clipboard`, WSL's Windows clipboard,
+or Linux `wl-copy` / `xclip` / `xsel`. This works independently of the desktop terminal brand.
+If no desktop clipboard is available, or the CLI itself runs over SSH, it sends OSC 52 to the
+terminal, with tmux / screen passthrough. That fallback requires terminal clipboard support
+and permission; it reports a request, not confirmed success. The displayed link remains available
+if copying is blocked. Login URLs are not saved to local files or logs. Set
+`AGENT_REMOTE_LOGIN_CLIPBOARD=0` to disable automatic copying.
+
+With an updated Node and CLI, drag over Claude's response and release the mouse to copy the
+selection to your local clipboard. Normal clicks and wheel events keep their existing behavior.
+The CLI handles tmux's OSC 52 writes through the same native clipboard backends, including terminals
+without native OSC 52 support. Selections preserve Unicode, indentation, and newlines, up to 64 KiB.
+Clipboard read requests are discarded; selected text is never written to local files or logs.
+Use your terminal's native selection modifier (commonly Shift; Option in iTerm2) to bypass tmux.
+Keyboard selection remains available: Ctrl+B, then `[` opens managed history mode; use arrows or
+PageUp/PageDown, Space to start a selection, Enter/Y to copy, and Esc/Q to return to Claude.
+Command prompts, window creation, menus and session switching are disabled in managed tmux.
+Set `AGENT_REMOTE_CLIPBOARD=0` to disable the CLI selection bridge independently of login-link copying.
+Upgrade both components and reattach Native sessions; legacy Docker terminals must be stopped
+and recreated (restart account binding for a login terminal). New panes retain 20,000 history lines.
+After SSH output closes, the CLI waits up to three seconds for the current and latest pending copy.
+Rejected or oversized selections ring the terminal bell; rejection/timeout details appear after
+leaving the TUI. A Node message means the selection was sent, not that local clipboard access succeeded.
+
+Starting a new Claude process waits up to 30 seconds for a Mutagen synchronization cycle; failure,
+conflicts or cancellation prevent the launch. Resuming a running session does not repeat that wait.
+New startup arguments supplied when resuming are explicitly reported as unapplied; use `fclaude new`
+to apply them to a new process. A new terminal connection takes over from the old one. Ctrl+B then D
+detaches without stopping Claude; run `fclaude` again to reconnect. Startup commands are not replayed.
+
 `agent-remote init` is the recommended first-run path. It guides the user through:
 
 - selecting the control-plane API URL
