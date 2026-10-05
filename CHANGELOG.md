@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.43 - 2026-10-05
+
+- fix: align managed node release dependency (48a9324)
+
 ## v0.2.42 - 2026-10-02
 
 - fix: retain macos signing identity marker (98420d4)
