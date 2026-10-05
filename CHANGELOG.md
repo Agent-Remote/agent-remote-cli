@@ -2,6 +2,12 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.47 - 2026-10-05
+
+- fix(attachments): preserve windows drop path separators (df631bc)
+- fix(attachments): support cross-platform clipboard decoding (b4e7d80)
+- feat(attachments): bridge clipboard attachments to remote claude (7fd2e18)
+
 ## v0.2.46 - 2026-10-05
 
 - fix(release): align node dependency to v0.2.46 (68a1820)
