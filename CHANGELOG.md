@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.45 - 2026-10-05
+
+- fix(release): align node dependency to v0.2.42 (84b266f)
+
 ## v0.2.44 - 2026-10-05
 
 - fix(release): align node dependency to v0.2.41 (9e1ee4b)
