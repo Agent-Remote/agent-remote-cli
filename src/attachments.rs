@@ -8,6 +8,8 @@
 use crate::mutagen;
 use crate::{api::SyncSessionData, config::AppPaths};
 use anyhow::{bail, Context, Result};
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+use base64::Engine;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -533,6 +535,8 @@ fn set_private(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -542,6 +546,8 @@ fn set_private_directory(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
