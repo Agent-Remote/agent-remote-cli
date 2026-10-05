@@ -266,6 +266,29 @@ impl LocalState {
         Ok(workspace)
     }
 
+    #[allow(dead_code)]
+    pub fn get_workspace_by_id(&self, workspace_id: &str) -> Result<Option<LocalWorkspace>> {
+        let workspace = self
+            .connection
+            .query_row(
+                "SELECT id, server_url, project_key, local_path, display_name, remote_path
+                 FROM workspaces WHERE id = ?1",
+                params![workspace_id],
+                |row| {
+                    Ok(LocalWorkspace {
+                        id: row.get(0)?,
+                        server_url: row.get(1)?,
+                        project_key: row.get(2)?,
+                        local_path: row.get(3)?,
+                        display_name: row.get(4)?,
+                        remote_path: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(workspace)
+    }
+
     pub fn delete_workspace_mapping(&self, workspace_id: &str) -> Result<()> {
         self.connection.execute(
             "DELETE FROM sync_sessions WHERE workspace_id = ?1",

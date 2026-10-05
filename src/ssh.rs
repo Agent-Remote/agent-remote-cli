@@ -6,8 +6,10 @@ mod interactive;
 mod login_clipboard;
 
 use anyhow::{bail, Context, Result};
+use tokio::io::AsyncWriteExt;
 
 use crate::api::AttachSessionData;
+use crate::attachments::{self, AttachmentContext, InputDecoder, InputEvent};
 use crate::config::AppPaths;
 
 pub fn check_ssh_available() -> Result<String> {
@@ -28,6 +30,14 @@ pub fn check_ssh_available() -> Result<String> {
 }
 
 pub async fn execute_attach(paths: &AppPaths, attach: &AttachSessionData) -> Result<()> {
+    execute_attach_with_context(paths, attach, None).await
+}
+
+pub async fn execute_attach_with_context(
+    paths: &AppPaths,
+    attach: &AttachSessionData,
+    attachment: Option<AttachmentContext>,
+) -> Result<()> {
     paths.ensure_base_dirs()?;
     let known_hosts = paths.ssh_dir().join("known_hosts");
     let remote_command = if attach.command_args.is_empty() {
@@ -44,7 +54,7 @@ pub async fn execute_attach(paths: &AppPaths, attach: &AttachSessionData) -> Res
     let mut command = tokio::process::Command::new(&ssh);
     command.args(attach_args(attach, remote_command, &known_hosts));
     let status = if managed {
-        execute_interactive(&mut command).await
+        execute_interactive_with_attachments(&mut command, attachment, Some(paths)).await
     } else {
         command.status().await.map_err(Into::into)
     }
@@ -56,25 +66,41 @@ pub async fn execute_attach(paths: &AppPaths, attach: &AttachSessionData) -> Res
 }
 
 /// Runs managed SSH attachment with local login-link copying and unchanged terminal bytes.
+#[allow(dead_code)]
 pub async fn execute_interactive(
     command: &mut tokio::process::Command,
+) -> Result<std::process::ExitStatus> {
+    execute_interactive_with_attachments(command, None, None).await
+}
+
+async fn execute_interactive_with_attachments(
+    command: &mut tokio::process::Command,
+    attachment: Option<AttachmentContext>,
+    app_paths: Option<&AppPaths>,
 ) -> Result<std::process::ExitStatus> {
     use std::io::IsTerminal;
 
     let login_copy = std::env::var_os("AGENT_REMOTE_LOGIN_CLIPBOARD").is_none_or(|v| v != "0");
     let selection_copy = std::env::var_os("AGENT_REMOTE_CLIPBOARD").is_none_or(|v| v != "0");
+    let attachment = attachment
+        .filter(|_| std::env::var_os("AGENT_REMOTE_ATTACHMENTS").is_none_or(|value| value != "0"));
+    let attachment_requested = attachment.is_some();
     if !std::io::stdin().is_terminal()
         || !std::io::stdout().is_terminal()
         || std::env::var_os("AGENT_REMOTE_LOGIN_CLIPBOARD_ACTIVE").is_some()
-        || !(login_copy || selection_copy)
+        || !(login_copy || selection_copy || attachment_requested)
     {
         return command.status().await.context("failed to run SSH");
     }
-    // Only stdout is observed. OpenSSH retains the real stdin TTY, raw-mode
-    // ownership, window-size signals, keyboard input and its escape handling.
+    let attachment_enabled = attachment.is_some();
     command
         .env("AGENT_REMOTE_LOGIN_CLIPBOARD_ACTIVE", "1")
         .stdout(std::process::Stdio::piped())
+        .stdin(if attachment_enabled {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::inherit()
+        })
         .kill_on_drop(true);
     if login_copy {
         crate::terminal::note("Claude login links copy automatically. Terminal clipboard permission may be required when no desktop clipboard is available.");
@@ -84,6 +110,23 @@ pub async fn execute_interactive(
     }
     let mut child = command.spawn().context("failed to start SSH")?;
     let mut output = child.stdout.take().context("missing SSH output")?;
+    let mut input_task = None;
+    if let Some(attachment) = attachment {
+        let input = child
+            .stdin
+            .take()
+            .context("missing SSH input for attachment bridge")?;
+        let paths = match app_paths {
+            Some(paths) => paths.clone(),
+            None => AppPaths::new(None)?,
+        };
+        input_task = Some(tokio::spawn(async move {
+            relay_input(input, paths, attachment).await
+        }));
+        crate::terminal::note(
+            "Clipboard images and file drops are bridged into the synchronized Claude workspace.",
+        );
+    }
     let size = || match terminal_size::terminal_size() {
         Some((terminal_size::Width(cols), terminal_size::Height(rows))) => (rows, cols),
         None => (48, 160),
@@ -98,6 +141,10 @@ pub async fn execute_interactive(
     )
     .await?;
     let status = child.wait().await.context("failed to wait for SSH")?;
+    if let Some(task) = input_task {
+        task.abort();
+        let _ = task.await;
+    }
     // Feedback outside the TUI avoids moving its cursor, scrolling its screen,
     // or overwriting Claude's code-entry prompt while SSH owns raw mode.
     if feedback.incomplete {
@@ -109,6 +156,131 @@ pub async fn execute_interactive(
         None => {}
     }
     Ok(status)
+}
+
+async fn relay_input(
+    mut remote: tokio::process::ChildStdin,
+    paths: AppPaths,
+    attachment: AttachmentContext,
+) -> Result<()> {
+    // Some terminal compatibility layers (for example restricted CI PTYs)
+    // reject raw mode. Keep relaying input in that case so attachment support
+    // never turns a usable Claude session into a disconnected one.
+    let _raw_mode = RawModeGuard::enable().ok();
+    let mut local = tokio::io::stdin();
+    let mut decoder = InputDecoder::default();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = tokio::io::AsyncReadExt::read(&mut local, &mut buffer).await?;
+        if count == 0 {
+            for event in decoder.finish() {
+                if let InputEvent::Bytes(bytes) = event {
+                    remote.write_all(&bytes).await?;
+                }
+            }
+            remote.flush().await?;
+            break;
+        }
+        for event in decoder.feed(&buffer[..count]) {
+            match event {
+                InputEvent::Bytes(bytes) => remote.write_all(&bytes).await?,
+                InputEvent::ClipboardPaste => {
+                    let payload = tokio::task::spawn_blocking(attachments::read_clipboard_payload)
+                        .await
+                        .ok()
+                        .flatten();
+                    if let Some(payload) = payload {
+                        let attachment = attachment.clone();
+                        let paths_clone = paths.clone();
+                        let staged = tokio::task::spawn_blocking(move || {
+                            attachment.stage_payload(&paths_clone, payload)
+                        })
+                        .await
+                        .ok()
+                        .and_then(Result::ok);
+                        if let Some(staged) = staged {
+                            remote
+                                .write_all(&bracketed_attachment_text(&staged))
+                                .await?;
+                        } else {
+                            remote.write_all(b"\x07\x16").await?;
+                        }
+                    } else {
+                        remote.write_all(&[0x16]).await?;
+                    }
+                }
+                InputEvent::BracketedPaste(value) => {
+                    if let Some(local_paths) = attachments::parse_dropped_paths(
+                        std::str::from_utf8(&value).unwrap_or_default(),
+                    ) {
+                        let attachment = attachment.clone();
+                        let paths_clone = paths.clone();
+                        let staged = tokio::task::spawn_blocking(move || {
+                            attachment.stage_payload(
+                                &paths_clone,
+                                attachments::ClipboardPayload::Files(local_paths),
+                            )
+                        })
+                        .await
+                        .ok()
+                        .and_then(Result::ok);
+                        if let Some(staged) = staged {
+                            remote
+                                .write_all(&bracketed_attachment_text(&staged))
+                                .await?;
+                        } else {
+                            remote.write_all(b"\x07\x1b[200~").await?;
+                            remote.write_all(&value).await?;
+                            remote.write_all(b"\x1b[201~").await?;
+                        }
+                    } else {
+                        remote.write_all(b"\x1b[200~").await?;
+                        remote.write_all(&value).await?;
+                        remote.write_all(b"\x1b[201~").await?;
+                    }
+                }
+            }
+        }
+        remote.flush().await?;
+    }
+    Ok(())
+}
+
+fn bracketed_attachment_text(paths: &[String]) -> Vec<u8> {
+    let value = paths
+        .iter()
+        .map(|path| shell_escape_path(path))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut output = b"\x1b[200~".to_vec();
+    output.extend(value.as_bytes());
+    output.extend_from_slice(b"\x1b[201~");
+    output
+}
+
+fn shell_escape_path(value: &str) -> String {
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b"-._/:\\".contains(&byte))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> Result<Self> {
+        crossterm::terminal::enable_raw_mode().context("failed to enable terminal raw mode")?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
 }
 
 /// Limits clipboard observation in the packaged SSH proxy to managed attach commands.

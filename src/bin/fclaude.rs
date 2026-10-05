@@ -5,6 +5,7 @@ use agent_remote_cli::api::{
     ApiClient, CreateSessionRequest, CreateSyncSessionRequest, CreateWorkspaceRequest,
     GitSyncPolicy, SessionData, SyncSessionData, ToolAccountData, WorkspaceData,
 };
+use agent_remote_cli::attachments::AttachmentContext;
 use agent_remote_cli::auth::load_device_token;
 use agent_remote_cli::cli::ForwardArgs;
 use agent_remote_cli::cli::VERSION;
@@ -597,9 +598,63 @@ async fn attach_with_client(
     }
     let attach = client.wait_for_attach_authorization(token, attach).await?;
     terminal::note("This connection takes over the session from any other terminal. Ctrl+B then D detaches and keeps Claude running.");
-    let result = ssh::execute_attach(paths, &attach).await;
+    let attachment = match load_attachment_context(paths, client, token, session_id).await {
+        Ok(context) => context,
+        Err(error) => {
+            terminal::warning_line(format!(
+                "Clipboard image/file bridge unavailable for this session: {error:#}"
+            ));
+            None
+        }
+    };
+    let result = ssh::execute_attach_with_context(paths, &attach, attachment).await;
     terminal::note("Connection ended. If another terminal connected, it now controls the session. Run fclaude to reconnect; detaching does not stop Claude.");
     result
+}
+
+async fn load_attachment_context(
+    paths: &AppPaths,
+    client: &ApiClient,
+    token: &str,
+    session_id: &str,
+) -> Result<Option<AttachmentContext>> {
+    let session = client.get_tool_session(token, session_id).await?;
+    let state = LocalState::open(paths)?;
+    state.init_schema()?;
+    let workspace = state
+        .get_workspace_by_id(&session.workspace_id)?
+        .context("workspace mapping is missing locally")?;
+    let local_sync = state
+        .get_sync_session_for_workspace(&session.workspace_id)?
+        .context("workspace sync mapping is missing locally")?;
+    let sync = client.get_sync_session(token, &local_sync.id).await?;
+    if sync.status != "active" {
+        bail!("workspace sync is {}", sync.status);
+    }
+    let local_workspace = session
+        .workspace_local_path
+        .clone()
+        .or_else(|| Some(workspace.local_path.clone()))
+        .unwrap_or_else(|| sync.local_path.clone());
+    let local_workspace =
+        workspace::identify_workspace(Some(Path::new(&local_workspace)))?.local_path;
+    if !local_workspace.is_dir() {
+        bail!(
+            "local workspace does not exist: {}",
+            local_workspace.display()
+        );
+    }
+    // The API's remote path is the node host path. Native and Docker Claude
+    // runtimes bind that directory at /workspace inside the sandbox, which is
+    // the only path Claude can read from its prompt.
+    let remote_workspace =
+        std::env::var("AGENT_REMOTE_CLAUDE_WORKSPACE").unwrap_or_else(|_| "/workspace".to_string());
+    Ok(Some(AttachmentContext::new(
+        local_workspace,
+        remote_workspace,
+        session.id,
+        sync,
+    )))
 }
 
 fn resumed_arguments_notice(arguments: &[String]) -> Option<&'static str> {

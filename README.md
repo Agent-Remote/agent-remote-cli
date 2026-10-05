@@ -89,6 +89,13 @@ Keyboard selection remains available: Ctrl+B, then `[` opens managed history mod
 PageUp/PageDown, Space to start a selection, Enter/Y to copy, and Esc/Q to return to Claude.
 Command prompts, window creation, menus and session switching are disabled in managed tmux.
 Set `AGENT_REMOTE_CLIPBOARD=0` to disable the CLI selection bridge independently of login-link copying.
+When an attached `fclaude` session has a local workspace sync, the CLI also bridges image and file
+attachments on macOS, Linux, WSL, and Windows. Use the terminal's paste shortcut (or Ctrl+V when
+the terminal forwards it) for an image/file clipboard, or drag files into the terminal. The CLI
+copies external files into `.agent-remote/attachments/<session>` in the synchronized workspace,
+then pastes the remote paths into Claude. Ordinary text paste keeps its original bracketed-paste
+behavior. Images are limited to 64 MiB, files/directories to 256 MiB per paste, and 32 paths.
+Set `AGENT_REMOTE_ATTACHMENTS=0` to turn off this input bridge and retain direct SSH terminal input.
 Upgrade both components and reattach Native sessions; legacy Docker terminals must be stopped
 and recreated (restart account binding for a login terminal). New panes retain 20,000 history lines.
 After SSH output closes, the CLI waits up to three seconds for the current and latest pending copy.

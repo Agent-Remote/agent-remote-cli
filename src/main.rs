@@ -1,6 +1,7 @@
 use agent_remote_cli::skills;
 
 mod api;
+mod attachments;
 mod auth;
 mod bridge_release;
 mod broker_credentials;
