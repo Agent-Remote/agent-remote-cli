@@ -302,7 +302,21 @@ fn decode_uri_or_shell_path(value: &str) -> Option<String> {
             && value.as_bytes()[1] == b':'
             && matches!(value.as_bytes()[2], b'\\' | b'/'))
     {
-        return Some(value.trim_matches(['\'', '"']).to_string());
+        let value = value.trim_matches(['\'', '"']);
+        let mut output = String::with_capacity(value.len());
+        let mut chars = value.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\\'
+                && chars
+                    .peek()
+                    .is_some_and(|next| matches!(next, ' ' | '\t' | '\'' | '"'))
+            {
+                output.push(chars.next().expect("peeked character exists"));
+            } else {
+                output.push(ch);
+            }
+        }
+        return Some(output);
     }
     let mut output = String::with_capacity(value.len());
     let mut escaped = false;
