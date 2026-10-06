@@ -28,3 +28,8 @@ The Server independently validates metadata and remains authoritative.
 State resolution uploads enable Reqwest's `stream` feature and Tokio filesystem support. The existing
 Tokio utility dependency is declared directly with its `io` feature for `ReaderStream`; 64 KiB chunks
 provide backpressure over private staged files without loading GiB-scale runtime data into memory.
+
+`image` enables only BMP, TIFF, and PNG codecs to normalize clipboard formats without
+external image tools. Decoding is limited to 8192 pixels per dimension and 64 MiB
+allocation; encoded output is bounded to 64 MiB. Existing Claude-supported formats
+keep their original bytes and matching extensions. Cargo.lock pins codec dependencies.

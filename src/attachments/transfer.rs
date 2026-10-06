@@ -188,12 +188,19 @@ impl Transfer {
         })
     }
 
+    fn can_recover(&self, receipt: &Receipt) -> bool {
+        receipt.endpoint == self.receipt.endpoint
+            && receipt.account == self.receipt.account
+            && validate_session_id(&receipt.session).is_ok()
+            && validate_session_id(&receipt.lease).is_ok()
+    }
+
     async fn recover(&self, paths: &AppPaths) -> Result<()> {
         let root = paths.home().join("attachments/pending");
         let Ok(entries) = std::fs::read_dir(root) else {
             return Ok(());
         };
-        for entry in entries.take(64) {
+        for entry in entries {
             let entry = entry?;
             if !entry.file_type()?.is_file() || entry.metadata()?.len() > 16384 {
                 continue;
@@ -209,11 +216,7 @@ impl Transfer {
             let Ok(receipt) = serde_json::from_slice::<Receipt>(&bytes) else {
                 continue;
             };
-            if receipt.endpoint != self.receipt.endpoint
-                || receipt.account != self.receipt.account
-                || receipt.session != self.receipt.session
-                || validate_session_id(&receipt.lease).is_err()
-            {
+            if !self.can_recover(&receipt) {
                 continue;
             }
             let mut connection = Connection::open(paths, &receipt).await?;
@@ -382,6 +385,22 @@ mod tests {
             visible_account: "/account".into(),
             journal: Mutex::new(None),
         }
+    }
+
+    #[test]
+    fn stale_sessions_recover_but_foreign_and_invalid_receipts_do_not() {
+        let transfer = transfer();
+        let mut receipt = transfer.receipt.clone();
+        receipt.session = "previous-session".into();
+        assert!(transfer.can_recover(&receipt));
+        receipt.session = "../escape".into();
+        assert!(!transfer.can_recover(&receipt));
+        receipt.session = "valid".into();
+        receipt.lease = "../escape".into();
+        assert!(!transfer.can_recover(&receipt));
+        receipt.lease = unique_id();
+        receipt.endpoint.port += 1;
+        assert!(!transfer.can_recover(&receipt));
     }
 
     #[tokio::test]

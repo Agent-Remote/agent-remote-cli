@@ -99,9 +99,16 @@ it under `/account`, while Docker Sandbox uses the mounted account path. No atta
 session or background transfer daemon is created. Each connection owns a separate temporary
 directory and reuses one owned SSH channel for successive uploads. EOF and detach remove its
 files automatically. Interrupted cleanup retains a private local receipt and retries on
-the next attachment transfer for the same session; another live terminal's files are never removed.
-Ordinary text paste
-keeps its original bracketed-paste behavior. Images are limited to 64 MiB, files/directories to
+the next attachment transfer to the same account and SSH endpoint; another live terminal's files are never removed.
+Quoted/escaped multi-file drops and local file URIs are recognized atomically; plain filenames
+in ordinary text are not uploaded implicitly. Windows drive/UNC paths and WSL path translation
+preserve Unicode. PNG/JPEG/GIF/WebP keep their formats; BMP/TIFF are converted to PNG with
+8192-pixel dimension and 64 MiB decoder allocation limits. Linux image/file reads require
+`wl-paste` (Wayland) or `xclip` (X11); `xsel` supports text copying only. An SSH jump host never
+reads its own desktop clipboard on behalf of the local terminal.
+Ctrl+V must reach the CLI (raw or supported enhanced keyboard encoding); terminal shortcuts
+that consume image pastes cannot be intercepted. File drops require bracketed-paste framing.
+Ordinary text paste keeps its original bracketed-paste behavior, including pastes above 1 MiB. Images are limited to 64 MiB, files/directories to
 256 MiB and 10,000 entries per paste, and 32 paths. Local archives are removed automatically.
 The Node installer already provides the Python 3 interpreter used inside its existing user-isolated
 SSH sync sandbox; no additional public endpoint or server credential is needed.

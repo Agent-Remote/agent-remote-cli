@@ -172,12 +172,13 @@ async fn execute_interactive_with_attachments(
     let killer = pty_child.killer();
     let wait = pty_child.wait();
     tokio::pin!(wait);
-    let (observe_result, status_result) = tokio::select! {
+    let (observe_result, status_result) = loop {
+        tokio::select! {
         status = &mut wait => {
             exit.reset();
             tasks.abort_all();
             while tasks.join_next().await.is_some() {}
-            (observer.await, status)
+            break (observer.await, status);
         }
         observed = &mut observer => {
             exit.reset();
@@ -187,7 +188,23 @@ async fn execute_interactive_with_attachments(
                 let mut killer = killer;
                 let _ = killer.kill();
             }
-            (observed, wait.await)
+            break (observed, wait.await);
+        }
+        completed = tasks.join_next(), if !tasks.is_empty() => {
+            let failure = match completed {
+                Some(Ok(Err(error))) => Some(error),
+                Some(Err(error)) => Some(anyhow::Error::from(error)),
+                _ => None,
+            };
+            if let Some(error) = failure {
+                exit.reset();
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+                let mut killer = killer;
+                let _ = killer.kill();
+                break (Err(error.context("terminal input relay failed")), wait.await);
+            }
+        }
         }
     };
 

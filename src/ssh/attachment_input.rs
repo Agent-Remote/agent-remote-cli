@@ -84,7 +84,15 @@ where
     let mut queue = InputQueue::default();
     let mut previous_size = pty::command_size();
     loop {
-        let bytes = queue.receive(&mut input, &exit).await?;
+        let pending_prefix = queue.decoder.has_pending_prefix();
+        let bytes = tokio::select! {
+            result = queue.receive(&mut input, &exit) => result?,
+            _ = tokio::time::sleep(Duration::from_millis(40)), if pending_prefix => {
+                remote.write_all(&queue.decoder.flush_prefix()).await?;
+                remote.flush().await?;
+                continue;
+            }
+        };
         if exit.started() {
             // The triggering bytes may end a prefix sent in an earlier read.
             // Never start a clipboard operation once detach was requested.
@@ -98,6 +106,7 @@ where
         }
         resize_if_needed(&resize, &mut previous_size);
         for event in queue.decoder.feed(&bytes) {
+            let mut fallback = vec![0x16];
             let prepared = match event {
                 InputEvent::Bytes(bytes) => {
                     remote.write_all(&bytes).await?;
@@ -112,7 +121,7 @@ where
                             &attachment,
                             async {
                                 let payload = tokio::time::timeout(
-                                    Duration::from_secs(3),
+                                    Duration::from_secs(5),
                                     attachments::read_clipboard_payload(),
                                 )
                                 .await
@@ -129,32 +138,38 @@ where
                         .await
                 }
                 InputEvent::BracketedPaste(value) => {
-                    if let Some(files) = attachments::parse_dropped_paths(
-                        std::str::from_utf8(&value).unwrap_or_default(),
-                    ) {
-                        queue
-                            .upload(
-                                &mut remote,
-                                &mut input.receiver,
-                                &exit,
-                                &attachment,
-                                async {
-                                    attachment
+                    fallback = b"\x1b[200~".to_vec();
+                    fallback.extend_from_slice(&value);
+                    fallback.extend_from_slice(b"\x1b[201~");
+                    queue
+                        .upload(
+                            &mut remote,
+                            &mut input.receiver,
+                            &exit,
+                            &attachment,
+                            async {
+                                let files = tokio::time::timeout(
+                                    Duration::from_secs(5),
+                                    attachments::parse_dropped_paths(
+                                        std::str::from_utf8(&value).unwrap_or_default(),
+                                    ),
+                                )
+                                .await
+                                .ok()
+                                .flatten();
+                                match files {
+                                    Some(files) => attachment
                                         .stage_payload(
                                             &paths,
                                             attachments::ClipboardPayload::Files(files),
                                         )
                                         .await
-                                        .map(Some)
-                                },
-                            )
-                            .await
-                    } else {
-                        remote.write_all(b"\x1b[200~").await?;
-                        remote.write_all(&value).await?;
-                        remote.write_all(b"\x1b[201~").await?;
-                        continue;
-                    }
+                                        .map(Some),
+                                    None => Ok(None),
+                                }
+                            },
+                        )
+                        .await
                 }
             };
             if exit.started() {
@@ -162,7 +177,7 @@ where
             }
             match prepared {
                 Ok(Some(files)) => remote.write_all(&bracketed_attachment_text(&files)).await?,
-                Ok(None) => remote.write_all(&[0x16]).await?,
+                Ok(None) => remote.write_all(&fallback).await?,
                 Err(_) if exit.started() => return Ok(()),
                 Err(_) => crate::terminal::warning_line(
                     "Attachment upload failed; no path was inserted. Retry the paste or file drop.",
