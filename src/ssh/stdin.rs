@@ -37,12 +37,16 @@ impl Drop for StdinReader {
             #[cfg(windows)]
             {
                 use std::os::windows::io::AsRawHandle;
-                use windows_sys::Win32::System::IO::CancelSynchronousIo;
+                use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE};
+                use windows_sys::Win32::System::IO::{CancelIoEx, CancelSynchronousIo};
                 // Repeat to cover cancellation racing the start of ReadConsole.
                 // Unlike injecting a newline, this never becomes shell input.
                 while !thread.is_finished() {
                     // SAFETY: the JoinHandle owns this live thread handle.
-                    unsafe { CancelSynchronousIo(thread.as_raw_handle()) };
+                    unsafe {
+                        CancelIoEx(GetStdHandle(STD_INPUT_HANDLE), std::ptr::null());
+                        CancelSynchronousIo(thread.as_raw_handle());
+                    };
                     thread::sleep(std::time::Duration::from_millis(5));
                 }
             }

@@ -168,7 +168,15 @@ fn final_state_rewalk_includes_git_and_rejects_replaced_data() {
             .unwrap(),
         3
     );
-    fs::write(root.path().join(".git/config"), b"after!").unwrap();
+    let config = root.path().join(".git/config");
+    fs::write(&config, b"after!").unwrap();
+    // Equal-length writes can share an mtime on Windows. Make the mutation
+    // deterministic without depending on the runner's filesystem clock tick.
+    let file = fs::OpenOptions::new().write(true).open(&config).unwrap();
+    let changed = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+    file.set_times(std::fs::FileTimes::new().set_modified(changed))
+        .unwrap();
+    drop(file);
     assert!(
         source_fs::verify_selected_tree(&dir, "", &expected, SourceEntries::All, &|| Ok(()))
             .is_err()

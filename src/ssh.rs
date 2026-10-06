@@ -147,29 +147,46 @@ async fn execute_interactive_with_attachments(
         Some((terminal_size::Width(cols), terminal_size::Height(rows))) => (rows, cols),
         None => (48, 160),
     };
-    let observe_result = interactive::observe(
+    let mut stdout = std::io::stdout();
+    let observer = interactive::observe(
         &mut output,
-        &mut std::io::stdout(),
+        &mut stdout,
         login_copy,
         selection_copy,
         size,
         |text| async move { clipboard::copy(&text).await },
-    )
-    .await;
+    );
+    tokio::pin!(observer);
+    // ConPTY keeps its output pipe open until the PTY master is closed.
+    // Reap SSH independently, then stop the relays that own the master while
+    // continuing to drain final output and clipboard requests.
+    let killer = pty_child.killer();
+    let wait = pty_child.wait();
+    tokio::pin!(wait);
+    let (observe_result, status_result) = tokio::select! {
+        status = &mut wait => {
+            tasks.abort_all();
+            while tasks.join_next().await.is_some() {}
+            (observer.await, status)
+        }
+        observed = &mut observer => {
+            tasks.abort_all();
+            while tasks.join_next().await.is_some() {}
+            if observed.is_err() {
+                let mut killer = killer;
+                let _ = killer.kill();
+            }
+            (observed, wait.await)
+        }
+    };
 
     // Closing the receiver cancels and joins the native reader before local
     // terminal modes are restored. No reader survives to steal shell input.
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
     drop(raw_mode);
-    let feedback = match observe_result {
-        Ok(feedback) => feedback,
-        Err(error) => {
-            let _ = pty_child.kill().await;
-            return Err(error);
-        }
-    };
-    let status = pty::exit_status(pty_child.wait().await?);
+    let feedback = observe_result?;
+    let status = pty::exit_status(status_result?);
     // Feedback outside the TUI avoids moving its cursor, scrolling its screen,
     // or overwriting Claude's code-entry prompt while SSH owns raw mode.
     if feedback.incomplete {
