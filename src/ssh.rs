@@ -7,6 +7,7 @@ mod login_clipboard;
 mod pty;
 
 use anyhow::{bail, Context, Result};
+use std::io::Read;
 use tokio::io::AsyncWriteExt;
 
 use crate::api::AttachSessionData;
@@ -124,12 +125,14 @@ async fn execute_interactive_with_attachments(
         crate::terminal::note(
             "Clipboard images and file drops are bridged into the synchronized Claude workspace.",
         );
+        let input = spawn_stdin_reader()?;
         Some(tokio::spawn(async move {
-            relay_input(writer, resize_handle, paths, attachment).await
+            relay_input(writer, resize_handle, input, paths, attachment).await
         }))
     } else {
+        let input = spawn_stdin_reader()?;
         Some(tokio::spawn(async move {
-            relay_passthrough(writer, resize_handle).await
+            relay_passthrough(writer, resize_handle, input).await
         }))
     };
     let size = || match terminal_size::terminal_size() {
@@ -145,14 +148,22 @@ async fn execute_interactive_with_attachments(
         |text| async move { clipboard::copy(&text).await },
     )
     .await?;
+
+    // Stop consuming stdin before waiting for SSH. Otherwise a mouse-release
+    // report emitted by the terminal as tmux detaches can race with raw-mode
+    // teardown and land in the user's shell. Flush both the already queued
+    // bytes and anything that arrived during the child shutdown window.
+    if let Some(task) = input_task {
+        task.abort();
+        crate::terminal::flush_input();
+        let _ = task.await;
+    }
     let status = pty::exit_status(pty_child.wait().await?);
     resize_task.abort();
     let _ = resize_task.await;
-    if let Some(task) = input_task {
-        task.abort();
-        let _ = task.await;
-    }
+    crate::terminal::flush_input();
     let _ = crossterm::terminal::disable_raw_mode();
+    crate::terminal::flush_input();
     let _ = std::io::Write::flush(&mut std::io::stdout());
     // Feedback outside the TUI avoids moving its cursor, scrolling its screen,
     // or overwriting Claude's code-entry prompt while SSH owns raw mode.
@@ -170,6 +181,7 @@ async fn execute_interactive_with_attachments(
 async fn relay_input<W>(
     mut remote: W,
     resize_handle: pty::ResizeHandle,
+    mut input: StdinReader,
     paths: AppPaths,
     attachment: AttachmentContext,
 ) -> Result<()>
@@ -180,12 +192,15 @@ where
     // reject raw mode. Keep relaying input in that case so attachment support
     // never turns a usable Claude session into a disconnected one.
     let _raw_mode = RawModeGuard::enable().ok();
-    let mut local = tokio::io::stdin();
     let mut decoder = InputDecoder::default();
     let mut buffer = [0u8; 8192];
     let mut previous_size = pty::command_size();
     loop {
-        let count = tokio::io::AsyncReadExt::read(&mut local, &mut buffer).await?;
+        let Some(bytes) = input.recv().await? else {
+            break;
+        };
+        let count = bytes.len();
+        buffer[..count].copy_from_slice(&bytes);
         if count == 0 {
             for event in decoder.finish() {
                 if let InputEvent::Bytes(bytes) = event {
@@ -261,16 +276,23 @@ where
     Ok(())
 }
 
-async fn relay_passthrough<W>(mut remote: W, resize_handle: pty::ResizeHandle) -> Result<()>
+async fn relay_passthrough<W>(
+    mut remote: W,
+    resize_handle: pty::ResizeHandle,
+    mut input: StdinReader,
+) -> Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
     let _raw_mode = RawModeGuard::enable().ok();
-    let mut local = tokio::io::stdin();
     let mut buffer = [0u8; 8192];
     let mut previous_size = pty::command_size();
     loop {
-        let count = tokio::io::AsyncReadExt::read(&mut local, &mut buffer).await?;
+        let Some(bytes) = input.recv().await? else {
+            break;
+        };
+        let count = bytes.len();
+        buffer[..count].copy_from_slice(&bytes);
         if count == 0 {
             remote.shutdown().await?;
             break;
@@ -280,6 +302,49 @@ where
         remote.flush().await?;
     }
     Ok(())
+}
+
+/// Reads terminal bytes on a detached OS thread so cancelling an attach never
+/// leaves Tokio waiting for a blocking stdin read. The thread exits on its next
+/// read once the receiver is dropped; the fclaude process does not join it.
+struct StdinReader {
+    receiver: tokio::sync::mpsc::UnboundedReceiver<std::io::Result<Vec<u8>>>,
+}
+
+impl StdinReader {
+    async fn recv(&mut self) -> Result<Option<Vec<u8>>> {
+        match self.receiver.recv().await {
+            Some(Ok(bytes)) => Ok(Some(bytes)),
+            Some(Err(error)) => Err(error.into()),
+            None => Ok(None),
+        }
+    }
+}
+
+fn spawn_stdin_reader() -> Result<StdinReader> {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::Builder::new()
+        .name("agent-remote-stdin".to_string())
+        .spawn(move || {
+            let mut stdin = std::io::stdin();
+            let mut buffer = [0u8; 8192];
+            loop {
+                match stdin.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        if sender.send(Ok(buffer[..count].to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        })
+        .context("failed to start terminal input reader")?;
+    Ok(StdinReader { receiver })
 }
 
 fn resize_if_needed(handle: &pty::ResizeHandle, previous: &mut portable_pty::PtySize) {

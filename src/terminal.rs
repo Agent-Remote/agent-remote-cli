@@ -154,6 +154,42 @@ pub fn note(message: impl std::fmt::Display) {
     println!("{} {message}", muted("NOTE"));
 }
 
+/// Discard bytes that arrived while an interactive attach was shutting down.
+///
+/// A terminal can deliver the mouse-release part of an SGR mouse report just
+/// after tmux has processed `Ctrl-B d`. If that byte remains queued when raw
+/// mode is restored, the user's shell consumes it as a command line and waits
+/// for an extra Enter. Flushing the input queue keeps those terminal protocol
+/// bytes out of the shell. This is intentionally a no-op on unsupported
+/// platforms and when stdin is not a terminal.
+pub fn flush_input() {
+    #[cfg(unix)]
+    {
+        // SAFETY: tcflush only operates on the process' stdin descriptor and
+        // does not dereference any Rust pointer.
+        unsafe {
+            let _ = libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Console::{
+            FlushConsoleInputBuffer, GetStdHandle, STD_INPUT_HANDLE,
+        };
+
+        // SAFETY: GetStdHandle returns the process-owned console input handle;
+        // FlushConsoleInputBuffer validates the handle before using it.
+        unsafe {
+            let handle = GetStdHandle(STD_INPUT_HANDLE);
+            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+                let _ = FlushConsoleInputBuffer(handle);
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Details {
     rows: Vec<(String, String, bool)>,
