@@ -607,7 +607,13 @@ async fn attach_with_client(
             None
         }
     };
+    let cleanup = attachment.clone();
     let result = ssh::execute_attach_with_context(paths, &attach, attachment).await;
+    if let Some(attachment) = cleanup {
+        if let Err(error) = attachment.cleanup(paths) {
+            terminal::warning_line(format!("Temporary attachment cleanup failed: {error:#}"));
+        }
+    }
     terminal::note("Connection ended. If another terminal connected, it now controls the session. Run fclaude to reconnect; detaching does not stop Claude.");
     result
 }
@@ -649,12 +655,12 @@ async fn load_attachment_context(
     // the only path Claude can read from its prompt.
     let remote_workspace =
         std::env::var("AGENT_REMOTE_CLAUDE_WORKSPACE").unwrap_or_else(|_| "/workspace".to_string());
-    Ok(Some(AttachmentContext::new(
+    Ok(Some(AttachmentContext::with_attachment_sync(
         local_workspace,
         remote_workspace,
         session.id,
         sync,
-    )))
+    )?))
 }
 
 fn resumed_arguments_notice(arguments: &[String]) -> Option<&'static str> {
