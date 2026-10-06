@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.48 - 2026-10-06
+
+- fix(attachments): prepare isolated remote staging roots (1d1d4a5)
+- fix(attachments): isolate temporary files from workspaces (ea6e160)
+
 ## v0.2.47 - 2026-10-05
 
 - fix(attachments): preserve windows drop path separators (df631bc)
