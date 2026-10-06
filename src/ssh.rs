@@ -101,6 +101,10 @@ async fn execute_interactive_with_attachments(
     if selection_copy {
         crate::terminal::note("Drag to select remote text; release to copy (requires an updated Node). Selections are limited to 64 KiB; a bell signals rejected text. Your terminal may support Shift/Option-drag for native selection.");
     }
+    // Some terminal compatibility layers (for example restricted CI PTYs)
+    // reject raw mode. Keep relaying input in that case so attachment support
+    // never turns a usable Claude session into a disconnected one.
+    let raw_mode = RawModeGuard::enable().ok();
     let session = pty::Session::spawn(command, pty::command_size())?;
     let (mut output, writer, resize_handle, pty_child) = session.parts();
     let resize_task_handle = resize_handle.clone();
@@ -139,7 +143,7 @@ async fn execute_interactive_with_attachments(
         Some((terminal_size::Width(cols), terminal_size::Height(rows))) => (rows, cols),
         None => (48, 160),
     };
-    let feedback = interactive::observe(
+    let observe_result = interactive::observe(
         &mut output,
         &mut std::io::stdout(),
         login_copy,
@@ -147,7 +151,7 @@ async fn execute_interactive_with_attachments(
         size,
         |text| async move { clipboard::copy(&text).await },
     )
-    .await?;
+    .await;
 
     // Stop consuming stdin before waiting for SSH. Otherwise a mouse-release
     // report emitted by the terminal as tmux detaches can race with raw-mode
@@ -158,12 +162,28 @@ async fn execute_interactive_with_attachments(
         crate::terminal::flush_input();
         let _ = task.await;
     }
-    let status = pty::exit_status(pty_child.wait().await?);
+    let feedback = match observe_result {
+        Ok(feedback) => feedback,
+        Err(error) => {
+            drop(raw_mode);
+            crate::terminal::flush_input();
+            let _ = pty_child.kill().await;
+            resize_task.abort();
+            let _ = resize_task.await;
+            crate::terminal::flush_input();
+            return Err(error);
+        }
+    };
+    // Restore the user's terminal before waiting on the OS child. A PTY
+    // backend can take a little longer to reap an already-closed SSH process;
+    // the shell must never remain in raw mode during that interval.
+    drop(raw_mode);
+    crate::terminal::flush_input();
+    let status_result = pty_child.wait().await;
     resize_task.abort();
     let _ = resize_task.await;
     crate::terminal::flush_input();
-    let _ = crossterm::terminal::disable_raw_mode();
-    crate::terminal::flush_input();
+    let status = pty::exit_status(status_result?);
     let _ = std::io::Write::flush(&mut std::io::stdout());
     // Feedback outside the TUI avoids moving its cursor, scrolling its screen,
     // or overwriting Claude's code-entry prompt while SSH owns raw mode.
@@ -188,17 +208,11 @@ async fn relay_input<W>(
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
-    // Some terminal compatibility layers (for example restricted CI PTYs)
-    // reject raw mode. Keep relaying input in that case so attachment support
-    // never turns a usable Claude session into a disconnected one.
-    let _raw_mode = RawModeGuard::enable().ok();
     let mut decoder = InputDecoder::default();
     let mut buffer = [0u8; 8192];
     let mut previous_size = pty::command_size();
     loop {
-        let Some(bytes) = input.recv().await? else {
-            break;
-        };
+        let bytes = input.recv().await?.unwrap_or_default();
         let count = bytes.len();
         buffer[..count].copy_from_slice(&bytes);
         if count == 0 {
@@ -284,13 +298,10 @@ async fn relay_passthrough<W>(
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let _raw_mode = RawModeGuard::enable().ok();
     let mut buffer = [0u8; 8192];
     let mut previous_size = pty::command_size();
     loop {
-        let Some(bytes) = input.recv().await? else {
-            break;
-        };
+        let bytes = input.recv().await?.unwrap_or_default();
         let count = bytes.len();
         buffer[..count].copy_from_slice(&bytes);
         if count == 0 {
@@ -304,11 +315,11 @@ where
     Ok(())
 }
 
-/// Reads terminal bytes on a detached OS thread so cancelling an attach never
-/// leaves Tokio waiting for a blocking stdin read. The thread exits on its next
-/// read once the receiver is dropped; the fclaude process does not join it.
+/// Reads terminal bytes on a small native thread so cancelling an attach never
+/// leaves Tokio waiting for a blocking stdin read. The queue is bounded and is
+/// dropped with the attach; the fclaude process does not join the reader.
 struct StdinReader {
-    receiver: tokio::sync::mpsc::UnboundedReceiver<std::io::Result<Vec<u8>>>,
+    receiver: tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
 }
 
 impl StdinReader {
@@ -322,7 +333,9 @@ impl StdinReader {
 }
 
 fn spawn_stdin_reader() -> Result<StdinReader> {
-    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    // A bounded queue prevents a fast terminal or paste from growing memory
+    // without limit while the remote PTY is back-pressured.
+    let (sender, receiver) = tokio::sync::mpsc::channel(8);
     std::thread::Builder::new()
         .name("agent-remote-stdin".to_string())
         .spawn(move || {
@@ -332,12 +345,12 @@ fn spawn_stdin_reader() -> Result<StdinReader> {
                 match stdin.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(count) => {
-                        if sender.send(Ok(buffer[..count].to_vec())).is_err() {
+                        if sender.blocking_send(Ok(buffer[..count].to_vec())).is_err() {
                             break;
                         }
                     }
                     Err(error) => {
-                        let _ = sender.send(Err(error));
+                        let _ = sender.blocking_send(Err(error));
                         break;
                     }
                 }

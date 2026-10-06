@@ -51,6 +51,7 @@ for byte in copy:
     sys.stdout.write(byte); sys.stdout.flush()
 assert os.read(0, 1) == b'd'
 sys.stdout.write('\r\nINPUT_OK\r\n'); sys.stdout.flush()
+time.sleep(.2)
 sys.exit(23)
 '''
 
@@ -107,6 +108,10 @@ def main(binary):
             assert output.count(selected) == 1, "selection copied more than once"
             os.write(master, b'd')
             until(b'INPUT_OK')
+            # A terminal can deliver the SGR mouse-release report just after
+            # tmux detaches. It must be consumed by the attach process and
+            # must not keep the shell waiting for a later Enter.
+            os.write(master, b'\x1b[<0;45;50m')
             assert child.wait(timeout=5) == 23, "SSH exit status was changed"
             assert output.count(first) == output.count(second) == 1
             assert b"Claude login links copy automatically" in output

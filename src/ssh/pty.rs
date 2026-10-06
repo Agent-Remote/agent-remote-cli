@@ -96,6 +96,13 @@ pub struct PtyChild {
 }
 
 impl PtyChild {
+    pub async fn kill(self) -> Result<()> {
+        let mut child = self.child;
+        tokio::task::spawn_blocking(move || child.kill().context("failed to terminate SSH"))
+            .await
+            .context("SSH terminate task failed")?
+    }
+
     pub async fn wait(self) -> Result<portable_pty::ExitStatus> {
         let mut child = self.child;
         tokio::task::spawn_blocking(move || child.wait().context("failed to wait for SSH"))
