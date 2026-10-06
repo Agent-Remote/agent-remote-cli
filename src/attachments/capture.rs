@@ -130,7 +130,9 @@ pub(super) fn is_wsl() -> bool {
 #[cfg(target_os = "linux")]
 async fn read_platform() -> Option<ClipboardPayload> {
     if is_wsl() {
-        return read_windows().await;
+        if let Some(payload) = read_windows().await {
+            return Some(payload);
+        }
     }
     // Discover offered formats first; don't launch a helper for every possible MIME.
     for (program, list_args, prefix) in [
