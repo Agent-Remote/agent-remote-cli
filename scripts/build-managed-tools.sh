@@ -65,22 +65,29 @@ if [[ -n "$MANAGED_TOOLS_CACHE_DIR" ]]; then
 fi
 
 download_source() {
-  local name="$1" url="$2" archive source_dir attempt
+  local name="$1" archive source_dir attempt url
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "no source URLs provided for $name" >&2
+    return 2
+  fi
   archive="$WORK/$name"
   source_dir="$WORK/src/$name"
-  for attempt in 1 2 3; do
-    rm -f "$archive"
-    rm -rf "$source_dir"
-    mkdir -p "$source_dir"
-    if curl --fail --show-error --location --retry 5 --retry-all-errors --retry-delay 5 "$url" -o "$archive" &&
-      tar -xf "$archive" -C "$source_dir" --strip-components=1 &&
-      find "$source_dir" -mindepth 1 -print -quit | grep -q .; then
-      cp "$archive" "$SOURCE_DEST/$name"
-      return
-    fi
-    echo "download or extraction failed for $name (attempt $attempt/3)" >&2
+  for url in "$@"; do
+    for attempt in 1 2 3; do
+      rm -f "$archive"
+      rm -rf "$source_dir"
+      mkdir -p "$source_dir"
+      if curl --fail --show-error --location --retry 5 --retry-all-errors --retry-delay 5 "$url" -o "$archive" &&
+        tar -xf "$archive" -C "$source_dir" --strip-components=1 &&
+        find "$source_dir" -mindepth 1 -print -quit | grep -q .; then
+        cp "$archive" "$SOURCE_DEST/$name"
+        return
+      fi
+      echo "download or extraction failed for $name from $url (attempt $attempt/3)" >&2
+    done
   done
-  echo "failed to prepare source archive after 3 attempts: $name" >&2
+  echo "failed to prepare source archive from all mirrors: $name" >&2
   return 1
 }
 
@@ -89,7 +96,8 @@ download_source "tmux-${TMUX_VERSION}.tar.gz" \
 download_source "libevent-${LIBEVENT_VERSION}.tar.gz" \
   "https://github.com/libevent/libevent/releases/download/release-${LIBEVENT_VERSION}/libevent-${LIBEVENT_VERSION}.tar.gz"
 download_source "ncurses-${NCURSES_VERSION}.tar.gz" \
-  "https://ftp.gnu.org/gnu/ncurses/ncurses-${NCURSES_VERSION}.tar.gz"
+  "${NCURSES_SOURCE_URL:-https://invisible-island.net/archives/ncurses/ncurses-${NCURSES_VERSION}.tar.gz}" \
+  "https://ftpmirror.gnu.org/ncurses/ncurses-${NCURSES_VERSION}.tar.gz"
 download_source "wireguard-tools-${WIREGUARD_TOOLS_VERSION}.tar.gz" \
   "https://github.com/WireGuard/wireguard-tools/archive/refs/tags/v${WIREGUARD_TOOLS_VERSION}.tar.gz"
 
