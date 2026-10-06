@@ -157,11 +157,10 @@ pub fn note(message: impl std::fmt::Display) {
 /// Discard bytes that arrived while an interactive attach was shutting down.
 ///
 /// A terminal can deliver the mouse-release part of an SGR mouse report just
-/// after tmux has processed `Ctrl-B d`. If that byte remains queued when raw
-/// mode is restored, the user's shell consumes it as a command line and waits
-/// for an extra Enter. Flushing the input queue keeps those terminal protocol
-/// bytes out of the shell. This is intentionally a no-op on unsupported
-/// platforms and when stdin is not a terminal.
+/// after tmux has processed `Ctrl-B d`. Call after stopping the input reader
+/// and disabling mouse reporting, before restoring cooked mode, to keep these
+/// terminal protocol bytes out of the shell. Non-terminal handles are ignored
+/// by the platform API.
 pub fn flush_input() {
     #[cfg(unix)]
     {

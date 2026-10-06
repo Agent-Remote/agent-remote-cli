@@ -5,9 +5,10 @@ mod clipboard_stream;
 mod interactive;
 mod login_clipboard;
 mod pty;
+mod stdin;
 
 use anyhow::{bail, Context, Result};
-use std::io::Read;
+use stdin::StdinReader;
 use tokio::io::AsyncWriteExt;
 
 use crate::api::AttachSessionData;
@@ -101,14 +102,27 @@ async fn execute_interactive_with_attachments(
     if selection_copy {
         crate::terminal::note("Drag to select remote text; release to copy (requires an updated Node). Selections are limited to 64 KiB; a bell signals rejected text. Your terminal may support Shift/Option-drag for native selection.");
     }
-    // Some terminal compatibility layers (for example restricted CI PTYs)
-    // reject raw mode. Keep relaying input in that case so attachment support
-    // never turns a usable Claude session into a disconnected one.
-    let raw_mode = RawModeGuard::enable().ok();
+    let attachment = attachment
+        .map(|attachment| {
+            let paths = app_paths.cloned().map(Ok).unwrap_or_else(|| AppPaths::new(None))?;
+            crate::terminal::note(
+                "Clipboard images and file drops are bridged into the synchronized Claude workspace.",
+            );
+            Ok::<_, anyhow::Error>((paths, attachment))
+        })
+        .transpose()?;
+    // Fall back to OpenSSH's own terminal handling if raw input is unavailable.
+    let Ok(raw_mode) = RawModeGuard::enable() else {
+        return command.status().await.context("failed to run SSH");
+    };
+    let raw_mode = std::sync::Arc::new(raw_mode);
+    let input = StdinReader::spawn(raw_mode.clone())?;
     let session = pty::Session::spawn(command, pty::command_size())?;
     let (mut output, writer, resize_handle, pty_child) = session.parts();
     let resize_task_handle = resize_handle.clone();
-    let resize_task = tokio::spawn(async move {
+    // JoinSet also aborts both relays if the attach future is dropped.
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(async move {
         let mut previous = pty::command_size();
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -120,25 +134,15 @@ async fn execute_interactive_with_attachments(
                 previous = current;
             }
         }
+        Ok(())
     });
-    let input_task = if let Some(attachment) = attachment {
-        let paths = match app_paths {
-            Some(paths) => paths.clone(),
-            None => AppPaths::new(None)?,
-        };
-        crate::terminal::note(
-            "Clipboard images and file drops are bridged into the synchronized Claude workspace.",
-        );
-        let input = spawn_stdin_reader()?;
-        Some(tokio::spawn(async move {
+    tasks.spawn(async move {
+        if let Some((paths, attachment)) = attachment {
             relay_input(writer, resize_handle, input, paths, attachment).await
-        }))
-    } else {
-        let input = spawn_stdin_reader()?;
-        Some(tokio::spawn(async move {
+        } else {
             relay_passthrough(writer, resize_handle, input).await
-        }))
-    };
+        }
+    });
     let size = || match terminal_size::terminal_size() {
         Some((terminal_size::Width(cols), terminal_size::Height(rows))) => (rows, cols),
         None => (48, 160),
@@ -153,38 +157,19 @@ async fn execute_interactive_with_attachments(
     )
     .await;
 
-    // Stop consuming stdin before waiting for SSH. Otherwise a mouse-release
-    // report emitted by the terminal as tmux detaches can race with raw-mode
-    // teardown and land in the user's shell. Flush both the already queued
-    // bytes and anything that arrived during the child shutdown window.
-    if let Some(task) = input_task {
-        task.abort();
-        crate::terminal::flush_input();
-        let _ = task.await;
-    }
+    // Closing the receiver cancels and joins the native reader before local
+    // terminal modes are restored. No reader survives to steal shell input.
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    drop(raw_mode);
     let feedback = match observe_result {
         Ok(feedback) => feedback,
         Err(error) => {
-            drop(raw_mode);
-            crate::terminal::flush_input();
             let _ = pty_child.kill().await;
-            resize_task.abort();
-            let _ = resize_task.await;
-            crate::terminal::flush_input();
             return Err(error);
         }
     };
-    // Restore the user's terminal before waiting on the OS child. A PTY
-    // backend can take a little longer to reap an already-closed SSH process;
-    // the shell must never remain in raw mode during that interval.
-    drop(raw_mode);
-    crate::terminal::flush_input();
-    let status_result = pty_child.wait().await;
-    resize_task.abort();
-    let _ = resize_task.await;
-    crate::terminal::flush_input();
-    let status = pty::exit_status(status_result?);
-    let _ = std::io::Write::flush(&mut std::io::stdout());
+    let status = pty::exit_status(pty_child.wait().await?);
     // Feedback outside the TUI avoids moving its cursor, scrolling its screen,
     // or overwriting Claude's code-entry prompt while SSH owns raw mode.
     if feedback.incomplete {
@@ -315,51 +300,6 @@ where
     Ok(())
 }
 
-/// Reads terminal bytes on a small native thread so cancelling an attach never
-/// leaves Tokio waiting for a blocking stdin read. The queue is bounded and is
-/// dropped with the attach; the fclaude process does not join the reader.
-struct StdinReader {
-    receiver: tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
-}
-
-impl StdinReader {
-    async fn recv(&mut self) -> Result<Option<Vec<u8>>> {
-        match self.receiver.recv().await {
-            Some(Ok(bytes)) => Ok(Some(bytes)),
-            Some(Err(error)) => Err(error.into()),
-            None => Ok(None),
-        }
-    }
-}
-
-fn spawn_stdin_reader() -> Result<StdinReader> {
-    // A bounded queue prevents a fast terminal or paste from growing memory
-    // without limit while the remote PTY is back-pressured.
-    let (sender, receiver) = tokio::sync::mpsc::channel(8);
-    std::thread::Builder::new()
-        .name("agent-remote-stdin".to_string())
-        .spawn(move || {
-            let mut stdin = std::io::stdin();
-            let mut buffer = [0u8; 8192];
-            loop {
-                match stdin.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(count) => {
-                        if sender.blocking_send(Ok(buffer[..count].to_vec())).is_err() {
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        let _ = sender.blocking_send(Err(error));
-                        break;
-                    }
-                }
-            }
-        })
-        .context("failed to start terminal input reader")?;
-    Ok(StdinReader { receiver })
-}
-
 fn resize_if_needed(handle: &pty::ResizeHandle, previous: &mut portable_pty::PtySize) {
     let current = pty::command_size();
     if current != *previous {
@@ -401,6 +341,13 @@ impl RawModeGuard {
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
+        // A disconnected SSH client may not forward tmux's final mode reset.
+        // Stop generating mouse/focus reports before handing input to the shell.
+        use std::io::Write;
+        let mut stdout = std::io::stdout();
+        let _ = stdout.write_all(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l");
+        let _ = stdout.flush();
+        crate::terminal::flush_input();
         let _ = crossterm::terminal::disable_raw_mode();
     }
 }
