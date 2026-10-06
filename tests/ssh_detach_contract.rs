@@ -20,13 +20,15 @@ fn attach_probe() {
         println!("RUNTIME_EXITED");
         return;
     }
-    for _ in 0..2 {
+    for attempt in 0..2 {
+        println!("ATTACH_START_{attempt}");
         let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
         command.args(["--exact", "remote_probe", "--nocapture"]);
         command.env("DETACH_PROBE", "remote");
         let status = runtime
             .block_on(agent_remote_cli::ssh::execute_interactive(&mut command))
             .unwrap();
+        println!("ATTACH_RETURNED_{attempt}");
         assert_eq!(status.code(), Some(23));
         assert!(!crossterm::terminal::is_raw_mode_enabled().unwrap());
         if mode == "followup" {
@@ -38,6 +40,7 @@ fn attach_probe() {
             let mut byte = [0];
             std::io::stdin().read_exact(&mut byte).unwrap();
             assert_eq!(byte, [b'x']);
+            println!("LOCAL_INPUT_RECEIVED");
             crossterm::terminal::disable_raw_mode().unwrap();
         }
     }

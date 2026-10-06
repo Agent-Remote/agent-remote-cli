@@ -347,12 +347,43 @@ fn shell_escape_path(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-struct RawModeGuard;
+struct RawModeGuard {
+    #[cfg(windows)]
+    input_mode: u32,
+}
 
 impl RawModeGuard {
     fn enable() -> Result<Self> {
-        crossterm::terminal::enable_raw_mode().context("failed to enable terminal raw mode")?;
-        Ok(Self)
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Console::{
+                GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_ECHO_INPUT,
+                ENABLE_EXTENDED_FLAGS, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
+                ENABLE_QUICK_EDIT_MODE, ENABLE_VIRTUAL_TERMINAL_INPUT, STD_INPUT_HANDLE,
+            };
+            let mut input_mode = 0;
+            // SAFETY: process-owned console handle and initialized mode storage.
+            unsafe {
+                let handle = GetStdHandle(STD_INPUT_HANDLE);
+                if GetConsoleMode(handle, &mut input_mode) == 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+                let raw = (input_mode | ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_EXTENDED_FLAGS)
+                    & !(ENABLE_LINE_INPUT
+                        | ENABLE_ECHO_INPUT
+                        | ENABLE_PROCESSED_INPUT
+                        | ENABLE_QUICK_EDIT_MODE);
+                if SetConsoleMode(handle, raw) == 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+            }
+            Ok(Self { input_mode })
+        }
+        #[cfg(not(windows))]
+        {
+            crossterm::terminal::enable_raw_mode().context("failed to enable terminal raw mode")?;
+            Ok(Self {})
+        }
     }
 }
 
@@ -365,6 +396,15 @@ impl Drop for RawModeGuard {
         let _ = stdout.write_all(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l");
         let _ = stdout.flush();
         crate::terminal::flush_input();
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Console::{
+                GetStdHandle, SetConsoleMode, STD_INPUT_HANDLE,
+            };
+            // SAFETY: restore the exact input mode saved before this attach.
+            unsafe { SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), self.input_mode) };
+        }
+        #[cfg(not(windows))]
         let _ = crossterm::terminal::disable_raw_mode();
     }
 }
