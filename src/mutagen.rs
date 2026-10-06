@@ -39,6 +39,23 @@ pub fn binary_path(paths: &AppPaths) -> PathBuf {
 }
 
 pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<()> {
+    create_with_mode(paths, sync, dry_run, "two-way-safe")
+}
+
+pub fn create_attachment_sync(
+    paths: &AppPaths,
+    sync: &SyncSessionData,
+    dry_run: bool,
+) -> Result<()> {
+    create_with_mode(paths, sync, dry_run, "one-way-safe")
+}
+
+fn create_with_mode(
+    paths: &AppPaths,
+    sync: &SyncSessionData,
+    dry_run: bool,
+    sync_mode: &str,
+) -> Result<()> {
     if sync.sync_git {
         ensure_git_ready(Path::new(&sync.local_path))?;
     }
@@ -47,7 +64,7 @@ pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
         .as_deref()
         .context("sync session has no remote endpoint")?;
     let name = session_name(sync)?;
-    let args = create_args(sync, remote, name);
+    let args = create_args(sync, remote, name, sync_mode);
     run(paths, &args, dry_run)?;
     run(
         paths,
@@ -57,12 +74,12 @@ pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
     Ok(())
 }
 
-fn create_args(sync: &SyncSessionData, remote: &str, name: &str) -> Vec<String> {
+fn create_args(sync: &SyncSessionData, remote: &str, name: &str, sync_mode: &str) -> Vec<String> {
     let mut args = vec![
         "sync".to_string(),
         "create".to_string(),
         "--sync-mode".to_string(),
-        "two-way-safe".to_string(),
+        sync_mode.to_string(),
         "--name".to_string(),
         name.to_string(),
         "--default-file-mode".to_string(),
@@ -112,6 +129,23 @@ pub fn status(paths: &AppPaths, sync: &SyncSessionData) -> Result<MutagenStatus>
 }
 
 pub fn ensure(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<bool> {
+    ensure_with_create(paths, sync, dry_run, create)
+}
+
+pub fn ensure_attachment_sync(
+    paths: &AppPaths,
+    sync: &SyncSessionData,
+    dry_run: bool,
+) -> Result<bool> {
+    ensure_with_create(paths, sync, dry_run, create_attachment_sync)
+}
+
+fn ensure_with_create(
+    paths: &AppPaths,
+    sync: &SyncSessionData,
+    dry_run: bool,
+    create_fn: fn(&AppPaths, &SyncSessionData, bool) -> Result<()>,
+) -> Result<bool> {
     let status = status(paths, sync)?;
     if !status.installed {
         bail!("Mutagen is missing; install the packaged CLI dependencies");
@@ -122,7 +156,7 @@ pub fn ensure(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
     if !status.session_missing {
         bail!("unable to inspect the managed Mutagen session");
     }
-    create(paths, sync, dry_run)?;
+    create_fn(paths, sync, dry_run)?;
     Ok(true)
 }
 
@@ -378,6 +412,7 @@ mod tests {
             &sync,
             sync.remote_endpoint.as_deref().unwrap(),
             sync.mutagen_session_id.as_deref().unwrap(),
+            "two-way-safe",
         );
         assert!(args
             .windows(2)

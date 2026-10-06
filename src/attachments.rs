@@ -15,7 +15,10 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
@@ -34,7 +37,9 @@ pub struct AttachmentContext {
     pub local_workspace: PathBuf,
     pub remote_workspace: String,
     pub session_id: String,
+    workspace_sync: SyncSessionData,
     attachment_sync: SyncSessionData,
+    attachment_parent_ready: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,7 +138,9 @@ impl AttachmentContext {
             local_workspace: local_workspace.into(),
             remote_workspace: remote_workspace.into(),
             session_id,
+            workspace_sync: sync.clone(),
             attachment_sync,
+            attachment_parent_ready: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -151,7 +158,9 @@ impl AttachmentContext {
             local_workspace: local_workspace.into(),
             remote_workspace: remote_workspace.into(),
             session_id,
+            workspace_sync: sync.clone(),
             attachment_sync,
+            attachment_parent_ready: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -295,18 +304,36 @@ impl AttachmentContext {
         let root = self.attachment_root(paths)?;
         let attachment_sync = self.sync_for_root(&root);
         let status = mutagen::status(paths, &attachment_sync)?;
-        if root.exists() {
+        if status.session_exists {
+            // Keep an empty local root present while flushing. Removing the
+            // root first makes Mutagen halt the session before it can delete
+            // the remote files.
+            fs::create_dir_all(&root).with_context(|| {
+                format!(
+                    "failed to recreate temporary attachment directory {}",
+                    root.display()
+                )
+            })?;
+            clear_directory(&root)?;
+            let _ = mutagen::resume(paths, &attachment_sync, false);
+            mutagen::resolve(paths, &attachment_sync, false)?;
+            mutagen::terminate_session(paths, mutagen::session_name(&attachment_sync)?, false)?;
             fs::remove_dir_all(&root).with_context(|| {
                 format!(
                     "failed to remove temporary attachment directory {}",
                     root.display()
                 )
             })?;
-        }
-        if status.session_exists {
-            mutagen::resolve(paths, &attachment_sync, false)?;
-            mutagen::terminate_session(paths, mutagen::session_name(&attachment_sync)?, false)?;
-        } else if !status.session_missing && status.installed {
+        } else if status.session_missing {
+            if root.exists() {
+                fs::remove_dir_all(&root).with_context(|| {
+                    format!(
+                        "failed to remove temporary attachment directory {}",
+                        root.display()
+                    )
+                })?;
+            }
+        } else if status.installed {
             bail!("unable to inspect the temporary attachment sync")
         }
         Ok(())
@@ -319,18 +346,59 @@ impl AttachmentContext {
     }
 
     fn ensure_attachment_sync(&self, paths: &AppPaths, root: &Path) -> Result<()> {
+        if !self.attachment_parent_ready.load(Ordering::Acquire) {
+            self.ensure_attachment_parents(paths)?;
+            self.attachment_parent_ready.store(true, Ordering::Release);
+        }
         fs::create_dir_all(root)
             .with_context(|| format!("failed to create attachment directory {}", root.display()))?;
         set_private_directory(root)?;
         let attachment_sync = self.sync_for_root(root);
-        mutagen::ensure(paths, &attachment_sync, false)
+        mutagen::ensure_attachment_sync(paths, &attachment_sync, false)
             .context("failed to prepare the temporary attachment sync")?;
+        Ok(())
+    }
+
+    fn ensure_attachment_parents(&self, paths: &AppPaths) -> Result<()> {
+        for (index, suffix) in ["target", "target/.agent-remote-attachments"]
+            .iter()
+            .enumerate()
+        {
+            let local_root = paths
+                .home()
+                .join(ATTACHMENT_DIR)
+                .join(".parents")
+                .join(format!("{}-{index}", self.session_id));
+            fs::create_dir_all(&local_root)?;
+            let parent_sync =
+                parent_sync_data(&self.workspace_sync, &self.session_id, suffix, &local_root);
+            let created = mutagen::ensure_attachment_sync(paths, &parent_sync, false)?;
+            if !created {
+                let _ = mutagen::resume(paths, &parent_sync, false);
+            }
+            mutagen::resolve(paths, &parent_sync, false)?;
+            mutagen::terminate_session(paths, mutagen::session_name(&parent_sync)?, false)?;
+            fs::remove_dir_all(&local_root)?;
+        }
         Ok(())
     }
 }
 
 fn source_in_workspace(workspace: &Path, source: &Path) -> bool {
     source.strip_prefix(workspace).is_ok()
+}
+
+fn clear_directory(path: &Path) -> Result<()> {
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let child = entry.path();
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(&child)?;
+        } else {
+            fs::remove_file(&child)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_session_id(session_id: &str) -> Result<()> {
@@ -351,12 +419,7 @@ fn attachment_sync_data(sync: &SyncSessionData, session_id: &str) -> SyncSession
         sync.remote_path.trim_end_matches('/')
     );
     let workspace_remote_path = sync.remote_path.trim_end_matches('/');
-    let remote_endpoint = sync.remote_endpoint.as_ref().and_then(|endpoint| {
-        endpoint
-            .trim_end_matches('/')
-            .strip_suffix(workspace_remote_path)
-            .map(|prefix| format!("{prefix}{remote_path}"))
-    });
+    let remote_endpoint = remote_endpoint_for(sync, &remote_path, workspace_remote_path);
     let mut attachment = sync.clone();
     attachment.id = format!("{}-attachments", sync.id);
     attachment.local_path = String::new();
@@ -365,6 +428,50 @@ fn attachment_sync_data(sync: &SyncSessionData, session_id: &str) -> SyncSession
     attachment.mutagen_session_id = Some(format!("agent-remote-attachments-{session_id}"));
     attachment.remote_endpoint = remote_endpoint;
     attachment
+}
+
+fn parent_sync_data(
+    sync: &SyncSessionData,
+    session_id: &str,
+    suffix: &str,
+    local_root: &Path,
+) -> SyncSessionData {
+    let base = sync.remote_path.trim_end_matches('/');
+    let remote_path = format!("{base}/{suffix}");
+    let mut parent = sync.clone();
+    parent.id = format!("{}-attachment-parent-{session_id}-{suffix}", sync.id);
+    parent.local_path = local_root.to_string_lossy().into_owned();
+    parent.remote_path = remote_path.clone();
+    parent.sync_git = false;
+    let suffix_name = suffix
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    parent.mutagen_session_id = Some(format!(
+        "agent-remote-attachment-parent-{session_id}-{}",
+        suffix_name
+    ));
+    parent.remote_endpoint = remote_endpoint_for(sync, &remote_path, base);
+    parent
+}
+
+fn remote_endpoint_for(
+    sync: &SyncSessionData,
+    remote_path: &str,
+    workspace_remote_path: &str,
+) -> Option<String> {
+    sync.remote_endpoint.as_ref().and_then(|endpoint| {
+        endpoint
+            .trim_end_matches('/')
+            .strip_suffix(workspace_remote_path)
+            .map(|prefix| format!("{prefix}{remote_path}"))
+    })
 }
 
 /// Read the richest available local clipboard payload. Text is intentionally
@@ -718,12 +825,12 @@ fn copy_dir_bounded(source: &Path, destination: &Path, limit: u64) -> Result<u64
 mod tests {
     use super::{
         attachment_sync_data, copy_dir_bounded, decode_uri_or_shell_path, image_extension,
-        parse_dropped_paths, AttachmentContext, InputDecoder, InputEvent,
+        parent_sync_data, parse_dropped_paths, AttachmentContext, InputDecoder, InputEvent,
     };
     use crate::api::SyncSessionData;
     use crate::config::AppPaths;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
 
     fn sync_session() -> SyncSessionData {
@@ -785,6 +892,19 @@ mod tests {
             Some("agent-remote-attachments-session_1")
         );
         assert!(!sync.sync_git);
+    }
+
+    #[test]
+    fn attachment_parent_session_names_are_mutagen_safe() {
+        let sync = parent_sync_data(
+            &sync_session(),
+            "session_1",
+            "target/.agent-remote-attachments",
+            Path::new("/tmp/attachments-parent"),
+        );
+        let name = sync.mutagen_session_id.unwrap();
+        assert!(!name.contains('.'));
+        assert!(!name.contains('/'));
     }
 
     #[test]
