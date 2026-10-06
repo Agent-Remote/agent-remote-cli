@@ -18,6 +18,7 @@ pub(super) async fn observe<R, W, F, C, CopyFuture>(
     selection_copy: bool,
     size: F,
     copy: C,
+    exit: Option<&super::exit::ExitState>,
 ) -> Result<Feedback>
 where
     R: AsyncRead + Unpin,
@@ -35,6 +36,7 @@ where
     let mut pending = None;
     let mut native_copy = None;
     let mut eof = false;
+    let mut terminal_exit = super::exit::Output::default();
     let mut copy_incomplete = false;
     let mut drain_deadline = tokio::time::Instant::now();
     loop {
@@ -52,8 +54,13 @@ where
                 let visible = if selection_copy {
                     clipboard_stream.process(&buffer[..count])
                 } else { buffer[..count].to_vec() };
+                if let Some(exit) = exit {
+                    terminal_exit.observe(&visible, exit);
+                    if count == 0 { exit.begin(); }
+                }
                 let stdout = &mut *writer;
                 stdout.write_all(&visible)?;
+                if exit.is_some_and(|exit| exit.started()) { stdout.write_all(super::exit::RESET)?; }
                 stdout.flush()?;
                 let (rows, cols) = size();
                 if let Some(screen) = screen.as_mut() { screen.process(&visible, rows, cols); }

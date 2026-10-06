@@ -4,7 +4,7 @@ use std::{io, thread};
 use tokio::sync::mpsc;
 
 pub(super) struct StdinReader {
-    receiver: mpsc::Receiver<io::Result<Vec<u8>>>,
+    pub(super) receiver: mpsc::Receiver<io::Result<Vec<u8>>>,
     thread: Option<thread::JoinHandle<()>>,
     #[cfg(windows)]
     console: std::sync::Arc<std::fs::File>,

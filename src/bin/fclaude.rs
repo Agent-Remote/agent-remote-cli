@@ -598,7 +598,7 @@ async fn attach_with_client(
     }
     let attach = client.wait_for_attach_authorization(token, attach).await?;
     terminal::note("This connection takes over the session from any other terminal. Ctrl+B then D detaches and keeps Claude running.");
-    let attachment = match load_attachment_context(paths, client, token, session_id).await {
+    let attachment = match load_attachment_context(client, token, &attach).await {
         Ok(context) => context,
         Err(error) => {
             terminal::warning_line(format!(
@@ -610,8 +610,8 @@ async fn attach_with_client(
     let cleanup = attachment.clone();
     let result = ssh::execute_attach_with_context(paths, &attach, attachment).await;
     if let Some(attachment) = cleanup {
-        if let Err(error) = attachment.cleanup(paths) {
-            terminal::warning_line(format!("Temporary attachment cleanup failed: {error:#}"));
+        if let Err(error) = attachment.cleanup(paths).await {
+            terminal::warning_line(format!("Temporary attachment cleanup deferred; it will retry on the next attachment transfer: {error:#}"));
         }
     }
     terminal::note("Connection ended. If another terminal connected, it now controls the session. Run fclaude to reconnect; detaching does not stop Claude.");
@@ -619,47 +619,27 @@ async fn attach_with_client(
 }
 
 async fn load_attachment_context(
-    paths: &AppPaths,
     client: &ApiClient,
     token: &str,
-    session_id: &str,
+    attach: &agent_remote_cli::api::AttachSessionData,
 ) -> Result<Option<AttachmentContext>> {
-    let session = client.get_tool_session(token, session_id).await?;
-    let state = LocalState::open(paths)?;
-    state.init_schema()?;
-    let workspace = state
-        .get_workspace_by_id(&session.workspace_id)?
-        .context("workspace mapping is missing locally")?;
-    let local_sync = state
-        .get_sync_session_for_workspace(&session.workspace_id)?
-        .context("workspace sync mapping is missing locally")?;
-    let sync = client.get_sync_session(token, &local_sync.id).await?;
-    if sync.status != "active" {
-        bail!("workspace sync is {}", sync.status);
+    if std::env::var_os("AGENT_REMOTE_ATTACHMENTS").is_some_and(|value| value == "0") {
+        return Ok(None);
     }
-    let local_workspace = session
-        .workspace_local_path
-        .clone()
-        .or_else(|| Some(workspace.local_path.clone()))
-        .unwrap_or_else(|| sync.local_path.clone());
-    let local_workspace =
-        workspace::identify_workspace(Some(Path::new(&local_workspace)))?.local_path;
-    if !local_workspace.is_dir() {
-        bail!(
-            "local workspace does not exist: {}",
-            local_workspace.display()
-        );
+    let session = client.get_tool_session(token, &attach.session_id).await?;
+    let binding = client
+        .get_tool_account_binding_status(token, &session.tool_account_id)
+        .await?;
+    if binding.node_id.as_deref() != Some(&session.node_id) {
+        bail!("attachment account is not on this session's node");
     }
-    // The API's remote path is the node host path. Native and Docker Claude
-    // runtimes bind that directory at /workspace inside the sandbox, which is
-    // the only path Claude can read from its prompt.
-    let remote_workspace =
-        std::env::var("AGENT_REMOTE_CLAUDE_WORKSPACE").unwrap_or_else(|_| "/workspace".to_string());
-    Ok(Some(AttachmentContext::with_attachment_sync(
-        local_workspace,
-        remote_workspace,
-        session.id,
-        sync,
+    let account_path = binding
+        .account_remote_path
+        .context("remote account path is unavailable")?;
+    Ok(Some(AttachmentContext::new(
+        attach,
+        account_path,
+        &session.runtime_backend,
     )?))
 }
 

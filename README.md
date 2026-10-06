@@ -89,14 +89,22 @@ Keyboard selection remains available: Ctrl+B, then `[` opens managed history mod
 PageUp/PageDown, Space to start a selection, Enter/Y to copy, and Esc/Q to return to Claude.
 Command prompts, window creation, menus and session switching are disabled in managed tmux.
 Set `AGENT_REMOTE_CLIPBOARD=0` to disable the CLI selection bridge independently of login-link copying.
-When an attached `fclaude` session has a local workspace sync, the CLI also bridges image and file
+For an attached `fclaude` session, the CLI also bridges image and file
 attachments on macOS, Linux, WSL, and Windows. Use the terminal's paste shortcut (or Ctrl+V when
 the terminal forwards it) for an image/file clipboard, or drag files into the terminal. The CLI
-copies attachments into an application-owned temporary directory outside the project and uses a
-short-lived sync session to expose them to Claude under `/workspace/target/.agent-remote-attachments/<session>`.
-The temporary directory and remote session are removed when the attach ends. Ordinary text paste
+streams a bounded archive over the existing authorized SSH gateway, verifies SHA-256 and the remote
+acknowledgement, then inserts its remote paths. Attachments live under the account's
+`.agent-remote-attachments` directory, outside the project and Claude configuration; Native exposes
+it under `/account`, while Docker Sandbox uses the mounted account path. No attachment Mutagen
+session or background transfer daemon is created. Each connection owns a separate temporary
+directory and reuses one owned SSH channel for successive uploads. EOF and detach remove its
+files automatically. Interrupted cleanup retains a private local receipt and retries on
+the next attachment transfer for the same session; another live terminal's files are never removed.
+Ordinary text paste
 keeps its original bracketed-paste behavior. Images are limited to 64 MiB, files/directories to
-256 MiB per paste, and 32 paths.
+256 MiB and 10,000 entries per paste, and 32 paths. Local archives are removed automatically.
+The Node installer already provides the Python 3 interpreter used inside its existing user-isolated
+SSH sync sandbox; no additional public endpoint or server credential is needed.
 Set `AGENT_REMOTE_ATTACHMENTS=0` to turn off this input bridge and retain direct SSH terminal input.
 Upgrade both components and reattach Native sessions; legacy Docker terminals must be stopped
 and recreated (restart account binding for a login terminal). New panes retain 20,000 history lines.

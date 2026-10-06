@@ -3,43 +3,42 @@
 //! Claude's terminal UI accepts image/file paths as attachments.  A remote
 //! session cannot read the local desktop clipboard or local drag paths, so the
 //! launcher stages those bytes in an application-owned temporary directory,
-//! synchronizes that directory through a short-lived Mutagen session, and
-//! returns the corresponding remote path.
+//! transfers a bounded archive over SSH, verifies acknowledgement, and returns
+//! an account-private remote path outside the project directory.
 
-use crate::mutagen;
-use crate::{api::SyncSessionData, config::AppPaths};
-use anyhow::{bail, Context, Result};
+mod archive;
+mod transfer;
+
+use crate::{api::AttachSessionData, config::AppPaths};
+use anyhow::{bail, Result};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use base64::Engine;
-use std::collections::BTreeSet;
+#[cfg(unix)]
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::process::Command;
 
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FILES_PER_PASTE: usize = 32;
-const ATTACHMENT_DIR: &str = "attachments";
-// `target` is already excluded by every supported workspace sync session,
-// including sessions created by older CLI versions.
-const REMOTE_ATTACHMENT_DIR: &str = "target/.agent-remote-attachments";
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
-static ATTACHMENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
 pub struct AttachmentContext {
-    pub local_workspace: PathBuf,
-    pub remote_workspace: String,
-    pub session_id: String,
-    workspace_sync: SyncSessionData,
-    attachment_sync: SyncSessionData,
-    attachment_parent_ready: Arc<AtomicBool>,
+    transfer: Arc<transfer::Transfer>,
+    cancelled: Arc<AtomicBool>,
+}
+
+pub(crate) struct CancellationGuard(AttachmentContext);
+impl Drop for CancellationGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,7 +95,11 @@ impl InputDecoder {
             self.pending.push(byte);
             while !BRACKETED_PASTE_START.starts_with(&self.pending) {
                 let first = self.pending.remove(0);
-                events.push(InputEvent::Bytes(vec![first]));
+                if let Some(InputEvent::Bytes(bytes)) = events.last_mut() {
+                    bytes.push(first);
+                } else {
+                    events.push(InputEvent::Bytes(vec![first]));
+                }
                 if self.pending.is_empty() {
                     break;
                 }
@@ -126,279 +129,42 @@ impl InputDecoder {
 
 impl AttachmentContext {
     #[allow(dead_code)]
-    pub fn new(
-        local_workspace: impl Into<PathBuf>,
-        remote_workspace: impl Into<String>,
-        session_id: impl Into<String>,
-        sync: SyncSessionData,
-    ) -> Self {
-        let session_id = session_id.into();
-        let attachment_sync = attachment_sync_data(&sync, &session_id);
-        Self {
-            local_workspace: local_workspace.into(),
-            remote_workspace: remote_workspace.into(),
-            session_id,
-            workspace_sync: sync.clone(),
-            attachment_sync,
-            attachment_parent_ready: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn with_attachment_sync(
-        local_workspace: impl Into<PathBuf>,
-        remote_workspace: impl Into<String>,
-        session_id: impl Into<String>,
-        sync: SyncSessionData,
-    ) -> Result<Self> {
-        let session_id = session_id.into();
-        validate_session_id(&session_id)?;
-        let attachment_sync = attachment_sync_data(&sync, &session_id);
+    pub fn new(attach: &AttachSessionData, account_path: String, backend: &str) -> Result<Self> {
         Ok(Self {
-            local_workspace: local_workspace.into(),
-            remote_workspace: remote_workspace.into(),
-            session_id,
-            workspace_sync: sync.clone(),
-            attachment_sync,
-            attachment_parent_ready: Arc::new(AtomicBool::new(false)),
+            transfer: Arc::new(transfer::Transfer::new(attach, account_path, backend)?),
+            cancelled: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    /// Stage an image or one or more files and flush the existing sync session.
-    /// The returned paths are safe to paste into the remote Claude prompt.
-    pub fn stage_payload(
+    pub(crate) fn cancellation_guard(&self) -> CancellationGuard {
+        CancellationGuard(self.clone())
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    /// Transfer one verified batch; only acknowledged remote paths may enter the prompt.
+    pub async fn stage_payload(
         &self,
         paths: &AppPaths,
         payload: ClipboardPayload,
     ) -> Result<Vec<String>> {
-        let root = self.attachment_root(paths)?;
-        let mut sync_ready = false;
-        let mut remote = Vec::new();
-        match payload {
-            ClipboardPayload::Image { bytes, extension } => {
-                if bytes.is_empty() || bytes.len() as u64 > MAX_IMAGE_BYTES {
-                    bail!("clipboard image exceeds the 64 MiB attachment limit");
-                }
-                self.ensure_attachment_sync(paths, &root)?;
-                sync_ready = true;
-                let destination = root.join(format!("{}.{extension}", unique_id()));
-                write_private(&destination, &bytes)?;
-                remote.push(self.remote_path(paths, &destination)?);
-            }
-            ClipboardPayload::Files(files) => {
-                if files.is_empty() || files.len() > MAX_FILES_PER_PASTE {
-                    bail!("file drop contains too many files");
-                }
-                let mut seen = BTreeSet::new();
-                for source in files {
-                    if fs::symlink_metadata(&source)
-                        .map(|metadata| metadata.file_type().is_symlink())
-                        .unwrap_or(false)
-                    {
-                        bail!("symbolic links are not allowed in dropped attachments");
-                    }
-                    let path = source.canonicalize().with_context(|| {
-                        format!("dropped path does not exist: {}", source.display())
-                    })?;
-                    let key = path.to_string_lossy().to_string();
-                    if !seen.insert(key) {
-                        continue;
-                    }
-                    if source_in_workspace(&self.local_workspace, &path) {
-                        remote.push(self.remote_workspace_path(&path)?);
-                    } else {
-                        self.ensure_attachment_sync(paths, &root)?;
-                        sync_ready = true;
-                        remote.push(self.stage_file(paths, &path, &root)?);
-                    }
-                }
-            }
+        let cancelled = self.cancelled.clone();
+        let archive =
+            tokio::task::spawn_blocking(move || archive::pack(payload, cancelled)).await??;
+        if self.cancelled.load(Ordering::Acquire) {
+            bail!("attachment transfer cancelled");
         }
-        if remote.is_empty() {
-            bail!("no usable attachment was found");
-        }
-        if sync_ready {
-            mutagen::resolve(paths, &self.sync_for_root(&root), false)?;
-        }
-        Ok(remote)
+        self.transfer.upload(paths, archive).await
     }
 
-    fn stage_file(&self, paths: &AppPaths, source: &Path, root: &Path) -> Result<String> {
-        if source.strip_prefix(&self.local_workspace).is_ok() {
-            return self.remote_workspace_path(source);
-        }
-        let metadata = fs::metadata(source)
-            .with_context(|| format!("failed to inspect dropped path {}", source.display()))?;
-        if metadata.is_file() {
-            if metadata.len() > MAX_FILE_BYTES {
-                bail!(
-                    "dropped file exceeds the 256 MiB attachment limit: {}",
-                    source.display()
-                );
-            }
-        } else if !metadata.is_dir() {
-            bail!("unsupported dropped path: {}", source.display());
-        }
-        let name = source
-            .file_name()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty() && *value != "." && *value != "..")
-            .unwrap_or("attachment");
-        let destination = root.join(format!("{}-{name}", unique_id()));
-        if metadata.is_dir() {
-            if let Err(error) = copy_dir_bounded(source, &destination, MAX_FILE_BYTES) {
-                let _ = fs::remove_dir_all(&destination);
-                return Err(error);
-            }
-        } else {
-            fs::copy(source, &destination)
-                .with_context(|| format!("failed to stage dropped file {}", source.display()))?;
-            set_private(&destination)?;
-        }
-        self.remote_path(paths, &destination)
-    }
-
-    pub fn attachment_root(&self, paths: &AppPaths) -> Result<PathBuf> {
-        validate_session_id(&self.session_id)?;
-        Ok(paths.home().join(ATTACHMENT_DIR).join(&self.session_id))
-    }
-
-    fn remote_path(&self, paths: &AppPaths, local: &Path) -> Result<String> {
-        let root = self.attachment_root(paths)?;
-        let relative = local
-            .strip_prefix(&root)
-            .context("attachment path is outside the temporary attachment directory")?;
-        let relative = relative
-            .to_str()
-            .context("attachment path is not valid UTF-8")?
-            .replace('\\', "/");
-        let root = self.remote_attachment_root();
-        Ok(format!("{root}/{relative}"))
-    }
-
-    fn remote_workspace_path(&self, local: &Path) -> Result<String> {
-        let relative = local
-            .strip_prefix(&self.local_workspace)
-            .context("attachment is outside the synchronized workspace")?;
-        let relative = relative
-            .to_str()
-            .context("attachment path is not valid UTF-8")?
-            .replace('\\', "/");
-        let root = self.remote_workspace.trim_end_matches('/');
-        Ok(format!("{root}/{relative}"))
-    }
-
-    fn remote_attachment_root(&self) -> String {
-        format!(
-            "{}/{REMOTE_ATTACHMENT_DIR}/{}",
-            self.remote_workspace.trim_end_matches('/'),
-            self.session_id
-        )
-    }
-
-    /// Remove the local temporary files and the remote temporary sync session.
-    /// The local deletion is flushed before termination so Mutagen does not
-    /// leave uploaded bytes behind on the node.
+    /// Remove only this connection's files. Failed cleanup retains a retry receipt.
     #[allow(dead_code)]
-    pub fn cleanup(&self, paths: &AppPaths) -> Result<()> {
-        let root = self.attachment_root(paths)?;
-        let attachment_sync = self.sync_for_root(&root);
-        let status = mutagen::status(paths, &attachment_sync)?;
-        if status.session_exists {
-            // Keep an empty local root present while flushing. Removing the
-            // root first makes Mutagen halt the session before it can delete
-            // the remote files.
-            fs::create_dir_all(&root).with_context(|| {
-                format!(
-                    "failed to recreate temporary attachment directory {}",
-                    root.display()
-                )
-            })?;
-            clear_directory(&root)?;
-            let _ = mutagen::resume(paths, &attachment_sync, false);
-            mutagen::resolve(paths, &attachment_sync, false)?;
-            mutagen::terminate_session(paths, mutagen::session_name(&attachment_sync)?, false)?;
-            fs::remove_dir_all(&root).with_context(|| {
-                format!(
-                    "failed to remove temporary attachment directory {}",
-                    root.display()
-                )
-            })?;
-        } else if status.session_missing {
-            if root.exists() {
-                fs::remove_dir_all(&root).with_context(|| {
-                    format!(
-                        "failed to remove temporary attachment directory {}",
-                        root.display()
-                    )
-                })?;
-            }
-        } else if status.installed {
-            bail!("unable to inspect the temporary attachment sync")
-        }
-        Ok(())
+    pub async fn cleanup(&self, paths: &AppPaths) -> Result<()> {
+        self.cancel();
+        self.transfer.cleanup(paths).await
     }
-
-    fn sync_for_root(&self, root: &Path) -> SyncSessionData {
-        let mut sync = self.attachment_sync.clone();
-        sync.local_path = root.to_string_lossy().into_owned();
-        sync
-    }
-
-    fn ensure_attachment_sync(&self, paths: &AppPaths, root: &Path) -> Result<()> {
-        if !self.attachment_parent_ready.load(Ordering::Acquire) {
-            self.ensure_attachment_parents(paths)?;
-            self.attachment_parent_ready.store(true, Ordering::Release);
-        }
-        fs::create_dir_all(root)
-            .with_context(|| format!("failed to create attachment directory {}", root.display()))?;
-        set_private_directory(root)?;
-        let attachment_sync = self.sync_for_root(root);
-        mutagen::ensure_attachment_sync(paths, &attachment_sync, false)
-            .context("failed to prepare the temporary attachment sync")?;
-        Ok(())
-    }
-
-    fn ensure_attachment_parents(&self, paths: &AppPaths) -> Result<()> {
-        for (index, suffix) in ["target", "target/.agent-remote-attachments"]
-            .iter()
-            .enumerate()
-        {
-            let local_root = paths
-                .home()
-                .join(ATTACHMENT_DIR)
-                .join(".parents")
-                .join(format!("{}-{index}", self.session_id));
-            fs::create_dir_all(&local_root)?;
-            let parent_sync =
-                parent_sync_data(&self.workspace_sync, &self.session_id, suffix, &local_root);
-            let created = mutagen::ensure_attachment_sync(paths, &parent_sync, false)?;
-            if !created {
-                let _ = mutagen::resume(paths, &parent_sync, false);
-            }
-            mutagen::resolve(paths, &parent_sync, false)?;
-            mutagen::terminate_session(paths, mutagen::session_name(&parent_sync)?, false)?;
-            fs::remove_dir_all(&local_root)?;
-        }
-        Ok(())
-    }
-}
-
-fn source_in_workspace(workspace: &Path, source: &Path) -> bool {
-    source.strip_prefix(workspace).is_ok()
-}
-
-fn clear_directory(path: &Path) -> Result<()> {
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let child = entry.path();
-        if entry.file_type()?.is_dir() {
-            fs::remove_dir_all(&child)?;
-        } else {
-            fs::remove_file(&child)?;
-        }
-    }
-    Ok(())
 }
 
 fn validate_session_id(session_id: &str) -> Result<()> {
@@ -406,84 +172,23 @@ fn validate_session_id(session_id: &str) -> Result<()> {
         || session_id.len() > 128
         || !session_id
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"-_".contains(&byte))
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
     {
-        bail!("invalid session id for attachment staging");
+        bail!("invalid session id for attachment transfer");
     }
     Ok(())
 }
 
-fn attachment_sync_data(sync: &SyncSessionData, session_id: &str) -> SyncSessionData {
-    let remote_path = format!(
-        "{}/{REMOTE_ATTACHMENT_DIR}/{session_id}",
-        sync.remote_path.trim_end_matches('/')
-    );
-    let workspace_remote_path = sync.remote_path.trim_end_matches('/');
-    let remote_endpoint = remote_endpoint_for(sync, &remote_path, workspace_remote_path);
-    let mut attachment = sync.clone();
-    attachment.id = format!("{}-attachments", sync.id);
-    attachment.local_path = String::new();
-    attachment.remote_path = remote_path;
-    attachment.sync_git = false;
-    attachment.mutagen_session_id = Some(format!("agent-remote-attachments-{session_id}"));
-    attachment.remote_endpoint = remote_endpoint;
-    attachment
-}
-
-fn parent_sync_data(
-    sync: &SyncSessionData,
-    session_id: &str,
-    suffix: &str,
-    local_root: &Path,
-) -> SyncSessionData {
-    let base = sync.remote_path.trim_end_matches('/');
-    let remote_path = format!("{base}/{suffix}");
-    let mut parent = sync.clone();
-    parent.id = format!("{}-attachment-parent-{session_id}-{suffix}", sync.id);
-    parent.local_path = local_root.to_string_lossy().into_owned();
-    parent.remote_path = remote_path.clone();
-    parent.sync_git = false;
-    let suffix_name = suffix
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    parent.mutagen_session_id = Some(format!(
-        "agent-remote-attachment-parent-{session_id}-{}",
-        suffix_name
-    ));
-    parent.remote_endpoint = remote_endpoint_for(sync, &remote_path, base);
-    parent
-}
-
-fn remote_endpoint_for(
-    sync: &SyncSessionData,
-    remote_path: &str,
-    workspace_remote_path: &str,
-) -> Option<String> {
-    sync.remote_endpoint.as_ref().and_then(|endpoint| {
-        endpoint
-            .trim_end_matches('/')
-            .strip_suffix(workspace_remote_path)
-            .map(|prefix| format!("{prefix}{remote_path}"))
-    })
-}
-
 /// Read the richest available local clipboard payload. Text is intentionally
 /// omitted so ordinary Ctrl+V keeps Claude's native text behavior.
-pub fn read_clipboard_payload() -> Option<ClipboardPayload> {
-    if let Some(bytes) = read_image() {
+pub async fn read_clipboard_payload() -> Option<ClipboardPayload> {
+    if let Some(bytes) = read_image().await {
         return Some(ClipboardPayload::Image {
             extension: image_extension(&bytes),
             bytes,
         });
     }
-    let files = read_clipboard_files();
+    let files = read_clipboard_files().await;
     (!files.is_empty()).then_some(ClipboardPayload::Files(files))
 }
 
@@ -588,17 +293,10 @@ fn percent_decode(value: &str) -> Option<String> {
     String::from_utf8(output).ok()
 }
 
-fn unique_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    let counter = ATTACHMENT_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{nanos:x}-{}-{counter:x}", std::process::id())
-}
-
-fn read_image() -> Option<Vec<u8>> {
-    read_image_platform().filter(|bytes| !bytes.is_empty())
+async fn read_image() -> Option<Vec<u8>> {
+    read_image_platform()
+        .await
+        .filter(|bytes| !bytes.is_empty())
 }
 
 fn image_extension(bytes: &[u8]) -> &'static str {
@@ -612,18 +310,18 @@ fn image_extension(bytes: &[u8]) -> &'static str {
 }
 
 #[cfg(target_os = "macos")]
-fn read_image_platform() -> Option<Vec<u8>> {
+async fn read_image_platform() -> Option<Vec<u8>> {
     let script = r#"ObjC.import('AppKit'); var p=$.NSPasteboard.generalPasteboard; var d=p.dataForType($.NSPasteboardTypePNG); if (!d || d.isNil()) d=p.dataForType($.NSPasteboardTypeTIFF); if (d && !d.isNil()) $.NSFileHandle.fileHandleWithStandardOutput.writeData(d);"#;
-    run_bytes("/usr/bin/osascript", &["-l", "JavaScript", "-e", script])
+    run_bytes("/usr/bin/osascript", &["-l", "JavaScript", "-e", script]).await
 }
 
 #[cfg(target_os = "windows")]
-fn read_image_platform() -> Option<Vec<u8>> {
-    read_image_windows()
+async fn read_image_platform() -> Option<Vec<u8>> {
+    read_image_windows().await
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn read_image_windows() -> Option<Vec<u8>> {
+async fn read_image_windows() -> Option<Vec<u8>> {
     let script = r#"Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $i=[Windows.Forms.Clipboard]::GetImage(); if ($null -ne $i) { $m=New-Object IO.MemoryStream; $i.Save($m,[Drawing.Imaging.ImageFormat]::Png); [Console]::Write([Convert]::ToBase64String($m.ToArray())) }"#;
     let encoded = run_text(
         "powershell.exe",
@@ -635,14 +333,15 @@ fn read_image_windows() -> Option<Vec<u8>> {
             "-Command",
             script,
         ],
-    )?;
+    )
+    .await?;
     base64::engine::general_purpose::STANDARD
         .decode(encoded.trim())
         .ok()
 }
 
 #[cfg(target_os = "linux")]
-fn read_image_platform() -> Option<Vec<u8>> {
+async fn read_image_platform() -> Option<Vec<u8>> {
     for (program, args) in [
         ("wl-paste", vec!["--no-newline", "--type", "image/png"]),
         (
@@ -658,31 +357,32 @@ fn read_image_platform() -> Option<Vec<u8>> {
             vec!["--clipboard", "--output", "--mime-type", "image/png"],
         ),
     ] {
-        if let Some(bytes) = run_bytes(program, &args) {
+        if let Some(bytes) = run_bytes(program, &args).await {
             if !bytes.is_empty() {
                 return Some(bytes);
             }
         }
     }
     if std::env::var_os("WSL_INTEROP").is_some() || std::env::var_os("WSL_DISTRO_NAME").is_some() {
-        return read_image_windows();
+        return read_image_windows().await;
     }
     None
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-fn read_image_platform() -> Option<Vec<u8>> {
+async fn read_image_platform() -> Option<Vec<u8>> {
     None
 }
 
-fn read_clipboard_files() -> Vec<PathBuf> {
-    read_clipboard_files_platform()
+async fn read_clipboard_files() -> Vec<PathBuf> {
+    read_clipboard_files_platform().await
 }
 
 #[cfg(target_os = "macos")]
-fn read_clipboard_files_platform() -> Vec<PathBuf> {
-    let script = r#"ObjC.import('AppKit'); var p=$.NSPasteboard.generalPasteboard; var a=p.propertyListForType($.NSFilenamesPboardType); if (a && !a.isNil()) { var n=ObjC.deepUnwrap(a); n.forEach(function(v){ console.log(v); }); }"#;
+async fn read_clipboard_files_platform() -> Vec<PathBuf> {
+    let script = r#"ObjC.import('AppKit'); var p=$.NSPasteboard.generalPasteboard; var a=p.propertyListForType($.NSFilenamesPboardType); if (a && !a.isNil()) { var n=ObjC.deepUnwrap(a); var d=$(n.join("\n")).dataUsingEncoding($.NSUTF8StringEncoding); $.NSFileHandle.fileHandleWithStandardOutput.writeData(d); }"#;
     run_text("/usr/bin/osascript", &["-l", "JavaScript", "-e", script])
+        .await
         .map(|value| {
             value
                 .lines()
@@ -694,12 +394,12 @@ fn read_clipboard_files_platform() -> Vec<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-fn read_clipboard_files_platform() -> Vec<PathBuf> {
-    read_clipboard_files_windows()
+async fn read_clipboard_files_platform() -> Vec<PathBuf> {
+    read_clipboard_files_windows().await
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn read_clipboard_files_windows() -> Vec<PathBuf> {
+async fn read_clipboard_files_windows() -> Vec<PathBuf> {
     let script = r#"Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.Clipboard]::GetFileDropList() | ForEach-Object { $_ }"#;
     run_text(
         "powershell.exe",
@@ -712,6 +412,7 @@ fn read_clipboard_files_windows() -> Vec<PathBuf> {
             script,
         ],
     )
+    .await
     .map(|value| {
         value
             .lines()
@@ -723,7 +424,7 @@ fn read_clipboard_files_windows() -> Vec<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_clipboard_files_platform() -> Vec<PathBuf> {
+async fn read_clipboard_files_platform() -> Vec<PathBuf> {
     for (program, args) in [
         ("wl-paste", vec!["--no-newline", "--type", "text/uri-list"]),
         (
@@ -735,7 +436,7 @@ fn read_clipboard_files_platform() -> Vec<PathBuf> {
             vec!["--clipboard", "--output", "--mime-type", "text/uri-list"],
         ),
     ] {
-        if let Some(value) = run_text(program, &args) {
+        if let Some(value) = run_text(program, &args).await {
             let paths: Vec<_> = value
                 .lines()
                 .filter_map(decode_uri_or_shell_path)
@@ -748,39 +449,44 @@ fn read_clipboard_files_platform() -> Vec<PathBuf> {
         }
     }
     if std::env::var_os("WSL_INTEROP").is_some() || std::env::var_os("WSL_DISTRO_NAME").is_some() {
-        return read_clipboard_files_windows();
+        return read_clipboard_files_windows().await;
     }
     Vec::new()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-fn read_clipboard_files_platform() -> Vec<PathBuf> {
+async fn read_clipboard_files_platform() -> Vec<PathBuf> {
     Vec::new()
 }
 
-fn run_bytes(program: &str, args: &[&str]) -> Option<Vec<u8>> {
-    let output = Command::new(program).args(args).output().ok()?;
-    output.status.success().then_some(output.stdout)
+async fn run_bytes(program: &str, args: &[&str]) -> Option<Vec<u8>> {
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?.take(MAX_IMAGE_BYTES * 2 + 1);
+    let operation = async {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).await.ok()?;
+        if bytes.len() as u64 > MAX_IMAGE_BYTES * 2 {
+            return None;
+        }
+        child.wait().await.ok()?.success().then_some(bytes)
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), operation)
+        .await
+        .ok()
+        .flatten()
 }
 
-fn run_text(program: &str, args: &[&str]) -> Option<String> {
-    String::from_utf8(run_bytes(program, args)?).ok()
-}
-
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    fs::write(path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
-    set_private(path)
-}
-
-fn set_private(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
+async fn run_text(program: &str, args: &[&str]) -> Option<String> {
+    String::from_utf8(run_bytes(program, args).await?).ok()
 }
 
 fn set_private_directory(path: &Path) -> Result<()> {
@@ -794,118 +500,13 @@ fn set_private_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn copy_dir_bounded(source: &Path, destination: &Path, limit: u64) -> Result<u64> {
-    fs::create_dir_all(destination)?;
-    set_private_directory(destination)?;
-    let mut total = 0;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let target_path = destination.join(entry.file_name());
-        let metadata = fs::symlink_metadata(&source_path)?;
-        if metadata.file_type().is_symlink() {
-            bail!("symbolic links are not allowed in dropped directories");
-        }
-        if metadata.is_dir() {
-            fs::create_dir_all(&target_path)?;
-            total += copy_dir_bounded(&source_path, &target_path, limit.saturating_sub(total))?;
-        } else if metadata.is_file() {
-            if metadata.len() > limit.saturating_sub(total) {
-                bail!("dropped directory exceeds the 256 MiB attachment limit");
-            }
-            fs::copy(&source_path, &target_path)?;
-            set_private(&target_path)?;
-            total += metadata.len();
-        }
-    }
-    Ok(total)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        attachment_sync_data, copy_dir_bounded, decode_uri_or_shell_path, image_extension,
-        parent_sync_data, parse_dropped_paths, AttachmentContext, InputDecoder, InputEvent,
+        decode_uri_or_shell_path, image_extension, parse_dropped_paths, InputDecoder, InputEvent,
     };
-    use crate::api::SyncSessionData;
-    use crate::config::AppPaths;
     use std::fs;
-    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
-
-    fn sync_session() -> SyncSessionData {
-        SyncSessionData {
-            id: "sync_1".into(),
-            user_id: "user_1".into(),
-            workspace_id: "workspace_1".into(),
-            node_id: Some("node_1".into()),
-            local_path: "/tmp/project".into(),
-            remote_path: "/var/lib/agent-remote/workspace".into(),
-            status: "active".into(),
-            conflict_status: "none".into(),
-            sync_mode: "two_way".into(),
-            sync_git: true,
-            exclude: Vec::new(),
-            mutagen_session_id: Some("agent-remote-sync".into()),
-            remote_endpoint: Some("agent@host:22:/var/lib/agent-remote/workspace".into()),
-            prepare_task_id: None,
-            created_at: "2026-01-01T00:00:00Z".into(),
-            updated_at: "2026-01-01T00:00:00Z".into(),
-        }
-    }
-
-    #[test]
-    fn attachment_staging_root_is_outside_project() {
-        let project = tempdir().unwrap();
-        let app_home = tempdir().unwrap();
-        let paths = AppPaths::from_home(app_home.path().join("agent-remote"));
-        let context = AttachmentContext::with_attachment_sync(
-            project.path(),
-            "/workspace",
-            "session_1",
-            sync_session(),
-        )
-        .unwrap();
-        let root = context.attachment_root(&paths).unwrap();
-        assert!(!root.starts_with(project.path()));
-        assert_eq!(
-            root,
-            PathBuf::from(app_home.path()).join("agent-remote/attachments/session_1")
-        );
-    }
-
-    #[test]
-    fn attachment_sync_uses_remote_temp_namespace() {
-        let sync = attachment_sync_data(&sync_session(), "session_1");
-        assert_eq!(
-            sync.remote_path,
-            "/var/lib/agent-remote/workspace/target/.agent-remote-attachments/session_1"
-        );
-        assert_eq!(
-            sync.remote_endpoint.as_deref(),
-            Some(
-                "agent@host:22:/var/lib/agent-remote/workspace/target/.agent-remote-attachments/session_1"
-            )
-        );
-        assert_eq!(
-            sync.mutagen_session_id.as_deref(),
-            Some("agent-remote-attachments-session_1")
-        );
-        assert!(!sync.sync_git);
-    }
-
-    #[test]
-    fn attachment_parent_session_names_are_mutagen_safe() {
-        let sync = parent_sync_data(
-            &sync_session(),
-            "session_1",
-            "target/.agent-remote-attachments",
-            Path::new("/tmp/attachments-parent"),
-        );
-        let name = sync.mutagen_session_id.unwrap();
-        assert!(!name.contains('.'));
-        assert!(!name.contains('/'));
-    }
 
     #[test]
     fn parses_shell_escaped_paths() {
@@ -934,11 +535,7 @@ mod tests {
         let mut decoder = InputDecoder::default();
         assert_eq!(
             decoder.feed(b"abc"),
-            vec![
-                InputEvent::Bytes(vec![b'a']),
-                InputEvent::Bytes(vec![b'b']),
-                InputEvent::Bytes(vec![b'c']),
-            ]
+            vec![InputEvent::Bytes(b"abc".to_vec())]
         );
         assert_eq!(decoder.feed(&[0x16]), vec![InputEvent::ClipboardPaste]);
         assert!(decoder.feed(b"\x1b[200~/tmp/a").is_empty());
@@ -949,22 +546,6 @@ mod tests {
         let mut partial = InputDecoder::default();
         assert!(partial.feed(b"\x1b[").is_empty());
         assert_eq!(partial.finish(), vec![InputEvent::Bytes(b"\x1b[".to_vec())]);
-    }
-
-    #[test]
-    fn copies_directories_with_their_contents_and_limit() {
-        let source = tempdir().unwrap();
-        let output_root = tempdir().unwrap();
-        fs::create_dir(source.path().join("nested")).unwrap();
-        fs::write(source.path().join("nested/file.txt"), b"hello").unwrap();
-        let destination = output_root.path().join("out");
-        assert_eq!(copy_dir_bounded(source.path(), &destination, 5).unwrap(), 5);
-        assert_eq!(
-            fs::read(destination.join("nested/file.txt")).unwrap(),
-            b"hello"
-        );
-        let too_small = output_root.path().join("too-small");
-        assert!(copy_dir_bounded(source.path(), &too_small, 4).is_err());
     }
 
     #[test]

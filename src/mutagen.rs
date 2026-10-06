@@ -42,14 +42,6 @@ pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
     create_with_mode(paths, sync, dry_run, "two-way-safe")
 }
 
-pub fn create_attachment_sync(
-    paths: &AppPaths,
-    sync: &SyncSessionData,
-    dry_run: bool,
-) -> Result<()> {
-    create_with_mode(paths, sync, dry_run, "one-way-safe")
-}
-
 fn create_with_mode(
     paths: &AppPaths,
     sync: &SyncSessionData,
@@ -129,23 +121,6 @@ pub fn status(paths: &AppPaths, sync: &SyncSessionData) -> Result<MutagenStatus>
 }
 
 pub fn ensure(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<bool> {
-    ensure_with_create(paths, sync, dry_run, create)
-}
-
-pub fn ensure_attachment_sync(
-    paths: &AppPaths,
-    sync: &SyncSessionData,
-    dry_run: bool,
-) -> Result<bool> {
-    ensure_with_create(paths, sync, dry_run, create_attachment_sync)
-}
-
-fn ensure_with_create(
-    paths: &AppPaths,
-    sync: &SyncSessionData,
-    dry_run: bool,
-    create_fn: fn(&AppPaths, &SyncSessionData, bool) -> Result<()>,
-) -> Result<bool> {
     let status = status(paths, sync)?;
     if !status.installed {
         bail!("Mutagen is missing; install the packaged CLI dependencies");
@@ -156,7 +131,7 @@ fn ensure_with_create(
     if !status.session_missing {
         bail!("unable to inspect the managed Mutagen session");
     }
-    create_fn(paths, sync, dry_run)?;
+    create(paths, sync, dry_run)?;
     Ok(true)
 }
 

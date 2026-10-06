@@ -62,14 +62,27 @@ fn remote_probe() {
         return;
     }
     crossterm::terminal::enable_raw_mode().unwrap();
+    let mode = std::env::var("DETACH_MODE").unwrap();
+    if mode == "remote-close" {
+        print!("\x1b[?1049h");
+    }
     print!("\x1b[?1000h\x1b[?1006hREMOTE_READY\r\n");
     std::io::stdout().flush().unwrap();
-    if std::env::var("DETACH_MODE").as_deref() != Ok("quiet") {
+    if !matches!(mode.as_str(), "quiet" | "remote-close") {
         let mut input = [0; 2];
         std::io::stdin().read_exact(&mut input).unwrap();
         assert_eq!(input, [2, b'd']);
     } else {
         std::thread::sleep(Duration::from_millis(100));
+    }
+    if matches!(mode.as_str(), "mouse-motion" | "remote-close") {
+        if mode == "remote-close" {
+            print!("\x1b[?1049l");
+        }
+        crossterm::terminal::disable_raw_mode().unwrap();
+        println!("REMOTE_COOKED");
+        std::io::stdout().flush().unwrap();
+        std::thread::sleep(Duration::from_millis(250));
     }
     // Simulate abrupt disconnect: no mouse or raw-mode reset from the child.
     std::process::exit(23);
@@ -102,6 +115,8 @@ fn exercise(mode: &str) {
     let mut remote_sent = 0;
     let mut local_sent = 0;
     let mut cursor_replies = 0;
+    let mut cooked_count = 0;
+    let mut motion_until = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(10);
     let status = loop {
         if let Ok(bytes) = receive.recv_timeout(Duration::from_millis(20)) {
@@ -116,12 +131,21 @@ fn exercise(mode: &str) {
         }
         let ready = output.matches("REMOTE_READY").count();
         while remote_sent < ready {
-            if mode != "quiet" {
+            if !matches!(mode, "quiet" | "remote-close") {
                 // No newline. Include a release report in flight at detach.
                 writer.write_all(b"\x02d\x1b[<0;45;50m").unwrap();
                 writer.flush().unwrap();
             }
             remote_sent += 1;
+        }
+        let cooked = output.matches("REMOTE_COOKED").count();
+        if cooked > cooked_count {
+            cooked_count = cooked;
+            motion_until = Instant::now() + Duration::from_millis(100);
+        }
+        if matches!(mode, "mouse-motion" | "remote-close") && Instant::now() < motion_until {
+            let _ = writer.write_all(b"\x1b[<35;33;50M\x1b[<35;32;51M");
+            let _ = writer.flush();
         }
         let ready = output.matches("LOCAL_INPUT_READY").count();
         while local_sent < ready {
@@ -158,11 +182,14 @@ fn exercise(mode: &str) {
         "{output}"
     );
     assert!(output.contains("RUNTIME_EXITED"), "{output}");
+    assert!(
+        !output.contains("[<35;"),
+        "mouse motion leaked after detach: {output}"
+    );
     #[cfg(unix)]
     {
-        assert_eq!(
-            output.matches("\x1b[?1006l").count(),
-            if mode == "spawn-error" { 1 } else { 2 },
+        assert!(
+            output.matches("\x1b[?1006l").count() >= if mode == "spawn-error" { 1 } else { 2 },
             "{output}"
         );
         assert!(!output.contains("^[[<0;45;50m"), "{output}");
@@ -192,4 +219,14 @@ fn failed_ssh_spawn_restores_terminal_and_stops_reader() {
 #[test]
 fn failed_ssh_spawn_leaves_local_input_available() {
     exercise("spawn-error-followup");
+}
+
+#[test]
+fn mouse_motion_during_cooked_ssh_shutdown_is_discarded() {
+    exercise("mouse-motion");
+}
+
+#[test]
+fn remote_screen_exit_stops_mouse_before_ssh_finishes() {
+    exercise("remote-close");
 }

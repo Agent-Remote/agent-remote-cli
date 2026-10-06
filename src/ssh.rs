@@ -1,7 +1,9 @@
 use std::process::Command;
 
+mod attachment_input;
 mod clipboard;
 mod clipboard_stream;
+mod exit;
 mod interactive;
 mod login_clipboard;
 mod pty;
@@ -12,8 +14,9 @@ use stdin::StdinReader;
 use tokio::io::AsyncWriteExt;
 
 use crate::api::AttachSessionData;
-use crate::attachments::{self, AttachmentContext, InputDecoder, InputEvent};
+use crate::attachments::AttachmentContext;
 use crate::config::AppPaths;
+use attachment_input::relay_input;
 
 pub fn check_ssh_available() -> Result<String> {
     let ssh = crate::platform::ssh_binary();
@@ -88,6 +91,9 @@ async fn execute_interactive_with_attachments(
     let attachment = attachment
         .filter(|_| std::env::var_os("AGENT_REMOTE_ATTACHMENTS").is_none_or(|value| value != "0"));
     let attachment_requested = attachment.is_some();
+    let _attachment_guard = attachment
+        .as_ref()
+        .map(AttachmentContext::cancellation_guard);
     if !std::io::stdin().is_terminal()
         || !std::io::stdout().is_terminal()
         || std::env::var_os("AGENT_REMOTE_LOGIN_CLIPBOARD_ACTIVE").is_some()
@@ -106,7 +112,7 @@ async fn execute_interactive_with_attachments(
         .map(|attachment| {
             let paths = app_paths.cloned().map(Ok).unwrap_or_else(|| AppPaths::new(None))?;
             crate::terminal::note(
-                "Clipboard images and file drops are bridged into the synchronized Claude workspace.",
+                "Clipboard images and file drops upload directly to an isolated temporary directory.",
             );
             Ok::<_, anyhow::Error>((paths, attachment))
         })
@@ -117,6 +123,8 @@ async fn execute_interactive_with_attachments(
     };
     let raw_mode = std::sync::Arc::new(raw_mode);
     let input = StdinReader::spawn(raw_mode.clone())?;
+    let exit = exit::ExitState::default();
+    let input_exit = exit.clone();
     let session = pty::Session::spawn(command, pty::command_size())?;
     let (mut output, writer, resize_handle, pty_child) = session.parts();
     let resize_task_handle = resize_handle.clone();
@@ -138,9 +146,9 @@ async fn execute_interactive_with_attachments(
     });
     tasks.spawn(async move {
         if let Some((paths, attachment)) = attachment {
-            relay_input(writer, resize_handle, input, paths, attachment).await
+            relay_input(writer, resize_handle, input, paths, attachment, input_exit).await
         } else {
-            relay_passthrough(writer, resize_handle, input).await
+            relay_passthrough(writer, resize_handle, input, input_exit).await
         }
     });
     let size = || match terminal_size::terminal_size() {
@@ -155,6 +163,7 @@ async fn execute_interactive_with_attachments(
         selection_copy,
         size,
         |text| async move { clipboard::copy(&text).await },
+        Some(&exit),
     );
     tokio::pin!(observer);
     // ConPTY keeps its output pipe open until the PTY master is closed.
@@ -165,11 +174,13 @@ async fn execute_interactive_with_attachments(
     tokio::pin!(wait);
     let (observe_result, status_result) = tokio::select! {
         status = &mut wait => {
+            exit.reset();
             tasks.abort_all();
             while tasks.join_next().await.is_some() {}
             (observer.await, status)
         }
         observed = &mut observer => {
+            exit.reset();
             tasks.abort_all();
             while tasks.join_next().await.is_some() {}
             if observed.is_err() {
@@ -200,106 +211,16 @@ async fn execute_interactive_with_attachments(
     Ok(status)
 }
 
-async fn relay_input<W>(
-    mut remote: W,
-    resize_handle: pty::ResizeHandle,
-    mut input: StdinReader,
-    paths: AppPaths,
-    attachment: AttachmentContext,
-) -> Result<()>
-where
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    let mut decoder = InputDecoder::default();
-    let mut buffer = [0u8; 8192];
-    let mut previous_size = pty::command_size();
-    loop {
-        let bytes = input.recv().await?.unwrap_or_default();
-        let count = bytes.len();
-        buffer[..count].copy_from_slice(&bytes);
-        if count == 0 {
-            for event in decoder.finish() {
-                if let InputEvent::Bytes(bytes) = event {
-                    remote.write_all(&bytes).await?;
-                }
-            }
-            remote.flush().await?;
-            break;
-        }
-        resize_if_needed(&resize_handle, &mut previous_size);
-        for event in decoder.feed(&buffer[..count]) {
-            match event {
-                InputEvent::Bytes(bytes) => remote.write_all(&bytes).await?,
-                InputEvent::ClipboardPaste => {
-                    let payload = tokio::task::spawn_blocking(attachments::read_clipboard_payload)
-                        .await
-                        .ok()
-                        .flatten();
-                    if let Some(payload) = payload {
-                        let attachment = attachment.clone();
-                        let paths_clone = paths.clone();
-                        let staged = tokio::task::spawn_blocking(move || {
-                            attachment.stage_payload(&paths_clone, payload)
-                        })
-                        .await
-                        .ok()
-                        .and_then(Result::ok);
-                        if let Some(staged) = staged {
-                            remote
-                                .write_all(&bracketed_attachment_text(&staged))
-                                .await?;
-                        } else {
-                            remote.write_all(b"\x07\x16").await?;
-                        }
-                    } else {
-                        remote.write_all(&[0x16]).await?;
-                    }
-                }
-                InputEvent::BracketedPaste(value) => {
-                    if let Some(local_paths) = attachments::parse_dropped_paths(
-                        std::str::from_utf8(&value).unwrap_or_default(),
-                    ) {
-                        let attachment = attachment.clone();
-                        let paths_clone = paths.clone();
-                        let staged = tokio::task::spawn_blocking(move || {
-                            attachment.stage_payload(
-                                &paths_clone,
-                                attachments::ClipboardPayload::Files(local_paths),
-                            )
-                        })
-                        .await
-                        .ok()
-                        .and_then(Result::ok);
-                        if let Some(staged) = staged {
-                            remote
-                                .write_all(&bracketed_attachment_text(&staged))
-                                .await?;
-                        } else {
-                            remote.write_all(b"\x07\x1b[200~").await?;
-                            remote.write_all(&value).await?;
-                            remote.write_all(b"\x1b[201~").await?;
-                        }
-                    } else {
-                        remote.write_all(b"\x1b[200~").await?;
-                        remote.write_all(&value).await?;
-                        remote.write_all(b"\x1b[201~").await?;
-                    }
-                }
-            }
-        }
-        remote.flush().await?;
-    }
-    Ok(())
-}
-
 async fn relay_passthrough<W>(
     mut remote: W,
     resize_handle: pty::ResizeHandle,
     mut input: StdinReader,
+    exit: exit::ExitState,
 ) -> Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
+    let mut detach = exit::Input::default();
     let mut buffer = [0u8; 8192];
     let mut previous_size = pty::command_size();
     loop {
@@ -311,7 +232,9 @@ where
             break;
         }
         resize_if_needed(&resize_handle, &mut previous_size);
-        remote.write_all(&buffer[..count]).await?;
+        remote
+            .write_all(detach.filter(&buffer[..count], &exit))
+            .await?;
         remote.flush().await?;
     }
     Ok(())
@@ -393,7 +316,7 @@ impl Drop for RawModeGuard {
         // Stop generating mouse/focus reports before handing input to the shell.
         use std::io::Write;
         let mut stdout = std::io::stdout();
-        let _ = stdout.write_all(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l");
+        let _ = stdout.write_all(exit::RESET);
         let _ = stdout.flush();
         crate::terminal::flush_input();
         #[cfg(windows)]

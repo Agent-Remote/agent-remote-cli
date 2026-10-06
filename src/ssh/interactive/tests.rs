@@ -42,6 +42,7 @@ async fn eof_waits_for_slow_copy_and_the_latest_pending_selection() {
                 CopyResult::Native
             }
         },
+        None,
     )
     .await
     .unwrap();
@@ -65,6 +66,7 @@ async fn hung_copy_is_cancelled_at_the_shutdown_deadline() {
         true,
         || (24, 80),
         |_| async { std::future::pending::<CopyResult>().await },
+        None,
     )
     .await
     .unwrap();
@@ -85,6 +87,7 @@ async fn rejected_selection_alerts_without_rendering_content_or_copying_it() {
         true,
         || (24, 80),
         |_| async { panic!("invalid selection must never reach clipboard") },
+        None,
     )
     .await
     .unwrap();
@@ -107,6 +110,7 @@ async fn terminal_fallback_is_flushed_even_when_ssh_has_already_exited() {
             tokio::task::yield_now().await;
             CopyResult::Terminal("fallback".into())
         },
+        None,
     )
     .await
     .unwrap();
