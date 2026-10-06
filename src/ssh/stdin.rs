@@ -6,6 +6,8 @@ use tokio::sync::mpsc;
 pub(super) struct StdinReader {
     receiver: mpsc::Receiver<io::Result<Vec<u8>>>,
     thread: Option<thread::JoinHandle<()>>,
+    #[cfg(windows)]
+    console: std::sync::Arc<std::fs::File>,
     // Keep raw mode until the thread is joined, including attach cancellation.
     _raw_mode: std::sync::Arc<super::RawModeGuard>,
 }
@@ -13,13 +15,33 @@ pub(super) struct StdinReader {
 impl StdinReader {
     pub(super) fn spawn(raw_mode: std::sync::Arc<super::RawModeGuard>) -> Result<Self> {
         let (sender, receiver) = mpsc::channel(8);
+        // Use a separate console open, not a duplicate of the process stdin
+        // handle. Console read/cancellation state belongs to the open handle;
+        // subsequent local readers must not inherit it after detach.
+        #[cfg(windows)]
+        let console = std::sync::Arc::new(
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("CONIN$")
+                .context("failed to open terminal input")?,
+        );
+        #[cfg(windows)]
+        let reader_console = console.clone();
         let thread = thread::Builder::new()
             .name("agent-remote-stdin".into())
-            .spawn(move || read_input(sender))
+            .spawn(move || {
+                #[cfg(windows)]
+                read_input(sender, reader_console);
+                #[cfg(unix)]
+                read_input(sender);
+            })
             .context("failed to start terminal input reader")?;
         Ok(Self {
             receiver,
             thread: Some(thread),
+            #[cfg(windows)]
+            console,
             _raw_mode: raw_mode,
         })
     }
@@ -37,14 +59,13 @@ impl Drop for StdinReader {
             #[cfg(windows)]
             {
                 use std::os::windows::io::AsRawHandle;
-                use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE};
                 use windows_sys::Win32::System::IO::{CancelIoEx, CancelSynchronousIo};
                 // Repeat to cover cancellation racing the start of ReadConsole.
                 // Unlike injecting a newline, this never becomes shell input.
                 while !thread.is_finished() {
                     // SAFETY: the JoinHandle owns this live thread handle.
                     unsafe {
-                        CancelIoEx(GetStdHandle(STD_INPUT_HANDLE), std::ptr::null());
+                        CancelIoEx(self.console.as_raw_handle(), std::ptr::null());
                         CancelSynchronousIo(thread.as_raw_handle());
                     };
                     thread::sleep(std::time::Duration::from_millis(5));
@@ -115,8 +136,9 @@ fn read_ready_input(
 }
 
 #[cfg(windows)]
-fn read_input(sender: mpsc::Sender<io::Result<Vec<u8>>>) {
-    use windows_sys::Win32::System::Console::{GetStdHandle, ReadConsoleW, STD_INPUT_HANDLE};
+fn read_input(sender: mpsc::Sender<io::Result<Vec<u8>>>, console: std::sync::Arc<std::fs::File>) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Console::ReadConsoleW;
     let mut buffer = [0u16; 2048];
     let mut decoder = ConsoleUtf16::default();
     // Do not use std::io::stdin: it silently retries ReadConsoleW after a
@@ -127,7 +149,7 @@ fn read_input(sender: mpsc::Sender<io::Result<Vec<u8>>>) {
         // SAFETY: ReadConsoleW writes at most buffer.len() UTF-16 code units.
         let success = unsafe {
             ReadConsoleW(
-                GetStdHandle(STD_INPUT_HANDLE),
+                console.as_raw_handle(),
                 buffer.as_mut_ptr().cast(),
                 buffer.len() as u32,
                 &mut count,

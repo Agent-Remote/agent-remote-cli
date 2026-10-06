@@ -20,18 +20,26 @@ fn attach_probe() {
         println!("RUNTIME_EXITED");
         return;
     }
+    let missing_command = tempfile::tempdir().unwrap();
     for attempt in 0..2 {
         println!("ATTACH_START_{attempt}");
-        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        let program = if mode == "spawn-error-followup" {
+            missing_command.path().join("missing-ssh")
+        } else {
+            std::env::current_exe().unwrap()
+        };
+        let mut command = tokio::process::Command::new(program);
         command.args(["--exact", "remote_probe", "--nocapture"]);
         command.env("DETACH_PROBE", "remote");
-        let status = runtime
-            .block_on(agent_remote_cli::ssh::execute_interactive(&mut command))
-            .unwrap();
+        let result = runtime.block_on(agent_remote_cli::ssh::execute_interactive(&mut command));
         println!("ATTACH_RETURNED_{attempt}");
-        assert_eq!(status.code(), Some(23));
+        if mode == "spawn-error-followup" {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(result.unwrap().code(), Some(23));
+        }
         assert!(!crossterm::terminal::is_raw_mode_enabled().unwrap());
-        if mode == "followup" {
+        if matches!(mode.as_str(), "followup" | "spawn-error-followup") {
             // The attach reader must be gone before another local consumer
             // starts. A detached blocking thread would steal this byte.
             crossterm::terminal::enable_raw_mode().unwrap();
@@ -142,7 +150,11 @@ fn exercise(mode: &str) {
     );
     assert_eq!(
         remote_sent,
-        if mode == "spawn-error" { 0 } else { 2 },
+        if mode.starts_with("spawn-error") {
+            0
+        } else {
+            2
+        },
         "{output}"
     );
     assert!(output.contains("RUNTIME_EXITED"), "{output}");
@@ -175,4 +187,9 @@ fn repeated_attach_leaves_local_input_available() {
 #[test]
 fn failed_ssh_spawn_restores_terminal_and_stops_reader() {
     exercise("spawn-error");
+}
+
+#[test]
+fn failed_ssh_spawn_leaves_local_input_available() {
+    exercise("spawn-error-followup");
 }
