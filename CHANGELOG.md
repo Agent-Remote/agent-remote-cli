@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.52 - 2026-10-06
+
+- fix(release): pin node with attachment directory grants (49b8ca9)
+
 ## v0.2.51 - 2026-10-06
 
 - fix(attachments): stream isolated files over owned ssh channels and stabilize detach (6a3d40f)
