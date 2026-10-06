@@ -4,6 +4,7 @@ mod clipboard;
 mod clipboard_stream;
 mod interactive;
 mod login_clipboard;
+mod pty;
 
 use anyhow::{bail, Context, Result};
 use tokio::io::AsyncWriteExt;
@@ -92,41 +93,45 @@ async fn execute_interactive_with_attachments(
     {
         return command.status().await.context("failed to run SSH");
     }
-    let attachment_enabled = attachment.is_some();
-    command
-        .env("AGENT_REMOTE_LOGIN_CLIPBOARD_ACTIVE", "1")
-        .stdout(std::process::Stdio::piped())
-        .stdin(if attachment_enabled {
-            std::process::Stdio::piped()
-        } else {
-            std::process::Stdio::inherit()
-        })
-        .kill_on_drop(true);
+    command.env("AGENT_REMOTE_LOGIN_CLIPBOARD_ACTIVE", "1");
     if login_copy {
         crate::terminal::note("Claude login links copy automatically. Terminal clipboard permission may be required when no desktop clipboard is available.");
     }
     if selection_copy {
         crate::terminal::note("Drag to select remote text; release to copy (requires an updated Node). Selections are limited to 64 KiB; a bell signals rejected text. Your terminal may support Shift/Option-drag for native selection.");
     }
-    let mut child = command.spawn().context("failed to start SSH")?;
-    let mut output = child.stdout.take().context("missing SSH output")?;
-    let mut input_task = None;
-    if let Some(attachment) = attachment {
-        let input = child
-            .stdin
-            .take()
-            .context("missing SSH input for attachment bridge")?;
+    let session = pty::Session::spawn(command, pty::command_size())?;
+    let (mut output, writer, resize_handle, pty_child) = session.parts();
+    let resize_task_handle = resize_handle.clone();
+    let resize_task = tokio::spawn(async move {
+        let mut previous = pty::command_size();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let current = pty::command_size();
+            if current != previous {
+                if resize_task_handle.resize(current).is_err() {
+                    break;
+                }
+                previous = current;
+            }
+        }
+    });
+    let input_task = if let Some(attachment) = attachment {
         let paths = match app_paths {
             Some(paths) => paths.clone(),
             None => AppPaths::new(None)?,
         };
-        input_task = Some(tokio::spawn(async move {
-            relay_input(input, paths, attachment).await
-        }));
         crate::terminal::note(
             "Clipboard images and file drops are bridged into the synchronized Claude workspace.",
         );
-    }
+        Some(tokio::spawn(async move {
+            relay_input(writer, resize_handle, paths, attachment).await
+        }))
+    } else {
+        Some(tokio::spawn(async move {
+            relay_passthrough(writer, resize_handle).await
+        }))
+    };
     let size = || match terminal_size::terminal_size() {
         Some((terminal_size::Width(cols), terminal_size::Height(rows))) => (rows, cols),
         None => (48, 160),
@@ -140,11 +145,15 @@ async fn execute_interactive_with_attachments(
         |text| async move { clipboard::copy(&text).await },
     )
     .await?;
-    let status = child.wait().await.context("failed to wait for SSH")?;
+    let status = pty::exit_status(pty_child.wait().await?);
+    resize_task.abort();
+    let _ = resize_task.await;
     if let Some(task) = input_task {
         task.abort();
         let _ = task.await;
     }
+    let _ = crossterm::terminal::disable_raw_mode();
+    let _ = std::io::Write::flush(&mut std::io::stdout());
     // Feedback outside the TUI avoids moving its cursor, scrolling its screen,
     // or overwriting Claude's code-entry prompt while SSH owns raw mode.
     if feedback.incomplete {
@@ -158,11 +167,15 @@ async fn execute_interactive_with_attachments(
     Ok(status)
 }
 
-async fn relay_input(
-    mut remote: tokio::process::ChildStdin,
+async fn relay_input<W>(
+    mut remote: W,
+    resize_handle: pty::ResizeHandle,
     paths: AppPaths,
     attachment: AttachmentContext,
-) -> Result<()> {
+) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
     // Some terminal compatibility layers (for example restricted CI PTYs)
     // reject raw mode. Keep relaying input in that case so attachment support
     // never turns a usable Claude session into a disconnected one.
@@ -170,6 +183,7 @@ async fn relay_input(
     let mut local = tokio::io::stdin();
     let mut decoder = InputDecoder::default();
     let mut buffer = [0u8; 8192];
+    let mut previous_size = pty::command_size();
     loop {
         let count = tokio::io::AsyncReadExt::read(&mut local, &mut buffer).await?;
         if count == 0 {
@@ -181,6 +195,7 @@ async fn relay_input(
             remote.flush().await?;
             break;
         }
+        resize_if_needed(&resize_handle, &mut previous_size);
         for event in decoder.feed(&buffer[..count]) {
             match event {
                 InputEvent::Bytes(bytes) => remote.write_all(&bytes).await?,
@@ -244,6 +259,35 @@ async fn relay_input(
         remote.flush().await?;
     }
     Ok(())
+}
+
+async fn relay_passthrough<W>(mut remote: W, resize_handle: pty::ResizeHandle) -> Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let _raw_mode = RawModeGuard::enable().ok();
+    let mut local = tokio::io::stdin();
+    let mut buffer = [0u8; 8192];
+    let mut previous_size = pty::command_size();
+    loop {
+        let count = tokio::io::AsyncReadExt::read(&mut local, &mut buffer).await?;
+        if count == 0 {
+            remote.shutdown().await?;
+            break;
+        }
+        resize_if_needed(&resize_handle, &mut previous_size);
+        remote.write_all(&buffer[..count]).await?;
+        remote.flush().await?;
+    }
+    Ok(())
+}
+
+fn resize_if_needed(handle: &pty::ResizeHandle, previous: &mut portable_pty::PtySize) {
+    let current = pty::command_size();
+    if current != *previous {
+        let _ = handle.resize(current);
+        *previous = current;
+    }
 }
 
 fn bracketed_attachment_text(paths: &[String]) -> Vec<u8> {
