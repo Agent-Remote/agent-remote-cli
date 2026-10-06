@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.53 - 2026-10-06
+
+- fix(clipboard): retain linux fallback when wsl interop is unavailable (ace6778)
+- fix(clipboard): harden cross-platform capture and paste lifecycle (a7868fd)
+
 ## v0.2.52 - 2026-10-06
 
 - fix(release): pin node with attachment directory grants (49b8ca9)
