@@ -2,6 +2,11 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.49 - 2026-10-06
+
+- fix(build): use resilient ncurses mirrors (0e01f5d)
+- fix(ssh): preserve pty sizing for attachment bridge (7aa842c)
+
 ## v0.2.48 - 2026-10-06
 
 - fix(attachments): prepare isolated remote staging roots (1d1d4a5)
