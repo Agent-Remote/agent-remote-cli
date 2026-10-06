@@ -2,6 +2,16 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.50 - 2026-10-06
+
+- fix(ssh): isolate windows console read cancellation (82f0053)
+- fix(ssh): preserve windows console mode across repeated attaches (cdee5b1)
+- fix(ssh): read windows console without retrying cancelled input (1cf7707)
+- fix(ssh): close conpty after child exit and cancel console reads (6f6a9dc)
+- fix(ssh): cancel terminal readers and reset mouse modes on detach (88b2456)
+- fix(ssh): restore terminal before reaping detached sessions (0415c91)
+- fix(ssh): flush terminal input after detach (08e5be1)
+
 ## v0.2.49 - 2026-10-06
 
 - fix(build): use resilient ncurses mirrors (0e01f5d)
