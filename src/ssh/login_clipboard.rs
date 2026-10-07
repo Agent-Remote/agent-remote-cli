@@ -130,6 +130,6 @@ fn valid_login_url(value: &str) -> bool {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         })
 }
-
 #[cfg(test)]
+#[path = "../../tests/unit/src/ssh/login_clipboard/tests.rs"]
 mod tests;

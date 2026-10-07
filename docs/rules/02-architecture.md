@@ -16,9 +16,20 @@ src/wireguard.rs    WireGuard helper orchestration
 src/workspace.rs    Local workspace identity
 src/terminal.rs     Stable terminal presentation
 src/bin/            Auxiliary and tool-specific binaries
+src/app/             `agent-remote` command orchestration by workflow
+
+tests/unit/src/     Unit-test modules mirroring `src/`
+tests/              Contract, integration, installer, and fixture tests
 ```
 
 Network calls belong in `api.rs`; persistent metadata belongs in `local_state.rs`; secrets belong behind `secrets.rs`. Keep platform-specific behavior isolated and testable. Entry points orchestrate modules but should not duplicate their domain logic.
+
+The binary entry point in `src/main.rs` only initializes Tokio and delegates to `app::run_entry`;
+command dispatch and orchestration live under `src/app/` (`entry.rs`, `device_node.rs`,
+`account.rs`, `sync.rs`, and `support.rs`). This keeps process startup separate from
+workflow logic while preserving the existing command module boundaries. Unit-test implementations
+are kept under `tests/unit/src/` and included with path attributes from their original parent module;
+this separates test code physically without widening production visibility or changing command behavior.
 
 The device installer accepts an explicit local `.app` bundle or ZIP release archive. It bounds and
 validates archive contents before extracting exactly one fixed-name app bundle into a private

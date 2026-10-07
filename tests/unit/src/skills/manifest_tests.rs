@@ -18,7 +18,7 @@ struct Vectors {
 #[test]
 fn canonical_manifest_matches_shared_vectors() {
     let vectors: Vectors =
-        serde_json::from_str(include_str!("../../tests/fixtures/skills/manifest-v1.json")).unwrap();
+        serde_json::from_str(include_str!("../../../fixtures/skills/manifest-v1.json")).unwrap();
     for case in vectors.valid {
         let manifest = Manifest::decode(case.manifest_json.as_bytes()).unwrap();
         assert_eq!(

@@ -307,7 +307,6 @@ fn update_digest(digest: &mut Sha256, entry: &Entry) {
         digest.update(b"\0");
     }
 }
-
 #[cfg(test)]
-#[path = "recovery_export_tests.rs"]
+#[path = "../../tests/unit/src/skills/recovery_export_tests.rs"]
 mod tests;

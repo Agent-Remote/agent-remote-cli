@@ -53,7 +53,6 @@ impl ApiClient {
         })
     }
 }
-
 #[cfg(test)]
-#[path = "session_readiness_tests.rs"]
+#[path = "../../tests/unit/src/api/session_readiness_tests.rs"]
 mod tests;

@@ -318,7 +318,6 @@ fn resolve_components<'a>(
     }
     Ok(resolved)
 }
-
 #[cfg(test)]
-#[path = "manifest_tests.rs"]
+#[path = "../../tests/unit/src/skills/manifest_tests.rs"]
 mod tests;

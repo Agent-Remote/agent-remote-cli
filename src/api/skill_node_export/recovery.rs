@@ -196,7 +196,6 @@ pub(super) async fn receive(
             .map_err(|_| unavailable())??;
     Ok((bundle, result))
 }
-
 #[cfg(test)]
-#[path = "recovery_tests.rs"]
+#[path = "../../../tests/unit/src/api/skill_node_export/recovery_tests.rs"]
 mod tests;

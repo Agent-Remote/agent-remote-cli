@@ -178,6 +178,6 @@ fn decode(sequence: &[u8]) -> Option<String> {
     }
     String::from_utf8(bytes).ok()
 }
-
 #[cfg(test)]
+#[path = "../../tests/unit/src/ssh/clipboard_stream/tests.rs"]
 mod tests;

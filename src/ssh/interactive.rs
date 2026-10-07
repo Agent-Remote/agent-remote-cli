@@ -116,6 +116,6 @@ where
         incomplete: copy_incomplete,
     })
 }
-
 #[cfg(test)]
+#[path = "../../tests/unit/src/ssh/interactive/tests.rs"]
 mod tests;

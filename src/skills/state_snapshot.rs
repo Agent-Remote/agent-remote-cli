@@ -117,7 +117,6 @@ impl StateSnapshot {
         self.0.open_object(digest)
     }
 }
-
 #[cfg(test)]
-#[path = "state_snapshot_tests.rs"]
+#[path = "../../tests/unit/src/skills/state_snapshot_tests.rs"]
 mod tests;

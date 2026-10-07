@@ -242,7 +242,6 @@ impl PackageSnapshot {
         File::open(self.staging.path().join(digest)).context("cannot read staged skill object")
     }
 }
-
 #[cfg(test)]
-#[path = "snapshot_tests.rs"]
+#[path = "../../tests/unit/src/skills/snapshot_tests.rs"]
 mod tests;

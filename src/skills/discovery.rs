@@ -218,9 +218,8 @@ fn read_metadata(dir: &Dir, fallback: &str) -> Result<SkillMetadata> {
     source_fs::require_unchanged(&before, &parent.symlink_metadata(name)?)?;
     metadata::parse(&bytes, fallback)
 }
-
 #[cfg(test)]
-#[path = "discovery_tests.rs"]
+#[path = "../../tests/unit/src/skills/discovery_tests.rs"]
 mod tests;
 
 /// Shared selection contract for local filesystem and immutable Git object catalogs.

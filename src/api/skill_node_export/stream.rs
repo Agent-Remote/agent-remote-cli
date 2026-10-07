@@ -226,7 +226,6 @@ pub(super) fn unavailable() -> ApiError {
     ApiError { status: None, code: Some("STATE_EXPORT_UNAVAILABLE".to_owned()),
         message: "Snapshot export did not complete; no bundle was published. Check the source Node, local SSH key and destination, then retry.".to_owned() }
 }
-
 #[cfg(test)]
-#[path = "stream_tests.rs"]
+#[path = "../../../tests/unit/src/api/skill_node_export/stream_tests.rs"]
 mod tests;

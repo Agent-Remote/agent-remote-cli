@@ -136,6 +136,6 @@ fn osc52(value: &str, tmux: bool, screen: bool) -> String {
         sequence
     }
 }
-
 #[cfg(test)]
+#[path = "../../tests/unit/src/ssh/clipboard/tests.rs"]
 mod tests;

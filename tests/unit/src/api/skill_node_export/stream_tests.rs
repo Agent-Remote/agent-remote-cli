@@ -1,7 +1,7 @@
 use super::*;
 use tokio::io::AsyncWriteExt;
 
-const WIRE: &[u8] = include_bytes!("../../../tests/fixtures/skill-node-export-v1.bin");
+const WIRE: &[u8] = include_bytes!("../../../../fixtures/skill-node-export-v1.bin");
 
 fn fixture() -> (Header, usize, usize) {
     let header_end = 12 + u32::from_be_bytes(WIRE[8..12].try_into().unwrap()) as usize;
