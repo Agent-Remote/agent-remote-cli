@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.56 - 2026-10-07
+
+- chore(deps): pin node release with complete native system files (a2733a2)
+
 ## v0.2.55 - 2026-10-07
 
 - chore(deps): pin node release with bounded native temporary storage (0a17983)
