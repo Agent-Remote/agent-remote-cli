@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.54 - 2026-10-07
+
+- refactor(cli): separate tests and organize command workflows (3f97d18)
+
 ## v0.2.53 - 2026-10-06
 
 - fix(clipboard): retain linux fallback when wsl interop is unavailable (ace6778)
