@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.58 - 2026-10-09
+
+- perf(ssh): reduce terminal input and scroll forwarding overhead (2dd60ef)
+
 ## v0.2.57 - 2026-10-09
 
 - fix(ssh): stop repeated pty flushes from stalling input (b9cc0b4)
