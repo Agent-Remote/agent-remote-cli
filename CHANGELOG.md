@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.57 - 2026-10-09
+
+- fix(ssh): stop repeated pty flushes from stalling input (b9cc0b4)
+
 ## v0.2.56 - 2026-10-07
 
 - chore(deps): pin node release with complete native system files (a2733a2)
