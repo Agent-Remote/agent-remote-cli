@@ -170,6 +170,7 @@ impl tokio::io::AsyncRead for ReaderStream {
 pub struct WriterStream {
     writer: Arc<Mutex<Writer>>,
     pending: Option<JoinHandle<io::Result<usize>>>,
+    flushing: Option<JoinHandle<io::Result<()>>>,
 }
 
 impl WriterStream {
@@ -177,6 +178,7 @@ impl WriterStream {
         Self {
             writer: Arc::new(Mutex::new(writer)),
             pending: None,
+            flushing: None,
         }
     }
 
@@ -196,6 +198,18 @@ impl WriterStream {
             }
         }
     }
+
+    fn poll_flushing(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        let Some(flushing) = self.flushing.as_mut() else {
+            return std::task::Poll::Ready(Ok(()));
+        };
+        let result = std::task::ready!(std::pin::Pin::new(flushing).poll(cx));
+        self.flushing = None;
+        std::task::Poll::Ready(result.map_err(io::Error::other)?)
+    }
 }
 
 impl tokio::io::AsyncWrite for WriterStream {
@@ -204,6 +218,9 @@ impl tokio::io::AsyncWrite for WriterStream {
         cx: &mut std::task::Context<'_>,
         bytes: &[u8],
     ) -> std::task::Poll<io::Result<usize>> {
+        // A cancelled flush future still owns a blocking operation. Finish it
+        // before writing, without treating its completion as a zero-byte write.
+        std::task::ready!(self.poll_flushing(cx))?;
         if self.pending.is_some() {
             return self.poll_pending(cx);
         }
@@ -229,26 +246,25 @@ impl tokio::io::AsyncWrite for WriterStream {
                 std::task::Poll::Pending => return std::task::Poll::Pending,
             }
         }
-        let writer = Arc::clone(&self.writer);
-        self.pending = Some(tokio::task::spawn_blocking(move || {
-            writer
-                .lock()
-                .map_err(|_| io::Error::other("SSH PTY writer lock poisoned"))?
-                .flush()
-                .map(|()| 0)
-        }));
-        match self.poll_pending(cx) {
-            std::task::Poll::Ready(Ok(_)) => std::task::Poll::Ready(Ok(())),
-            std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(error)),
-            std::task::Poll::Pending => std::task::Poll::Pending,
+        if self.flushing.is_none() {
+            let writer = Arc::clone(&self.writer);
+            self.flushing = Some(tokio::task::spawn_blocking(move || {
+                writer
+                    .lock()
+                    .map_err(|_| io::Error::other("SSH PTY writer lock poisoned"))?
+                    .flush()
+            }));
         }
+        // Re-poll the same flush until it completes; starting another one here
+        // can indefinitely stall the next keystroke behind flush().await.
+        self.poll_flushing(cx)
     }
 
     fn poll_shutdown(
         self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
+        cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<io::Result<()>> {
-        std::task::Poll::Ready(Ok(()))
+        self.poll_flush(cx)
     }
 }
 
@@ -282,3 +298,7 @@ pub fn exit_status(status: portable_pty::ExitStatus) -> std::process::ExitStatus
         unreachable!("unsupported platform")
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/src/ssh/pty.rs"]
+mod tests;
