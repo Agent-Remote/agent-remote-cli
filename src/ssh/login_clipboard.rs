@@ -16,9 +16,12 @@ impl LoginScreen {
     }
 
     pub(super) fn process(&mut self, bytes: &[u8], rows: u16, cols: u16) {
-        self.parser
-            .screen_mut()
-            .set_size(rows.clamp(1, 512), cols.clamp(1, 512));
+        let size = (rows.clamp(1, 512), cols.clamp(1, 512));
+        // vt100 resizes both grids (including allocating rows) even when the
+        // dimensions are unchanged. Scroll redraws must not pay that per chunk.
+        if self.parser.screen().size() != size {
+            self.parser.screen_mut().set_size(size.0, size.1);
+        }
         self.parser.process(bytes);
     }
 

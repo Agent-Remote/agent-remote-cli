@@ -35,8 +35,22 @@ pub(super) struct ClipboardStream {
 impl ClipboardStream {
     pub(super) fn process(&mut self, input: &[u8]) -> Vec<u8> {
         let mut output = Vec::with_capacity(input.len());
-        for &byte in input {
-            self.byte(byte, &mut output);
+        let mut remaining = input;
+        while !remaining.is_empty() {
+            if matches!(self.state, State::Ground) {
+                // Most scroll output is ordinary text or CSI parameters. Copy
+                // whole spans rather than moving the parser state for each byte.
+                let count = remaining
+                    .iter()
+                    .position(|&b| b == 0x1b)
+                    .unwrap_or(remaining.len());
+                output.extend_from_slice(&remaining[..count]);
+                remaining = &remaining[count..];
+            }
+            if let Some((&byte, tail)) = remaining.split_first() {
+                self.byte(byte, &mut output);
+                remaining = tail;
+            }
         }
         output
     }

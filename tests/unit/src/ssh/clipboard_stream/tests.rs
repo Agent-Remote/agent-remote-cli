@@ -88,3 +88,23 @@ fn incomplete_clipboard_is_discarded_but_non_clipboard_eof_bytes_survive() {
     assert_eq!(stream.process(b"\x1b[31mred"), b"\x1b[31mred");
     assert_eq!(stream.take_copy(), None);
 }
+
+#[test]
+fn scroll_redraws_preserve_bytes_and_clipboard_boundaries_for_different_chunk_sizes() {
+    let frame = "\x1b[H\x1b[32m滚动内容 😀\x1b[0m\r\nordinary text and spaces\x1b[K\r\n".repeat(64);
+    let mut input = frame.as_bytes().to_vec();
+    input.extend(sequence("selected text", "\x1b\\"));
+    input.extend(frame.as_bytes());
+    let expected = frame.repeat(2).into_bytes();
+    for size in [1, 2, 7, 113, 4096, 16384] {
+        let mut stream = ClipboardStream::default();
+        let mut output = Vec::new();
+        for chunk in input.chunks(size) {
+            output.extend(stream.process(chunk));
+        }
+        output.extend(stream.finish());
+        assert_eq!(output, expected, "chunk size {size}");
+        assert_eq!(stream.take_copy().as_deref(), Some("selected text"));
+        assert!(!stream.take_rejected());
+    }
+}

@@ -1,7 +1,23 @@
+use super::blocking::WriterStream as BlockingWriterStream;
 use super::*;
+use std::io::{self, Write};
 use std::sync::mpsc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+
+#[tokio::test]
+async fn blocking_reader_preserves_redraw_bytes_with_small_read_buffers() {
+    use tokio::io::AsyncReadExt;
+    let expected = "\x1b[2J\x1b[H滚动内容\r\n\x1b[31mline\x1b[0m".as_bytes();
+    let mut reader = blocking::ReaderStream::new(Box::new(io::Cursor::new(expected.to_vec())));
+    assert_eq!(reader.read(&mut []).await.unwrap(), 0);
+    let mut received = Vec::new();
+    let mut byte = [0];
+    while reader.read(&mut byte).await.unwrap() != 0 {
+        received.push(byte[0]);
+    }
+    assert_eq!(received, expected);
+}
 
 struct ControlledWriter {
     events: Arc<Mutex<Vec<Vec<u8>>>>,
@@ -37,7 +53,7 @@ impl Write for ControlledWriter {
 }
 
 struct Fixture {
-    stream: WriterStream,
+    stream: BlockingWriterStream,
     events: Arc<Mutex<Vec<Vec<u8>>>>,
     started: tokio::sync::oneshot::Receiver<()>,
     release: mpsc::Sender<()>,
@@ -47,7 +63,7 @@ fn fixture(fail_flush: bool) -> Fixture {
     let events = Arc::new(Mutex::new(Vec::new()));
     let (started_tx, started) = tokio::sync::oneshot::channel();
     let (release, receiver) = mpsc::channel();
-    let stream = WriterStream::new(Box::new(ControlledWriter {
+    let stream = BlockingWriterStream::new(Box::new(ControlledWriter {
         events: events.clone(),
         started: Some(started_tx),
         release: receiver,
@@ -176,4 +192,116 @@ async fn real_pty_forwards_repeated_keystrokes_without_stalling() {
         elapsed[elapsed.len() / 2],
         elapsed.last().unwrap()
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_io_stays_responsive_when_blocking_workers_are_busy() {
+    use tokio::io::AsyncReadExt;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(2)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command.args(["-c", "stty raw -echo && printf READY && exec cat"]);
+        let session = Session::spawn(&command, PtySize::default()).unwrap();
+        let (mut output, mut input, resize, child) = session.parts();
+        let mut killer = child.killer();
+        let (started, mut ready) = tokio::sync::mpsc::unbounded_channel();
+        let mut releases = Vec::new();
+        let mut workers = Vec::new();
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut buffer = [0; 16384];
+            let count = output.read(&mut buffer).await?;
+            if &buffer[..count] != b"READY" {
+                return Err(io::Error::other("unexpected PTY readiness output"));
+            }
+            for _ in 0..2 {
+                let (release, held) = mpsc::channel::<()>();
+                releases.push(release);
+                let started = started.clone();
+                workers.push(tokio::task::spawn_blocking(move || {
+                    started.send(()).unwrap();
+                    let _ = held.recv_timeout(Duration::from_secs(5));
+                }));
+            }
+            ready.recv().await.unwrap();
+            ready.recv().await.unwrap();
+            tokio::time::timeout(Duration::from_millis(250), async {
+                input.write_all(b"\x1b[<64;20;10M").await?;
+                input.flush().await?;
+                let count = output.read(&mut buffer).await?;
+                if &buffer[..count] != b"\x1b[<64;20;10M" {
+                    return Err(io::Error::other("wheel event changed or lost"));
+                }
+                Ok::<_, io::Error>(())
+            })
+            .await
+            .map_err(io::Error::other)?
+        })
+        .await;
+        drop(releases);
+        for worker in workers {
+            worker.await.unwrap();
+        }
+        let _ = killer.kill();
+        drop((input, output, resize));
+        child.wait().await.unwrap();
+        result
+            .unwrap()
+            .expect("terminal I/O waited for unrelated blocking work");
+    });
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn real_pty_preserves_scroll_bursts_under_backpressure_and_reports_eof() {
+    use tokio::io::AsyncReadExt;
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command.args(["-c", "stty raw -echo && printf READY && exec cat"]);
+    let session = Session::spawn(&command, PtySize::default()).unwrap();
+    let (mut output, mut input, resize, child) = session.parts();
+    let mut killer = child.killer();
+    let payload = "\x1b[<64;20;10M\x1b[<65;20;10M\x1b[H\x1b[32m滚动内容\x1b[0m\r\n"
+        .repeat(8192)
+        .into_bytes();
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        assert_eq!(output.read(&mut []).await?, 0);
+        let mut ready = [0; 5];
+        output.read_exact(&mut ready).await?;
+        if &ready != b"READY" {
+            return Err(io::Error::other("unexpected PTY readiness output"));
+        }
+        let send = async {
+            input.write_all(&payload).await?;
+            input.flush().await
+        };
+        let receive = async {
+            let mut received = Vec::new();
+            let mut chunk = [0; 113];
+            while received.len() < payload.len() {
+                let count = output.read(&mut chunk).await?;
+                if count == 0 {
+                    return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+                }
+                received.extend_from_slice(&chunk[..count]);
+            }
+            if received != payload {
+                return Err(io::Error::other("scroll burst was reordered or corrupted"));
+            }
+            Ok(())
+        };
+        tokio::try_join!(send, receive)?;
+        Ok::<_, io::Error>(())
+    })
+    .await;
+    let _ = killer.kill();
+    child.wait().await.unwrap();
+    let mut byte = [0];
+    let eof = tokio::time::timeout(Duration::from_secs(2), output.read(&mut byte)).await;
+    drop((input, output, resize));
+    result.expect("scroll burst stalled").unwrap();
+    assert_eq!(eof.unwrap().unwrap(), 0);
 }
