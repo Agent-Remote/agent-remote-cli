@@ -249,7 +249,7 @@ mod windows_service {
         if !status.success() {
             bail!("wireguard_windows_broker_tool_failed");
         }
-        let target_state = observe_target(&handshake.logical_name);
+        let target_state = observe_target(&handshake.logical_name).state;
         let expected_state = match handshake.request.action {
             WorkerAction::Up => TargetState::Present,
             WorkerAction::Down => TargetState::Absent,
