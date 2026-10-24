@@ -235,7 +235,8 @@ pub fn replace_private_file(
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        FileRenameInfoEx, SetFileInformationByHandle, FILE_RENAME_INFO,
+        FileRenameInfoEx, MoveFileExW, ReplaceFileW, SetFileInformationByHandle, FILE_RENAME_INFO,
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, REPLACEFILE_WRITE_THROUGH,
     };
 
     let destination = std::path::absolute(destination)?;
@@ -256,7 +257,27 @@ pub fn replace_private_file(
             size as u32,
         ) == 0
         {
-            return Err(std::io::Error::last_os_error().into());
+            let source: Vec<u16> = staged.path().as_os_str().encode_wide().chain([0]).collect();
+            let target: Vec<u16> = destination.as_os_str().encode_wide().chain([0]).collect();
+            let replaced = if destination.exists() {
+                ReplaceFileW(
+                    target.as_ptr(),
+                    source.as_ptr(),
+                    std::ptr::null(),
+                    REPLACEFILE_WRITE_THROUGH,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                ) != 0
+            } else {
+                MoveFileExW(
+                    source.as_ptr(),
+                    target.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                ) != 0
+            };
+            if !replaced {
+                return Err(std::io::Error::last_os_error().into());
+            }
         }
     }
     Ok(())
