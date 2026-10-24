@@ -341,11 +341,13 @@ pub struct BrokerStatus {
 /// Read the fixed SCM installation boundary. Service presence is only an
 /// installation observation; caller authentication still requires the live
 /// protected pipe and is therefore kept unavailable here.
+#[cfg(windows)]
 pub fn status() -> BrokerStatus {
-    #[cfg(windows)]
-    {
-        return native_service_status();
-    }
+    native_service_status()
+}
+
+#[cfg(not(windows))]
+pub fn status() -> BrokerStatus {
     BrokerStatus {
         state: "unsupported",
         installation: "not_installed",
@@ -925,8 +927,8 @@ impl PipeClient {
             return Err(std::io::Error::last_os_error())
                 .context("failed to open Windows worker pipe");
         }
-        let mut mode: NAMED_PIPE_MODE = PIPE_READMODE_MESSAGE | PIPE_WAIT;
-        if unsafe { SetNamedPipeHandleState(handle, &mut mode, null_mut(), null_mut()) } == 0 {
+        let mode: NAMED_PIPE_MODE = PIPE_READMODE_MESSAGE | PIPE_WAIT;
+        if unsafe { SetNamedPipeHandleState(handle, &mode, null_mut(), null_mut()) } == 0 {
             let error = std::io::Error::last_os_error();
             unsafe { CloseHandle(handle) };
             return Err(error).context("failed to configure Windows worker pipe");
@@ -1076,8 +1078,8 @@ impl PipeWorker {
     /// Wait for one client, polling a nonblocking pipe so lifetime remains
     /// bounded even if UAC approval is abandoned.
     pub fn accept(&self, lifetime: &mut WorkerLifetime) -> Result<CallerIdentity> {
-        let mut mode: NAMED_PIPE_MODE = PIPE_READMODE_MESSAGE | PIPE_NOWAIT;
-        let _ = unsafe { SetNamedPipeHandleState(self.handle, &mut mode, null_mut(), null_mut()) };
+        let mode: NAMED_PIPE_MODE = PIPE_READMODE_MESSAGE | PIPE_NOWAIT;
+        let _ = unsafe { SetNamedPipeHandleState(self.handle, &mode, null_mut(), null_mut()) };
         loop {
             if lifetime.expired(Instant::now()) {
                 bail!("wireguard_windows_worker_expired");
@@ -1085,9 +1087,9 @@ impl PipeWorker {
             let connected = unsafe { ConnectNamedPipe(self.handle, null_mut()) };
             if connected != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED {
                 // Restore blocking message reads after the bounded connect poll.
-                let mut blocking = PIPE_READMODE_MESSAGE | PIPE_WAIT;
+                let blocking = PIPE_READMODE_MESSAGE | PIPE_WAIT;
                 let _ = unsafe {
-                    SetNamedPipeHandleState(self.handle, &mut blocking, null_mut(), null_mut())
+                    SetNamedPipeHandleState(self.handle, &blocking, null_mut(), null_mut())
                 };
                 return observe_caller(self.handle);
             }

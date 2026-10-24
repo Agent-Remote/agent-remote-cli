@@ -26,6 +26,7 @@ mod execution_store;
 pub mod inspection;
 mod inspection_parser;
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // Broker entry point is linked only by the native broker binary.
 pub mod linux_broker;
 #[allow(dead_code)] // The human binary keeps legacy status; the library uses this machine probe.
 mod probe;

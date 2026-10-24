@@ -54,7 +54,10 @@ pub(super) fn open_path(path: &Path, create: bool) -> Result<Option<Dir>> {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => return Ok(None),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                #[cfg(unix)]
                 let mut builder = cap_std::fs::DirBuilder::new();
+                #[cfg(not(unix))]
+                let builder = cap_std::fs::DirBuilder::new();
                 #[cfg(unix)]
                 {
                     use cap_std::fs::DirBuilderExt;
