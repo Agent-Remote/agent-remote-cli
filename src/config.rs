@@ -55,7 +55,10 @@ impl AppPaths {
     }
 
     pub fn wireguard_config_path(&self) -> PathBuf {
-        self.wireguard_dir().join("agent-remote.conf")
+        // Keep the public path spelling stable across platforms.  A slash in
+        // one component is accepted by Windows filesystem APIs and preserves
+        // the same JSON contract as the desktop clients' path construction.
+        self.home.join("wireguard/agent-remote.conf")
     }
 
     pub fn dependencies_dir(&self) -> PathBuf {
@@ -63,7 +66,7 @@ impl AppPaths {
     }
 
     pub fn dependency_manifest_path(&self) -> PathBuf {
-        self.dependencies_dir().join("manifest.json")
+        self.home.join("dependencies/manifest.json")
     }
 
     pub fn secrets_dir(&self) -> PathBuf {
@@ -71,13 +74,18 @@ impl AppPaths {
     }
 
     pub fn ensure_base_dirs(&self) -> Result<()> {
-        fs::create_dir_all(&self.home)
-            .with_context(|| format!("failed to create {}", self.home.display()))?;
-        fs::create_dir_all(self.bin_dir())?;
-        fs::create_dir_all(self.dependencies_dir())?;
-        fs::create_dir_all(self.secrets_dir())?;
-        fs::create_dir_all(self.wireguard_dir())?;
-        fs::create_dir_all(self.ssh_dir())?;
+        for directory in [
+            self.home.clone(),
+            self.bin_dir(),
+            self.dependencies_dir(),
+            self.secrets_dir(),
+            self.wireguard_dir(),
+            self.ssh_dir(),
+        ] {
+            fs::create_dir_all(&directory)
+                .with_context(|| format!("failed to create {}", directory.display()))?;
+            crate::platform::set_owner_only_directory_permissions(&directory)?;
+        }
         Ok(())
     }
 }

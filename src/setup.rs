@@ -198,11 +198,12 @@ fn directory(id: &'static str, path: &Path) -> SetupStep {
 fn ensure_directory(path: &Path) -> Result<bool, StepCode> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
-            return if directory_type(&metadata) {
-                Ok(false)
-            } else {
-                Err(StepCode::PathInvalid)
+            if !directory_type(&metadata) {
+                return Err(StepCode::PathInvalid);
             }
+            crate::platform::set_owner_only_directory_permissions(path)
+                .map_err(|_| StepCode::LocalIo)?;
+            return Ok(false);
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(StepCode::LocalIo),
@@ -227,6 +228,7 @@ fn ensure_directory(path: &Path) -> Result<bool, StepCode> {
     {
         return Err(StepCode::PathInvalid);
     }
+    crate::platform::set_owner_only_directory_permissions(path).map_err(|_| StepCode::LocalIo)?;
     Ok(true)
 }
 

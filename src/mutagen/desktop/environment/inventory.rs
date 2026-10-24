@@ -443,7 +443,11 @@ fn endpoint(bytes: &[u8], sync: bool) -> Result<Endpoint> {
                 || parameters != 0))
         || (protocol == 1 && (result.host.is_empty() || result.port > 65535 || environment != 0))
         || (protocol == 11 && (result.host.is_empty() || result.port != 0))
-        || (sync && protocol == 0 && !Path::new(&result.path).is_absolute())
+        // Mutagen stores remote POSIX paths even when the local desktop is
+        // Windows.  `Path::is_absolute()` follows the host syntax there and
+        // incorrectly rejects a valid `/workspace` path, so accept the
+        // protocol's canonical slash-rooted spelling explicitly.
+        || (sync && protocol == 0 && !is_protocol_absolute_path(&result.path))
     {
         return Err(invalid());
     }
@@ -451,12 +455,16 @@ fn endpoint(bytes: &[u8], sync: bool) -> Result<Endpoint> {
         let (transport, address) = result.path.split_once(':').ok_or_else(invalid)?;
         if !matches!(transport, "tcp" | "tcp4" | "tcp6" | "unix" | "npipe")
             || address.is_empty()
-            || (protocol == 0 && transport == "unix" && !Path::new(address).is_absolute())
+            || (protocol == 0 && transport == "unix" && !is_protocol_absolute_path(address))
         {
             return Err(invalid());
         }
     }
     Ok(result)
+}
+
+fn is_protocol_absolute_path(value: &str) -> bool {
+    value.starts_with('/') || Path::new(value).is_absolute()
 }
 
 fn validate_configuration(bytes: &[u8], sync: bool, endpoint_specific: bool) -> Result<()> {

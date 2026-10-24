@@ -382,7 +382,10 @@ fn native_service_status() -> BrokerStatus {
         unsafe { CloseServiceHandle(manager) };
         if error == ERROR_SERVICE_DOES_NOT_EXIST {
             return BrokerStatus {
-                state: "observed",
+                // A missing SCM service is not a useful observation of a
+                // broker endpoint.  Keep the entire bridge unavailable until
+                // the protected service is installed and authenticated.
+                state: "unavailable",
                 installation: "not_installed",
                 approval: "not_requested",
                 protocol: "unsupported",

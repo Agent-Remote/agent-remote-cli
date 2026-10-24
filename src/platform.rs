@@ -159,6 +159,18 @@ pub fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Restrict a directory before it is used for credentials or other private
+/// application state.  Directory permissions are deliberately separate from
+/// file permissions: on POSIX a `600` directory cannot be traversed, while on
+/// Windows the same owner-only ACL operation is valid for both object types.
+#[cfg(unix)]
+pub fn set_owner_only_directory_permissions(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
 #[cfg(windows)]
 pub fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
     let principal = windows_current_principal()?;
@@ -173,6 +185,11 @@ pub fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
     } else {
         bail!("icacls.exe exited with {status}")
     }
+}
+
+#[cfg(windows)]
+pub fn set_owner_only_directory_permissions(path: &std::path::Path) -> Result<()> {
+    set_owner_only_permissions(path)
 }
 
 #[cfg(windows)]
@@ -211,6 +228,11 @@ pub fn set_wireguard_config_permissions(path: &std::path::Path) -> Result<()> {
 
 #[cfg(all(not(unix), not(windows)))]
 pub fn set_owner_only_permissions(_path: &std::path::Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(all(not(unix), not(windows)))]
+pub fn set_owner_only_directory_permissions(_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
