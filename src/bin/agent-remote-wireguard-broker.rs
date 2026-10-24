@@ -75,7 +75,7 @@ mod windows_service {
         };
         unsafe {
             if !STATUS_HANDLE.is_null() {
-                let _ = SetServiceStatus(STATUS_HANDLE, &mut status);
+                let _ = SetServiceStatus(STATUS_HANDLE, &status);
             }
         }
     }
