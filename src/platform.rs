@@ -178,6 +178,8 @@ pub fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
         .arg(format!("{principal}:(F)"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .context("failed to execute icacls.exe")?;
     if status.success() {
@@ -201,6 +203,8 @@ pub fn set_wireguard_config_permissions(path: &std::path::Path) -> Result<()> {
         .args(["/inheritance:r", "/grant:r"])
         .arg(format!("{principal}:(F)"))
         .arg("*S-1-5-18:(R)")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .context("failed to execute icacls.exe")?;
     if status.success() {
@@ -208,6 +212,54 @@ pub fn set_wireguard_config_permissions(path: &std::path::Path) -> Result<()> {
     } else {
         bail!("icacls.exe exited with {status}")
     }
+}
+
+/// Publish a staged private file while retaining replacement semantics on
+/// Windows even when another process still has the previous file open.
+#[cfg(unix)]
+pub fn replace_private_file(
+    staged: tempfile::NamedTempFile,
+    destination: &std::path::Path,
+) -> Result<()> {
+    staged
+        .persist(destination)
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!("failed to publish private file: {}", error.error))
+}
+
+#[cfg(windows)]
+pub fn replace_private_file(
+    staged: tempfile::NamedTempFile,
+    destination: &std::path::Path,
+) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileRenameInfoEx, SetFileInformationByHandle, FILE_RENAME_INFO,
+    };
+
+    let destination = std::path::absolute(destination)?;
+    let name: Vec<u16> = destination.as_os_str().encode_wide().collect();
+    let size = std::mem::size_of::<FILE_RENAME_INFO>() - std::mem::size_of::<u16>()
+        + name.len() * std::mem::size_of::<u16>();
+    let mut info = vec![0u8; size];
+    let rename = info.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    unsafe {
+        (*rename).Anonymous.Flags = 0x0000_0003; // REPLACE_IF_EXISTS | POSIX_SEMANTICS
+        (*rename).RootDirectory = std::ptr::null_mut();
+        (*rename).FileNameLength = (name.len() * std::mem::size_of::<u16>()) as u32;
+        std::ptr::copy_nonoverlapping(name.as_ptr(), (*rename).FileName.as_mut_ptr(), name.len());
+        if SetFileInformationByHandle(
+            staged.as_file().as_raw_handle() as _,
+            FileRenameInfoEx,
+            rename.cast(),
+            size as u32,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]

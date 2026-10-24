@@ -131,8 +131,7 @@ impl Config {
         crate::platform::set_owner_only_permissions(staged.path())?;
         staged.write_all(raw.as_bytes())?;
         staged.as_file().sync_all()?;
-        staged
-            .persist(paths.config_path())
+        crate::platform::replace_private_file(staged, &paths.config_path())
             .map_err(|_| anyhow::anyhow!("failed to publish client configuration"))?;
         Ok(())
     }

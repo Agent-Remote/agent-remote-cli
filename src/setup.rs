@@ -49,6 +49,13 @@ pub struct SetupReport {
 
 /// Resolve the selected home without reading its contents or following links.
 pub fn absolute_home(paths: &AppPaths) -> Result<PathBuf> {
+    if paths
+        .home()
+        .components()
+        .any(|part| matches!(part, Component::ParentDir))
+    {
+        bail!("selected home must not contain parent traversal")
+    }
     // POSIX lstat follows a directory symlink when its spelling ends in `/`
     // or `/.`. Normalize components lexically before checking the home itself;
     // unlike canonicalize, this never resolves a user-selected link.

@@ -132,8 +132,7 @@ impl SecretStore {
         crate::platform::set_owner_only_permissions(staged.path())?;
         staged.write_all(value.as_bytes())?;
         staged.as_file().sync_all()?;
-        staged
-            .persist(&path)
+        crate::platform::replace_private_file(staged, &path)
             .map_err(|_| anyhow::anyhow!("failed to replace stored credential"))?;
         Ok(())
     }
