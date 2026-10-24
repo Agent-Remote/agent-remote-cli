@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use agent_remote_cli::{config::AppPaths, local_state::LocalState};
@@ -68,7 +68,12 @@ fn setup(home: &Path) -> Value {
     assert_eq!(steps.len(), ids.len());
     for ((step, id), suffix) in steps.iter().zip(ids).zip(suffixes) {
         assert_eq!(step["id"], id);
-        let expected = if suffix.is_empty() {
+        let expected = if suffix == "dependencies/manifest.json" {
+            // Keep the public contract's slash spelling stable on Windows;
+            // Path::join treats the slash-containing suffix as one literal
+            // component and produces a mixed-separator string.
+            PathBuf::from(format!("{}/{}", home.display(), suffix))
+        } else if suffix.is_empty() {
             home.to_path_buf()
         } else {
             home.join(suffix)

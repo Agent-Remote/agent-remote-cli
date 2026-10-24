@@ -5,7 +5,7 @@ use serde_json::json;
 
 #[path = "desktop_wireguard/fixture.rs"]
 mod fixture;
-use fixture::{private_file, Behavior, Fixture};
+use fixture::{private_file, private_secret_file, Behavior, Fixture};
 
 #[cfg(target_os = "linux")]
 #[path = "desktop_wireguard/linux.rs"]
@@ -355,7 +355,7 @@ fn sigterm_during_enrollment_returns_unknown_and_preserves_the_key() {
 #[test]
 fn bad_existing_private_key_is_never_replaced_or_enrolled() {
     let fixture = Fixture::new(Behavior::default());
-    private_file(&fixture.private_path(), b"invalid-private-key");
+    private_secret_file(&fixture.private_path(), b"invalid-private-key");
     let result = fixture.apply(fixture.plan(None));
     assert_eq!(result["code"], "wireguard_key_invalid");
     assert_eq!(result["key_state"], "not_checked");

@@ -140,7 +140,7 @@ impl Fixture {
             format!("server_url = {server:?}\nactive_device_id = {DEVICE:?}\n"),
         )
         .unwrap();
-        private_file(
+        private_secret_file(
             &secret_path(&home, &format!("device-token:{server}:{DEVICE}")),
             TOKEN.as_bytes(),
         );
@@ -245,6 +245,25 @@ pub fn private_file(path: &Path, bytes: &[u8]) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     }
+    #[cfg(windows)]
+    {
+        let file = fs::File::open(path).unwrap();
+        agent_remote_cli::platform::set_private_wireguard_file_permissions(&file).unwrap();
+    }
+}
+
+/// Create a credential fixture with the same owner-only ACL used by the
+/// file-backed secret store. WireGuard configuration files additionally grant
+/// LocalSystem read access, so they use `private_file` above instead.
+pub fn private_secret_file(path: &Path, bytes: &[u8]) {
+    fs::write(path, bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    #[cfg(windows)]
+    agent_remote_cli::platform::set_owner_only_permissions(path).unwrap();
 }
 
 fn secret_path(home: &Path, key: &str) -> PathBuf {
