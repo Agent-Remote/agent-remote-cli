@@ -64,7 +64,7 @@ mod windows_service {
     }
 
     fn set_status(state: u32, controls: u32, win32_exit: u32) {
-        let mut status = SERVICE_STATUS {
+        let status = SERVICE_STATUS {
             dwServiceType: SERVICE_WIN32_OWN_PROCESS,
             dwCurrentState: state,
             dwControlsAccepted: controls,
