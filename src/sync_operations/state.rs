@@ -14,12 +14,13 @@ pub(crate) fn identify(path: &str) -> Result<workspace::WorkspaceIdentity> {
     {
         return Err(Error::new("invalid_params"));
     }
-    let identity = workspace::identify_workspace(Some(std::path::Path::new(path)))
-        .map_err(|_| Error::new("sync_target_changed"))?;
-    if identity.local_path.to_str() != Some(path) {
-        return Err(Error::new("sync_target_changed"));
-    }
-    Ok(identity)
+    // `identify_workspace` canonicalizes the directory and rejects links or
+    // non-directories. Compare the resulting object identity everywhere else
+    // in the sync flow; requiring the caller's lexical spelling to match the
+    // canonical string rejects equivalent Windows paths (`/` vs `\\`, drive
+    // casing, or the DOS path returned by a child process).
+    workspace::identify_workspace(Some(std::path::Path::new(path)))
+        .map_err(|_| Error::new("sync_target_changed"))
 }
 pub(crate) fn snapshot(paths: &AppPaths, server: &str, key: &str) -> Result<SyncSnapshot> {
     LocalState::sync_snapshot(paths, server, key).map_err(|_| Error::new("state_unavailable"))
