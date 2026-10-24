@@ -173,45 +173,18 @@ pub fn set_owner_only_directory_permissions(path: &std::path::Path) -> Result<()
 
 #[cfg(windows)]
 pub fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
-    let principal = windows_current_principal()?;
-    let status = Command::new("icacls.exe")
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r"])
-        .arg(format!("{principal}:(F)"))
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("failed to execute icacls.exe")?;
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("icacls.exe exited with {status}")
-    }
+    private_file::set_private_path_permissions(path, false, false)
 }
 
 #[cfg(windows)]
 pub fn set_owner_only_directory_permissions(path: &std::path::Path) -> Result<()> {
-    set_owner_only_permissions(path)
+    private_file::set_private_path_permissions(path, true, false)
 }
 
 #[cfg(windows)]
 #[allow(dead_code)] // Compatibility API; confirmed publication uses a native handle.
 pub fn set_wireguard_config_permissions(path: &std::path::Path) -> Result<()> {
-    let principal = windows_current_principal()?;
-    let status = Command::new("icacls.exe")
-        .arg(path)
-        .args(["/inheritance:r", "/grant:r"])
-        .arg(format!("{principal}:(F)"))
-        .arg("*S-1-5-18:(R)")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("failed to execute icacls.exe")?;
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("icacls.exe exited with {status}")
-    }
+    private_file::set_private_path_permissions(path, false, true)
 }
 
 /// Publish a staged private file while retaining replacement semantics on
@@ -304,16 +277,6 @@ pub fn replace_private_file(
     }
     let _ = staged.keep();
     Ok(())
-}
-
-#[cfg(windows)]
-fn windows_current_principal() -> Result<String> {
-    let username = env::var("USERNAME").context("USERNAME is not set")?;
-    Ok(env::var("USERDOMAIN")
-        .ok()
-        .filter(|domain| !domain.is_empty())
-        .map(|domain| format!("{domain}\\{username}"))
-        .unwrap_or(username))
 }
 
 #[cfg(not(windows))]

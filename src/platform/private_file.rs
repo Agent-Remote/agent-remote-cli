@@ -46,6 +46,18 @@ pub(crate) fn set_private_file_permissions(file: &File) -> Result<()> {
     }
 }
 
+/// Apply the private ACL to an existing path without resolving it through a
+/// mutable path-based ACL tool. Windows callers use a handle opened with the
+/// directory backup flag when `directory` is true.
+#[cfg(windows)]
+pub(crate) fn set_private_path_permissions(
+    path: &std::path::Path,
+    directory: bool,
+    system_read: bool,
+) -> Result<()> {
+    windows::restrict_path(path, directory, system_read)
+}
+
 pub(crate) fn validate_private_file(file: &File) -> Result<()> {
     validate_single_regular_file(file)?;
     #[cfg(unix)]

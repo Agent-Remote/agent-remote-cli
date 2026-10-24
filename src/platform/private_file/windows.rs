@@ -1,5 +1,7 @@
 use std::fs::File;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
+use std::path::Path;
 use std::ptr::{null, null_mut};
 
 use anyhow::{bail, ensure, Result};
@@ -15,9 +17,10 @@ use windows_sys::Win32::Security::{
     PSID, TOKEN_QUERY, TOKEN_USER, WELL_KNOWN_SID_TYPE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, ReOpenFile,
-    BY_HANDLE_FILE_INFORMATION, FILE_ALL_ACCESS, FILE_ATTRIBUTE_REPARSE_POINT, FILE_GENERIC_READ,
-    FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, WRITE_DAC,
+    CreateFileW, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, ReOpenFile,
+    BY_HANDLE_FILE_INFORMATION, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_ID_INFO,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
     WRITE_OWNER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
@@ -147,6 +150,30 @@ pub(super) fn restrict(file: &File, system_read: bool) -> Result<()> {
         "cannot apply private file ACL"
     );
     Ok(())
+}
+
+pub(super) fn restrict_path(path: &Path, directory: bool, system_read: bool) -> Result<()> {
+    let name: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let flags = FILE_ATTRIBUTE_NORMAL
+        | if directory {
+            FILE_FLAG_BACKUP_SEMANTICS
+        } else {
+            0
+        };
+    let raw = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            null(),
+            OPEN_EXISTING,
+            flags,
+            null_mut(),
+        )
+    };
+    ensure!(raw != INVALID_HANDLE_VALUE, "cannot open private path ACL");
+    let file = unsafe { File::from_raw_handle(raw) };
+    restrict(&file, system_read)
 }
 
 pub(super) fn identity(file: &File) -> Result<String> {
