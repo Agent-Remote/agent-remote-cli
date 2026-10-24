@@ -144,10 +144,12 @@ async fn execute_inner(request: &Request, canceled: Arc<AtomicBool>) -> Result<V
         .map_err(|error| Failure::new(error.0))?;
         let fresh = serde_json::to_value(&fresh_plan)
             .map_err(|_| Failure::new("configuration_unavailable"))?;
-        let expected_config = input
-            .config
-            .clone()
-            .unwrap_or_else(|| input.expected_home.join("wireguard/agent-remote.conf"));
+        let expected_config = input.config.clone().unwrap_or_else(|| {
+            PathBuf::from(format!(
+                "{}/wireguard/agent-remote.conf",
+                input.expected_home.display()
+            ))
+        });
         let selected = serde_json::json!({
             "home": input.expected_home,
             "action": input.action,
@@ -167,10 +169,12 @@ async fn execute_inner(request: &Request, canceled: Arc<AtomicBool>) -> Result<V
         if !issues.is_empty() {
             return Err(Failure::new("wireguard_precondition_failed"));
         }
-        let config = input
-            .config
-            .clone()
-            .unwrap_or_else(|| input.expected_home.join("wireguard/agent-remote.conf"));
+        let config = input.config.clone().unwrap_or_else(|| {
+            PathBuf::from(format!(
+                "{}/wireguard/agent-remote.conf",
+                input.expected_home.display()
+            ))
+        });
         let action = input.action;
         let original_request_id = request.request_id.clone();
         let expected_home = input.expected_home.clone();

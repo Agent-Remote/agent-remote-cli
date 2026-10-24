@@ -109,7 +109,7 @@ pub fn plan(paths: &AppPaths, output: Option<&Path>) -> Result<ConfigPlan, Confi
     let home =
         crate::setup::absolute_home(paths).map_err(|_| ConfigError("configuration_unavailable"))?;
     let context = read_context(&home)?;
-    let default = home.join("wireguard/agent-remote.conf");
+    let default = PathBuf::from(format!("{}/wireguard/agent-remote.conf", home.display()));
     let output = publication::inspect(output.unwrap_or(&default))?;
     Ok(ConfigPlan {
         plan_version: 1,

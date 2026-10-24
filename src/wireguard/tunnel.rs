@@ -44,9 +44,9 @@ pub async fn plan(
 ) -> Result<TunnelPlan, ConfigError> {
     let home =
         crate::setup::absolute_home(paths).map_err(|_| ConfigError("configuration_unavailable"))?;
-    let path = config
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| home.join("wireguard/agent-remote.conf"));
+    let path = config.map(Path::to_path_buf).unwrap_or_else(|| {
+        PathBuf::from(format!("{}/wireguard/agent-remote.conf", home.display()))
+    });
     let inventory = tools::inspect(paths);
     let cancel_read = canceled.clone();
     let (config, binding, tools) = tokio::task::spawn_blocking(move || {

@@ -242,6 +242,11 @@ pub fn replace_private_file(
         REPLACEFILE_WRITE_THROUGH,
     };
 
+    // Close the original tempfile handle before asking Windows to rename it.
+    // The explicit replacement handle below is reopened with delete sharing;
+    // retaining NamedTempFile's original handle makes MoveFileEx/ReplaceFile
+    // reject an otherwise valid replacement on Windows.
+    let staged = staged.into_temp_path();
     let destination = std::path::absolute(destination)?;
     let name: Vec<u16> = destination.as_os_str().encode_wide().collect();
     let size = std::mem::size_of::<FILE_RENAME_INFO>() - std::mem::size_of::<u16>()
@@ -253,7 +258,7 @@ pub fn replace_private_file(
         .write(true)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE)
-        .open(staged.path())?;
+        .open(&staged)?;
     unsafe {
         (*rename).Anonymous.Flags = 0x0000_0003; // REPLACE_IF_EXISTS | POSIX_SEMANTICS
         (*rename).RootDirectory = std::ptr::null_mut();
@@ -267,7 +272,7 @@ pub fn replace_private_file(
         ) == 0
         {
             drop(rename_file);
-            let source: Vec<u16> = staged.path().as_os_str().encode_wide().chain([0]).collect();
+            let source: Vec<u16> = staged.as_os_str().encode_wide().chain([0]).collect();
             let target: Vec<u16> = destination.as_os_str().encode_wide().chain([0]).collect();
             let replaced = if destination.exists() {
                 ReplaceFileW(
@@ -290,6 +295,7 @@ pub fn replace_private_file(
             }
         }
     }
+    let _ = staged.keep();
     Ok(())
 }
 

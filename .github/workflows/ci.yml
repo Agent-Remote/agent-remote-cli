@@ -106,7 +106,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           cargo llvm-cov nextest --workspace --fail-under-lines 45 --lcov --output-path lcov.info --test-threads ${{ matrix.test-threads }} --no-fail-fast
-          cargo test --workspace --doc --test-threads ${{ matrix.test-threads }}
+          cargo test --workspace --doc -- --test-threads ${{ matrix.test-threads }}
       - name: Run tests (non-ubuntu)
         if: matrix.os != 'ubuntu-latest'
         run: cargo nextest run --workspace --test-threads ${{ matrix.test-threads }} --no-fail-fast

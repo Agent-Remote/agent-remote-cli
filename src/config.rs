@@ -58,7 +58,10 @@ impl AppPaths {
         // Keep the public path spelling stable across platforms.  A slash in
         // one component is accepted by Windows filesystem APIs and preserves
         // the same JSON contract as the desktop clients' path construction.
-        self.home.join("wireguard/agent-remote.conf")
+        PathBuf::from(format!(
+            "{}/wireguard/agent-remote.conf",
+            self.home.display()
+        ))
     }
 
     pub fn dependencies_dir(&self) -> PathBuf {
@@ -66,7 +69,10 @@ impl AppPaths {
     }
 
     pub fn dependency_manifest_path(&self) -> PathBuf {
-        self.home.join("dependencies/manifest.json")
+        PathBuf::from(format!(
+            "{}/dependencies/manifest.json",
+            self.home.display()
+        ))
     }
 
     pub fn secrets_dir(&self) -> PathBuf {

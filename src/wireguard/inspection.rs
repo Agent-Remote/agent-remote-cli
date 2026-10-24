@@ -51,7 +51,7 @@ impl ConfigInspection {
 pub fn check(paths: &AppPaths, config: Option<&Path>) -> Result<CheckResult, ConfigError> {
     let home =
         crate::setup::absolute_home(paths).map_err(|_| ConfigError("configuration_unavailable"))?;
-    let default = home.join("wireguard/agent-remote.conf");
+    let default = PathBuf::from(format!("{}/wireguard/agent-remote.conf", home.display()));
     let config = inspect_config(config.unwrap_or(&default))?;
     Ok(CheckResult {
         home,
