@@ -330,7 +330,7 @@ fn decode_hex<const N: usize>(value: &str) -> Option<[u8; N]> {
     }
     let bytes = value.as_bytes();
     let mut output = [0u8; N];
-    for (index, chunk) in bytes.chunks_exact(2).enumerate() {
+    for (index, chunk) in bytes.as_chunks::<2>().0.iter().enumerate() {
         output[index] = (hex_digit(chunk[0])? << 4) | hex_digit(chunk[1])?;
     }
     Some(output)

@@ -24,7 +24,7 @@ pub mod service {
     //! Polkit decision before the target is observed or touched.
 
     use std::collections::{HashMap, HashSet};
-    use std::fs::{self, File, OpenOptions};
+    use std::fs::{self, OpenOptions};
     use std::io::Write;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     use std::path::{Path, PathBuf};
@@ -41,7 +41,6 @@ pub mod service {
         authenticate, CallerObservation, DbusPeerObservation, PolkitAuthorizationObservation,
         BUS_NAME, INTERFACE, OBJECT_PATH, POLKIT_ACTION,
     };
-    use crate::wireguard::broker::BrokerReceipt;
     use crate::wireguard::execution_config::ExecutionConfig;
     use crate::wireguard::inspection::ConfigBinding;
     use crate::wireguard::replay::ReplayJournal;
@@ -50,8 +49,6 @@ pub mod service {
     const MAX_FRAME: usize = 128 * 1024;
     const WIRE_PROTOCOL_VERSION: u32 = 1;
     const PROTOCOL_VERSION: u32 = 1;
-    const STATUS_METHOD: &str = "Status";
-    const EXECUTE_METHOD: &str = "Execute";
     const STAGING_DIR: &str = "/run/agent-remote-wireguard";
     const REPLAY_JOURNAL: &str = "/var/lib/agent-remote-wireguard/requests.log";
 
