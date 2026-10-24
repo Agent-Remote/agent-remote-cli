@@ -11,7 +11,7 @@ use std::sync::{
 };
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
-pub(super) struct Archive {
+pub(crate) struct Archive {
     pub file: std::fs::File,
     pub names: Vec<String>,
     pub size: u64,
@@ -125,7 +125,7 @@ fn options(mode: u32) -> SimpleFileOptions {
         .unix_permissions(mode)
 }
 
-pub(super) fn pack(payload: ClipboardPayload, cancelled: Arc<AtomicBool>) -> Result<Archive> {
+pub(crate) fn pack(payload: ClipboardPayload, cancelled: Arc<AtomicBool>) -> Result<Archive> {
     // Anonymous/delete-on-close storage also disappears after a process crash.
     let file = tempfile::tempfile()?;
     let mut builder = Builder {

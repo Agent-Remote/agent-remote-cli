@@ -1,11 +1,8 @@
-fn default_account_key(tool: &str) -> String {
-    format!("default_tool_account:{tool}")
-}
 fn deps_status(paths: AppPaths, fix: bool) -> Result<()> {
-    let manager = DependencyManager::new(paths);
     if fix {
-        manager.ensure_manifest()?;
+        crate::setup::initialize_dependencies(&paths)?;
     }
+    let manager = DependencyManager::new(paths);
     let mut table = Table::new(["DEPENDENCY", "STATUS", "PATH", "LICENSE"]);
     for dependency in manager.check_all()? {
         table.row([
@@ -113,20 +110,3 @@ fn init_ssh_public_key(
     let path = prompt_optional_line("SSH public key path: ")?;
     Ok(path.map(PathBuf::from))
 }
-
-fn resolve_ssh_public_key(explicit: Option<&std::path::Path>) -> Result<String> {
-    let path = match explicit {
-        Some(path) => path.to_path_buf(),
-        None => platform::default_ssh_public_key_path().context(
-            "missing SSH public key; pass --ssh-public-key or use --skip-device-registration",
-        )?,
-    };
-    let value = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read SSH public key at {}", path.display()))?;
-    let value = value.trim().to_string();
-    if value.is_empty() {
-        bail!("SSH public key at {} is empty", path.display());
-    }
-    Ok(value)
-}
-

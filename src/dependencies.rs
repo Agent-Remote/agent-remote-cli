@@ -1,5 +1,7 @@
-use std::fs;
 use std::process::Command;
+
+mod initialization;
+pub use initialization::{ManifestInitialization, ManifestInitializationError};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -44,26 +46,14 @@ impl DependencyManager {
     }
 
     pub fn ensure_manifest(&self) -> Result<()> {
+        initialization::check_directory(self.paths.home(), true)?;
         self.paths.ensure_base_dirs()?;
-        let manifest_path = self.paths.dependency_manifest_path();
-        if manifest_path.exists() {
-            return Ok(());
-        }
-        let raw = serde_json::to_string_pretty(&DependencyManifest::default_managed())?;
-        fs::write(
-            manifest_path,
-            format!(
-                "{raw}
-"
-            ),
-        )?;
-        Ok(())
+        self.initialize_local_manifest().map(|_| ())
     }
 
     pub fn load_manifest(&self) -> Result<DependencyManifest> {
         self.ensure_manifest()?;
-        let raw = fs::read_to_string(self.paths.dependency_manifest_path())?;
-        Ok(serde_json::from_str(&raw)?)
+        initialization::read_manifest(&self.paths.dependency_manifest_path())
     }
 
     pub fn check_all(&self) -> Result<Vec<DependencyStatus>> {
@@ -200,7 +190,7 @@ impl DependencyManifest {
     }
 }
 
-fn platform_binary(binary: &str) -> std::path::PathBuf {
+pub(crate) fn platform_binary(binary: &str) -> std::path::PathBuf {
     let path = std::path::Path::new(binary);
     let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
         return path.to_path_buf();

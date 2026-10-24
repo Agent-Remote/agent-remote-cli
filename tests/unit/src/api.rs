@@ -55,6 +55,7 @@ fn device_registration_reports_version_and_optional_existing_device() {
         ssh_public_key: "ssh-ed25519 AAAA".to_string(),
         wireguard_public_key: None,
         existing_device_id: None,
+        request_id: None,
     };
 
     let payload = serde_json::to_value(request).unwrap();
@@ -68,9 +69,14 @@ fn device_registration_reports_version_and_optional_existing_device() {
         ssh_public_key: "ssh-ed25519 AAAA".to_string(),
         wireguard_public_key: None,
         existing_device_id: Some("device-1".to_string()),
+        request_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
     };
     let existing_payload = serde_json::to_value(existing_request).unwrap();
     assert_eq!(existing_payload["existing_device_id"], "device-1");
+    assert_eq!(
+        existing_payload["request_id"],
+        "11111111-1111-4111-8111-111111111111"
+    );
 }
 
 #[tokio::test]

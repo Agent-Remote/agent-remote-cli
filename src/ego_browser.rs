@@ -2432,7 +2432,7 @@ fn local_admission_snapshot(paths: &AppPaths) -> Result<LocalAdmissionSnapshot> 
     })
 }
 
-fn local_admission_state(paths: &AppPaths) -> Result<String> {
+pub(crate) fn local_admission_state(paths: &AppPaths) -> Result<String> {
     Ok(local_admission_snapshot(paths)?.state)
 }
 
@@ -3435,7 +3435,7 @@ fn device_client_available(paths: &AppPaths) -> bool {
         .any(|candidate| candidate.is_file())
 }
 
-fn managed_bridge_installation_exists(paths: &AppPaths) -> bool {
+pub(crate) fn managed_bridge_installation_exists(paths: &AppPaths) -> bool {
     let mut roots = Vec::new();
     if let Some(root) = std::env::var_os("EGO_BROWSER_INSTALL_ROOT") {
         roots.push(PathBuf::from(root));
@@ -3461,7 +3461,7 @@ fn clear_pending_revocation(paths: &AppPaths) -> Result<()> {
     }
 }
 
-fn close_local_admission(paths: &AppPaths) -> Result<()> {
+pub(crate) fn close_local_admission(paths: &AppPaths) -> Result<()> {
     set_local_admission_state(paths, "closed")
 }
 
@@ -3802,7 +3802,7 @@ fn map_operational_error(error: anyhow::Error, operation: &str) -> anyhow::Error
     )
 }
 
-async fn run_device_client_at<const N: usize>(
+pub(crate) async fn run_device_client_at<const N: usize>(
     paths: &AppPaths,
     args: [OsString; N],
 ) -> Result<String> {

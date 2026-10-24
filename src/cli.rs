@@ -96,6 +96,11 @@ pub struct ForwardArgs {
     #[arg(value_name = "REMOTE_PORT")]
     pub remote_port: Option<u16>,
 
+    /// Desktop-only exact existing forward ID to resume after a process restart.
+    /// This path never creates a new server-side forward.
+    #[arg(long, hide = true, value_name = "FORWARD_ID", conflicts_with_all = ["remote_port", "session", "ttl_seconds", "caller_request_id"])]
+    pub forward_id: Option<String>,
+
     /// Unique session ID prefix or full UUID; inferred only when unambiguous.
     #[arg(long, value_name = "SESSION")]
     pub session: Option<String>,
@@ -111,6 +116,26 @@ pub struct ForwardArgs {
     /// Absolute forward lifetime in seconds.
     #[arg(long, value_name = "SECONDS")]
     pub ttl_seconds: Option<u64>,
+
+    /// Desktop-only context binding; hidden from normal help.
+    #[arg(long, hide = true, value_name = "URL")]
+    pub expected_server_url: Option<String>,
+
+    /// Desktop-only active-device binding; hidden from normal help.
+    #[arg(long, hide = true, value_name = "DEVICE")]
+    pub expected_device_id: Option<String>,
+
+    /// Desktop-only session node binding; hidden from normal help.
+    #[arg(long, hide = true, value_name = "NODE")]
+    pub expected_node_id: Option<String>,
+
+    /// Desktop-only runtime-backend binding; hidden from normal help.
+    #[arg(long, hide = true, value_name = "BACKEND")]
+    pub expected_runtime_backend: Option<String>,
+
+    /// Desktop-only caller idempotency key; hidden from normal help.
+    #[arg(long, hide = true, value_name = "REQUEST")]
+    pub caller_request_id: Option<String>,
 
     #[command(subcommand)]
     pub action: Option<ForwardAction>,
@@ -542,6 +567,15 @@ pub struct DoctorArgs {
 pub enum DepsCommand {
     /// Show managed dependency versions and optionally repair metadata.
     Status(DepsStatusArgs),
+    /// Review all Mutagen sessions affected by the selected local environment.
+    MutagenEnvironment(MutagenEnvironmentArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct MutagenEnvironmentArgs {
+    /// Repair the reviewed global daemon environment after a separate confirmation.
+    #[arg(long)]
+    pub repair: bool,
 }
 
 #[derive(Debug, Args)]
@@ -578,7 +612,7 @@ pub struct WireGuardActionArgs {
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
 
-    /// Print the platform WireGuard command without changing tunnel state.
+    /// Check without changes, or print the up/down command without changing tunnel state.
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -682,6 +716,8 @@ pub enum AccountCommand {
     Create(AccountCreateArgs),
     /// Start an interactive remote login session for an account.
     Bind(AccountIdArgs),
+    /// Connect to one exact account login attempt without starting a new binding.
+    Attach(AccountAttachArgs),
     /// Import selected local Claude configuration into an account.
     ImportConfig(AccountImportConfigArgs),
     /// Verify the remote login state after binding.
@@ -740,7 +776,38 @@ pub struct AccountIdArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct AccountAttachArgs {
+    /// Full tool account UUID; prefixes are not accepted.
+    #[arg(value_name = "ACCOUNT_ID")]
+    pub account_id: String,
+
+    /// Exact binding session ID returned by account status.
+    #[arg(long, value_name = "BINDING_SESSION_ID")]
+    pub binding_session: String,
+
+    /// Require this configured server; paired with expected-device.
+    #[arg(long, requires = "expected_device", value_name = "URL")]
+    pub expected_server: Option<String>,
+
+    /// Require this active device; paired with expected-server.
+    #[arg(long, requires = "expected_server", value_name = "DEVICE_ID")]
+    pub expected_device: Option<String>,
+}
+
+#[derive(Debug, Args)]
 pub struct AccountImportConfigArgs {
+    /// Retain this caller key for exactly one configuration import submission.
+    #[arg(long, value_name = "UUID", conflicts_with = "dry_run")]
+    pub request_id: Option<String>,
+
+    /// Query only the original retained request and its exact remote task.
+    #[arg(long, requires = "request_id", conflicts_with_all = ["dry_run", "forget"])]
+    pub status: bool,
+
+    /// Forget a definitely rejected request or a freshly verified terminal task.
+    #[arg(long, requires = "request_id", conflicts_with_all = ["dry_run", "status"])]
+    pub forget: bool,
+
     /// Tool type whose local configuration should be discovered.
     #[arg(long, default_value = "claude")]
     pub tool: String,
@@ -757,7 +824,7 @@ pub struct AccountImportConfigArgs {
     #[arg(long)]
     pub exclude_skills: bool,
 
-    /// Show discovered paths without reading or uploading file contents.
+    /// Check discovered paths without reading/uploading contents; Server writes an audit record.
     #[arg(long)]
     pub dry_run: bool,
 
@@ -869,6 +936,12 @@ pub struct AccountRecoverRuntimeArgs {
 
 #[derive(Debug, Args)]
 pub struct AccountRecoveryStatusArgs {
+    /// Remove only the settled local receipt after confirmation; never undo remote recovery.
+    #[arg(long)]
+    pub forget: bool,
+    /// Confirm local receipt removal without an interactive prompt.
+    #[arg(long, requires = "forget")]
+    pub yes: bool,
     /// Full lowercase account UUID; administrator access is required.
     #[arg(value_name = "ACCOUNT_ID")]
     pub account_id: String,

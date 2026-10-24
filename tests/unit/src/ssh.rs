@@ -78,6 +78,35 @@ fn attach_args_forward_agent_only_when_authorized() {
 }
 
 #[test]
+fn exact_session_explicitly_controls_forwarding_and_owned_child_detection() {
+    let command: Vec<String> = [
+        "agent-remote-attach",
+        "--session",
+        "session",
+        "--expected-device",
+        "device",
+    ]
+    .map(str::to_owned)
+    .into();
+    assert!(is_exact_session_attach(&command));
+    assert!(is_managed_attach(
+        &command.iter().map(Into::into).collect::<Vec<_>>()
+    ));
+    assert!(!is_binding_attach(&command));
+    for enabled in [false, true] {
+        let args = attach_args(
+            &attach(enabled),
+            command.clone(),
+            std::path::Path::new("known_hosts"),
+        );
+        assert_eq!(args[0], if enabled { "-A" } else { "-a" });
+        for option in ["-x", "ClearAllForwardings=yes", "PermitLocalCommand=no"] {
+            assert!(args.iter().any(|arg| arg == option));
+        }
+    }
+}
+
+#[test]
 fn tunnel_args_disable_standard_forwarding_and_use_fixed_command() {
     let args = tunnel_args(
         "10.77.0.2",

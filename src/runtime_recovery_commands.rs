@@ -11,10 +11,10 @@ use serde::Serialize;
 use crate::api::runtime_recovery::{
     canonical_uuid, original_task_matches, RecoveryAction, RecoveryStatus, RuntimeRecovery,
 };
-use crate::api::ApiClient;
 use crate::auth;
 use crate::cli::{AccountRecoverRuntimeArgs, AccountRecoveryStatusArgs};
 use crate::config::{AppPaths, Config};
+use crate::runtime_recovery::{self as shared, Action, Apply, Status};
 use crate::terminal::Details;
 
 /// Submit only an exact administrator-selected original migration and request key.
@@ -23,35 +23,144 @@ pub async fn submit(paths: AppPaths, args: AccountRecoverRuntimeArgs, json: bool
     if !original_task_matches(&args.account_id, &args.original_task) {
         return Err(RecoveryFailure::InvalidOriginalTask.into());
     }
-    let (client, token) = authenticated(&paths)
+    let server = authenticated(&paths)
         .await
         .map_err(|_| RecoveryFailure::Preparation)?;
-    let result = client
-        .recover_runtime(
-            &token,
-            &args.account_id,
-            &args.original_task,
-            &args.request_id,
-            selected_action(&args),
+    let action = match selected_action(&args) {
+        None => Action::VerifyTarget,
+        Some(RecoveryAction::VerifySource) => Action::VerifySource,
+        Some(RecoveryAction::RepairSource) => Action::RepairSource,
+    };
+    let stored = shared::pending(&paths)
+        .map_err(|_| RecoveryFailure::Preparation)?
+        .items
+        .into_iter()
+        .find(|r| r.request_id == args.request_id);
+    if let Some(record) = stored {
+        if record.account_id != args.account_id
+            || record.original.task_id != args.original_task
+            || record.action != action
+        {
+            return Err(RecoveryFailure::Preparation.into());
+        }
+        let value = shared::status(
+            &paths,
+            Status {
+                expected_context: record.context,
+                account_id: record.account_id,
+                request_id: record.request_id,
+                expected_digest: Some(record.digest),
+                expected_binding: record.binding,
+            },
         )
-        .await;
-    match result {
-        Ok(data) => render(data, &args.request_id, json),
-        Err(error) => Err(RecoveryFailure::submission(error.status_code()).into()),
+        .await
+        .map_err(|_| RecoveryFailure::StatusUnavailable)?;
+        return render(value.recovery, &args.request_id, json);
     }
+    let context = shared::authority(&paths, paths.home(), &server)
+        .await
+        .map_err(|_| RecoveryFailure::Preparation)?
+        .context;
+    let plan = shared::inspect(
+        &paths,
+        context.clone(),
+        &args.account_id,
+        &args.original_task,
+        action,
+    )
+    .await
+    .map_err(|_| RecoveryFailure::Preparation)?;
+    let value = shared::apply(
+        &paths,
+        Apply {
+            confirmed: true,
+            expected_context: context,
+            account_id: args.account_id,
+            original: plan.original,
+            action,
+            expected_digest: plan.digest,
+            request_id: args.request_id.clone(),
+        },
+    )
+    .await
+    .map_err(|e| {
+        if e.submitted {
+            RecoveryFailure::submission(e.http_status)
+        } else {
+            RecoveryFailure::Preparation
+        }
+    })?;
+    render(value.recovery, &args.request_id, json)
 }
 
 /// Read the original request without replaying account migration work.
 pub async fn status(paths: AppPaths, args: AccountRecoveryStatusArgs, json: bool) -> Result<()> {
     validate(&args.account_id, &args.request_id)?;
-    let (client, token) = authenticated(&paths)
-        .await
-        .map_err(|_| RecoveryFailure::Preparation)?;
-    let data = client
-        .runtime_recovery_status(&token, &args.account_id, &args.request_id)
+    let stored = shared::pending(&paths)
+        .map_err(|_| RecoveryFailure::Preparation)?
+        .items
+        .into_iter()
+        .find(|r| r.request_id == args.request_id);
+    if args.forget && stored.is_none() {
+        return Err(RecoveryFailure::Preparation.into());
+    }
+    if args.forget && !args.yes && !confirm_forget()? {
+        return Err(RecoveryFailure::Preparation.into());
+    }
+    // Keep legacy human authentication renewal; definite rejected receipt removal
+    // is deliberately offline and needs no credential preparation.
+    let offline = args.forget && stored.as_ref().is_some_and(|r| r.phase == "rejected");
+    let server = if offline {
+        None
+    } else {
+        Some(
+            authenticated(&paths)
+                .await
+                .map_err(|_| RecoveryFailure::Preparation)?,
+        )
+    };
+    let input = if let Some(record) = stored {
+        if record.account_id != args.account_id {
+            return Err(RecoveryFailure::Preparation.into());
+        }
+        Status {
+            expected_context: record.context,
+            account_id: record.account_id,
+            request_id: record.request_id,
+            expected_digest: Some(record.digest),
+            expected_binding: record.binding,
+        }
+    } else {
+        let server = server.ok_or(RecoveryFailure::Preparation)?;
+        let context = shared::authority(&paths, paths.home(), &server)
+            .await
+            .map_err(|_| RecoveryFailure::Preparation)?
+            .context;
+        Status {
+            expected_context: context,
+            account_id: args.account_id,
+            request_id: args.request_id.clone(),
+            expected_digest: None,
+            expected_binding: None,
+        }
+    };
+    if args.forget {
+        let result = shared::forget(&paths, input)
+            .await
+            .map_err(|_| RecoveryFailure::StatusUnavailable)?;
+        if json {
+            println!("{}", serde_json::to_string(&result)?);
+        } else {
+            crate::terminal::success_line(
+                "Local recovery receipt removed; remote recovery is unchanged",
+            );
+        }
+        return Ok(());
+    }
+    let value = shared::status(&paths, input)
         .await
         .map_err(|_| RecoveryFailure::StatusUnavailable)?;
-    render(data, &args.request_id, json)
+    render(value.recovery, &args.request_id, json)
 }
 
 fn validate(account: &str, key: &str) -> Result<()> {
@@ -61,14 +170,26 @@ fn validate(account: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
-async fn authenticated(paths: &AppPaths) -> Result<(ApiClient, String)> {
+async fn authenticated(paths: &AppPaths) -> Result<String> {
     let server = Config::load(paths)?
         .server_url
         .context("server URL is not configured; run agent-remote login first")?;
-    let token = auth::load_user_token(paths, &server)
+    auth::load_user_token(paths, &server)
         .await?
         .context("an administrator user login is required; run agent-remote login first")?;
-    Ok((ApiClient::new(server)?, token))
+    Ok(server)
+}
+
+fn confirm_forget() -> Result<bool> {
+    use std::io::{BufRead, Read, Write};
+    eprint!("Forget this settled local recovery receipt only? [y/N] ");
+    std::io::stderr().flush()?;
+    let mut value = String::new();
+    std::io::stdin().lock().take(256).read_line(&mut value)?;
+    Ok(matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 #[derive(Serialize)]

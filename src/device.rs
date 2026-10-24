@@ -7,6 +7,7 @@ use std::process::{Command, ExitStatus, Stdio};
 
 use anyhow::{bail, Context, Result};
 use semver::Version;
+use serde::Serialize;
 use sha1::{Digest, Sha1};
 use tempfile::{Builder as TempDirBuilder, TempDir};
 use zip::ZipArchive;
@@ -396,6 +397,110 @@ pub fn status() -> Result<()> {
     }
     render_inspection(&inspect(&destination, &expected_identity)?);
     Ok(())
+}
+
+/// Secret-free projection consumed by the desktop control protocol.  Keep the
+/// inspection implementation shared with the human command so the GUI and
+/// CLI cannot disagree about bundle, signature, Gatekeeper, or XPC state.
+#[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
+pub(crate) struct DesktopDeviceStatus {
+    pub installation: &'static str,
+    pub path: String,
+    pub version: Option<String>,
+    pub bundle_identifier: &'static str,
+    pub code_signature: &'static str,
+    pub signing_identity: &'static str,
+    pub gatekeeper: &'static str,
+    pub network_broker_xpc: &'static str,
+    pub gui_executor_xpc: &'static str,
+    pub running: bool,
+}
+
+/// Returns the local Device app status for a desktop-control request.
+/// Configuration is re-bound to the active CLI home before inspecting the
+/// fixed user Applications path, preventing a stale GUI request from reading
+/// another CLI profile.
+#[allow(dead_code)]
+pub(crate) fn desktop_status(expected_home: &Path) -> Result<DesktopDeviceStatus> {
+    ensure_macos()?;
+    let paths = AppPaths::new(None)?;
+    if paths.home() != expected_home {
+        bail!("configuration changed")
+    }
+    let expected_identity = expected_signing_identity()?;
+    let destination = default_app_path()?;
+    let path = destination.display().to_string();
+    if !destination.exists() {
+        return Ok(DesktopDeviceStatus {
+            installation: "missing",
+            path,
+            version: None,
+            bundle_identifier: "unknown",
+            code_signature: "unknown",
+            signing_identity: "unknown",
+            gatekeeper: "unknown",
+            network_broker_xpc: "missing",
+            gui_executor_xpc: "missing",
+            running: false,
+        });
+    }
+    let Ok(inspection) = inspect(&destination, &expected_identity) else {
+        return Ok(DesktopDeviceStatus {
+            installation: "invalid",
+            path,
+            version: None,
+            bundle_identifier: "invalid",
+            code_signature: "invalid",
+            signing_identity: "invalid",
+            gatekeeper: "unknown",
+            network_broker_xpc: "missing",
+            gui_executor_xpc: "missing",
+            running: false,
+        });
+    };
+    Ok(DesktopDeviceStatus {
+        installation: if inspection.valid_for_install() {
+            "installed"
+        } else {
+            "invalid"
+        },
+        path,
+        version: inspection.version,
+        bundle_identifier: if inspection.bundle_identifier_valid {
+            "valid"
+        } else {
+            "invalid"
+        },
+        code_signature: if inspection.code_signature_valid {
+            "valid"
+        } else {
+            "invalid"
+        },
+        signing_identity: if inspection.signing_identity_valid {
+            "valid"
+        } else {
+            "invalid"
+        },
+        gatekeeper: if !inspection.gatekeeper_required {
+            "not_required"
+        } else if inspection.gatekeeper_accepted {
+            "accepted"
+        } else {
+            "rejected"
+        },
+        network_broker_xpc: if inspection.network_broker_present {
+            "present"
+        } else {
+            "missing"
+        },
+        gui_executor_xpc: if inspection.gui_executor_present {
+            "present"
+        } else {
+            "missing"
+        },
+        running: inspection.running,
+    })
 }
 
 /// Verifies local prerequisites and launches the installed device application.

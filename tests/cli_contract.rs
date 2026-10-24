@@ -1005,6 +1005,7 @@ fn every_command_path_executes_help_successfully() {
         &["doctor"],
         &["deps"],
         &["deps", "status"],
+        &["deps", "mutagen-environment"],
         &["wireguard"],
         &["wireguard", "config"],
         &["wireguard", "check"],
@@ -2564,6 +2565,10 @@ fn account_import_config_help_exposes_explicit_skill_exclusion() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--exclude-skills"));
+    assert!(stdout.contains("--request-id"));
+    assert!(stdout.contains("--status"));
+    assert!(stdout.contains("--forget"));
+    assert!(stdout.contains("audit record"));
     assert!(stdout.contains("--include-resume-history"));
     assert!(stdout.contains("--dry-run"));
 }
@@ -2606,9 +2611,18 @@ fn runtime_recovery_contract(version: u8) {
         binding["version"] = version.into();
         binding["action"] = action.into();
     }
+    let authority =
+        serde_json::json!({"data":{"schema_version":1,"actor_user_id":key,"admin":true}});
+    let projection = serde_json::json!({"task_id":original,"task_record_id":"44444444-4444-4444-8444-444444444444","user_id":key,"tool_account_id":account,"node_id":key,"tool_type":"claude","source_runtime_backend":"docker_sandbox","target_runtime_backend":"native"});
+    let selected = if source { action } else { "verify_target" };
     let (server_url, server) = spawn_http_exchange_responses(vec![
-        serde_json::json!({"data":{"binding":binding,"status":"pending"}}),
-        serde_json::json!({"data":{"binding":binding,"status":"succeeded"}}),
+        authority.clone(),
+        authority.clone(),
+        serde_json::json!({"data":{"schema_version":1,"original":projection,"original_status":"failed","account_status":"migrating"}}),
+        authority.clone(),
+        serde_json::json!({"data":{"schema_version":1,"request_id":key,"action":selected,"binding":binding,"status":"pending"}}),
+        authority,
+        serde_json::json!({"data":{"schema_version":1,"request_id":key,"action":selected,"binding":binding,"status":"succeeded"}}),
     ]);
     write_private_file(
         &state_home.join("config.toml"),
@@ -2653,22 +2667,21 @@ fn runtime_recovery_contract(version: u8) {
         assert!(!String::from_utf8_lossy(&output.stdout).contains("recovery-admin-test-token"));
     }
     let requests = server.join().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].starts_with(&format!(
-        "POST /api/v1/tool-accounts/{account}/runtime-migration/recover HTTP/1.1"
+    assert_eq!(requests.len(), 7);
+    assert!(requests[4].starts_with(&format!(
+        "POST /api/v1/tool-accounts/{account}/runtime-migration/recovery-requests HTTP/1.1"
     )));
-    assert!(requests[0]
+    assert!(requests.iter().all(|request| request
         .to_lowercase()
-        .contains("authorization: bearer recovery-admin-test-token"));
+        .contains("authorization: bearer recovery-admin-test-token")));
     let body: serde_json::Value =
-        serde_json::from_str(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
-    let mut expected = serde_json::json!({"original_task_id":original,"request_id":key});
-    if source {
-        expected["action"] = action.into();
-    }
-    assert_eq!(body, expected);
-    assert!(requests[1].starts_with(&format!(
-        "GET /api/v1/tool-accounts/{account}/runtime-migration/recover/{key} HTTP/1.1"
+        serde_json::from_str(requests[4].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"schema_version":1,"request_id":key,"action":selected,"expected_original":projection})
+    );
+    assert!(requests[6].starts_with(&format!(
+        "GET /api/v1/tool-accounts/{account}/runtime-migration/recovery-requests/{key} HTTP/1.1"
     )));
 }
 
@@ -2691,6 +2704,18 @@ fn runtime_recovery_requires_explicit_original_identity_and_retained_key() {
         ],
     );
     assert_eq!(conflicting.status.code(), Some(2));
+    let unconfirmed_forget = run(
+        AGENT_REMOTE,
+        &[
+            "account",
+            "recovery-status",
+            "11111111-1111-4111-8111-111111111111",
+            "--request-id",
+            "22222222-2222-4222-8222-222222222222",
+            "--yes",
+        ],
+    );
+    assert_eq!(unconfirmed_forget.status.code(), Some(2));
     let missing = run(AGENT_REMOTE, &["account", "recover-runtime", "account"]);
     assert_eq!(missing.status.code(), Some(2));
     let invalid = run(
@@ -2736,8 +2761,16 @@ fn runtime_recovery_error_contract(version: u8) {
     let account = "11111111-1111-4111-8111-111111111111";
     let key = "22222222-2222-4222-8222-222222222222";
     let original = format!("migrate_tool_account_runtime:{account}:{key}");
+    let authority =
+        serde_json::json!({"data":{"schema_version":1,"actor_user_id":key,"admin":true}});
+    let projection = serde_json::json!({"task_id":original,"task_record_id":"44444444-4444-4444-8444-444444444444","user_id":key,"tool_account_id":account,"node_id":key,"tool_type":"claude","source_runtime_backend":"docker_sandbox","target_runtime_backend":"native"});
     let (server_url, server) = spawn_http_exchange_responses(vec![
+        authority.clone(),
+        authority.clone(),
+        serde_json::json!({"data":{"schema_version":1,"original":projection,"original_status":"failed","account_status":"migrating"}}),
+        authority.clone(),
         serde_json::json!({"data":{"private":"private-response-do-not-render"}}),
+        authority,
         serde_json::json!({"data":{"private":"private-response-do-not-render"}}),
     ]);
     write_private_file(
@@ -2801,7 +2834,7 @@ fn runtime_recovery_error_contract(version: u8) {
         assert!(!text.contains("private-response-do-not-render"));
         assert!(!text.contains("recovery-admin-test-token"));
     }
-    assert_eq!(server.join().unwrap().len(), 2);
+    assert_eq!(server.join().unwrap().len(), 7);
 }
 
 #[cfg(unix)]

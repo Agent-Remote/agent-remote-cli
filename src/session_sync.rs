@@ -1,8 +1,10 @@
 //! Bounded synchronization readiness for tool launchers.
+mod verified;
 use crate::mutagen::{binary_path, configured_mutagen_command, session_name};
 use crate::{api::SyncSessionData, config::AppPaths};
 use anyhow::{bail, Context, Result};
 use std::time::Duration;
+pub use verified::{flush_verified, FlushError, VerifiedFlush};
 
 /// Waits for a synchronization cycle before a new remote process reads files.
 /// Cancelling the local wait does not stop the persistent Mutagen session.
@@ -15,13 +17,21 @@ pub async fn flush_before_launch(
     if dry_run {
         return Ok(());
     }
+    let (_guard, _) = tokio::select! {
+        result = crate::mutagen::desktop::environment::prepare_guard(paths) => result.context(
+            "Mutagen environment requires review; run agent-remote deps mutagen-environment, then agent-remote deps mutagen-environment --repair if needed"
+        )?,
+        _ = tokio::signal::ctrl_c() => bail!("workspace sync wait cancelled; Claude was not started"),
+    };
     let binary = binary_path(paths);
     let directory = binary
         .parent()
         .context("Mutagen binary has no parent directory")?;
     let mut command =
         tokio::process::Command::from(configured_mutagen_command(paths, &binary, directory)?);
-    command.args(["sync", "flush", name]);
+    command
+        .args(["sync", "flush", name])
+        .env("MUTAGEN_DISABLE_AUTOSTART", "1");
     tokio::select! {
         result = wait_for_flush(command, Duration::from_secs(30)) => result,
         _ = tokio::signal::ctrl_c() => bail!("workspace sync wait cancelled; Claude was not started"),

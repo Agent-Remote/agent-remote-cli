@@ -13,7 +13,7 @@ use clap::{Command, CommandFactory};
 
 use super::Cli;
 #[cfg(unix)]
-use super::{find_executable, run, wg_requires_elevation, WireGuardCommand};
+use super::{find_executable, run, wg_requires_elevation, ActionArgs, WireGuardCommand};
 
 #[cfg(unix)]
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -89,6 +89,42 @@ fn status_recognizes_platform_permission_errors() {
     assert!(wg_requires_elevation(b"Operation not permitted"));
     assert!(wg_requires_elevation(b"Access is denied."));
     assert!(!wg_requires_elevation(b"Invalid interface"));
+}
+
+#[cfg(unix)]
+#[test]
+fn tunnel_action_retries_only_permission_failures_through_fixed_sudo_argv() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("agent-remote.conf");
+    fs::write(&config, "[Interface]\n").unwrap();
+    let tool = dir.path().join("wg-quick");
+    fs::write(
+        &tool,
+        "#!/bin/sh\nif [ \"$AGENT_REMOTE_TEST_ELEVATED\" = 1 ]; then touch \"$AGENT_REMOTE_TEST_SUCCESS\"; exit 0; fi\necho 'Operation not permitted' >&2\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o700)).unwrap();
+    let sudo = dir.path().join("sudo");
+    fs::write(
+        &sudo,
+        "#!/bin/sh\n[ \"$1\" = -- ] || exit 64\nshift\n[ \"$1\" = \"$AGENT_REMOTE_WG_QUICK\" ] || exit 65\nAGENT_REMOTE_TEST_ELEVATED=1 exec \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&sudo, fs::Permissions::from_mode(0o700)).unwrap();
+    let success = dir.path().join("success");
+    env::set_var("AGENT_REMOTE_WG_QUICK", &tool);
+    env::set_var("AGENT_REMOTE_SUDO", &sudo);
+    env::set_var("AGENT_REMOTE_TEST_SUCCESS", &success);
+    run(WireGuardCommand::Up(ActionArgs {
+        config,
+        dry_run: false,
+    }))
+    .unwrap();
+    assert!(success.exists());
+    env::remove_var("AGENT_REMOTE_WG_QUICK");
+    env::remove_var("AGENT_REMOTE_SUDO");
+    env::remove_var("AGENT_REMOTE_TEST_SUCCESS");
 }
 
 #[cfg(unix)]

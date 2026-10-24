@@ -62,7 +62,7 @@ pub fn run(home: &Path, args: &[&str]) -> Output {
 pub fn request(stream: &mut TcpStream) -> String {
     stream.set_nonblocking(false).unwrap();
     stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(Duration::from_secs(30)))
         .unwrap();
     let mut bytes = Vec::new();
     let mut byte = [0];
@@ -104,7 +104,10 @@ where
     let thread = thread::spawn(move || {
         let mut requests = Vec::new();
         for (code, value) in responses {
-            let deadline = Instant::now() + Duration::from_secs(15);
+            // Large manifest envelopes may be serialized beside many other
+            // nextest workers; retain a finite bound without making the
+            // fixture fail solely because the client was not scheduled yet.
+            let deadline = Instant::now() + Duration::from_secs(60);
             let mut stream = loop {
                 match listener.accept() {
                     Ok((stream, _)) => break stream,

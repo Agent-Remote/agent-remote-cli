@@ -6,12 +6,13 @@
 //! transfers a bounded archive over SSH, verifies acknowledgement, and returns
 //! an account-private remote path outside the project directory.
 
-mod archive;
+pub(crate) mod archive;
 mod capture;
 mod input;
 mod paths;
 pub(crate) use input::{InputDecoder, InputEvent};
 pub use paths::parse_dropped_paths;
+mod exact_transfer;
 mod transfer;
 
 use crate::{api::AttachSessionData, config::AppPaths};
@@ -32,8 +33,15 @@ const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
 #[derive(Clone, Debug)]
 pub struct AttachmentContext {
-    transfer: Arc<transfer::Transfer>,
+    transfer: AttachmentTransfer,
     cancelled: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum AttachmentTransfer {
+    Legacy(Arc<transfer::Transfer>),
+    Exact(Arc<exact_transfer::Transfer>),
 }
 
 pub(crate) struct CancellationGuard(AttachmentContext);
@@ -56,7 +64,25 @@ impl AttachmentContext {
     #[allow(dead_code)]
     pub fn new(attach: &AttachSessionData, account_path: String, backend: &str) -> Result<Self> {
         Ok(Self {
-            transfer: Arc::new(transfer::Transfer::new(attach, account_path, backend)?),
+            transfer: AttachmentTransfer::Legacy(Arc::new(transfer::Transfer::new(
+                attach,
+                account_path,
+                backend,
+            )?)),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Construct the identity-bound transfer used by an exact Claude session.
+    /// The Node resolves the account and issues the lease; no account path is
+    /// accepted from the client.
+    #[allow(dead_code)]
+    pub fn new_exact(attach: &AttachSessionData, expected_device: &str) -> Result<Self> {
+        Ok(Self {
+            transfer: AttachmentTransfer::Exact(Arc::new(exact_transfer::Transfer::new(
+                attach,
+                expected_device,
+            )?)),
             cancelled: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -81,14 +107,20 @@ impl AttachmentContext {
         if self.cancelled.load(Ordering::Acquire) {
             bail!("attachment transfer cancelled");
         }
-        self.transfer.upload(paths, archive).await
+        match &self.transfer {
+            AttachmentTransfer::Legacy(transfer) => transfer.upload(paths, archive).await,
+            AttachmentTransfer::Exact(transfer) => transfer.upload(paths, archive).await,
+        }
     }
 
     /// Remove only this connection's files. Failed cleanup retains a retry receipt.
     #[allow(dead_code)]
     pub async fn cleanup(&self, paths: &AppPaths) -> Result<()> {
         self.cancel();
-        self.transfer.cleanup(paths).await
+        match &self.transfer {
+            AttachmentTransfer::Legacy(transfer) => transfer.cleanup(paths).await,
+            AttachmentTransfer::Exact(transfer) => transfer.cleanup(paths).await,
+        }
     }
 }
 

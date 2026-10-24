@@ -1,9 +1,7 @@
 use std::env;
 use std::ffi::OsString;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
@@ -11,7 +9,7 @@ use crate::api::SyncSessionData;
 use crate::config::AppPaths;
 use crate::workspace::{ensure_git_ready, DEFAULT_EXCLUDES};
 
-const MANAGED_SSH_ENVIRONMENT_VERSION: &str = "1";
+pub mod desktop;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MutagenStatus {
@@ -39,6 +37,7 @@ pub fn binary_path(paths: &AppPaths) -> PathBuf {
 }
 
 pub fn create(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<()> {
+    let _guard = mutation_guard(paths, dry_run)?;
     create_with_mode(paths, sync, dry_run, "two-way-safe")
 }
 
@@ -121,6 +120,11 @@ pub fn status(paths: &AppPaths, sync: &SyncSessionData) -> Result<MutagenStatus>
 }
 
 pub fn ensure(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<bool> {
+    let _guard = mutation_guard(paths, dry_run)?;
+    ensure_prepared(paths, sync, dry_run)
+}
+
+fn ensure_prepared(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<bool> {
     let status = status(paths, sync)?;
     if !status.installed {
         bail!("Mutagen is missing; install the packaged CLI dependencies");
@@ -131,11 +135,12 @@ pub fn ensure(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
     if !status.session_missing {
         bail!("unable to inspect the managed Mutagen session");
     }
-    create(paths, sync, dry_run)?;
+    create_with_mode(paths, sync, dry_run, "two-way-safe")?;
     Ok(true)
 }
 
 pub fn pause(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<()> {
+    let _guard = mutation_guard(paths, dry_run)?;
     let status = status(paths, sync)?;
     if !status.installed {
         bail!("Mutagen is missing; install the packaged CLI dependencies");
@@ -156,7 +161,8 @@ pub fn pause(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<
 }
 
 pub fn resume(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<()> {
-    if ensure(paths, sync, dry_run)? {
+    let _guard = mutation_guard(paths, dry_run)?;
+    if ensure_prepared(paths, sync, dry_run)? {
         return Ok(());
     }
     let name = session_name(sync)?;
@@ -169,6 +175,7 @@ pub fn resume(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result
 }
 
 pub fn resolve(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<()> {
+    let _guard = mutation_guard(paths, dry_run)?;
     let name = session_name(sync)?;
     run(
         paths,
@@ -179,6 +186,7 @@ pub fn resolve(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Resul
 }
 
 pub fn reset(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<()> {
+    let _guard = mutation_guard(paths, dry_run)?;
     let name = session_name(sync)?;
     let _ = run(
         paths,
@@ -190,13 +198,14 @@ pub fn reset(paths: &AppPaths, sync: &SyncSessionData, dry_run: bool) -> Result<
         dry_run,
     );
     if dry_run {
-        create(paths, sync, true)?;
+        create_with_mode(paths, sync, true, "two-way-safe")?;
         return Ok(());
     }
-    create(paths, sync, false)
+    create_with_mode(paths, sync, false, "two-way-safe")
 }
 
 pub fn terminate_session(paths: &AppPaths, name: &str, dry_run: bool) -> Result<()> {
+    let _guard = mutation_guard(paths, dry_run)?;
     run(
         paths,
         &[
@@ -247,10 +256,27 @@ fn run_binary(paths: &AppPaths, binary: &Path, args: &[String]) -> Result<String
     }
 }
 
+/// One guard spans every command in the public mutation, including create+flush
+/// and status+resume. Nested helpers never acquire it again.
+fn mutation_guard(
+    paths: &AppPaths,
+    dry_run: bool,
+) -> Result<Option<desktop::environment::NamespaceGuard>> {
+    if dry_run {
+        return Ok(None);
+    }
+    desktop::environment::legacy_guard(paths).map(Some)
+        .context("Mutagen environment requires review; run agent-remote deps mutagen-environment, then agent-remote deps mutagen-environment --repair if needed")
+}
+
+/// Legacy status and guarded mutation commands do not change daemon lifecycle.
 fn mutagen_command(paths: &AppPaths, binary: &Path) -> Result<Command> {
-    paths.ensure_base_dirs()?;
-    let ssh_directory = prepare_managed_ssh_environment(paths, binary)?;
-    configured_mutagen_command(paths, binary, &ssh_directory)
+    let directory = binary
+        .parent()
+        .context("Mutagen binary has no parent directory")?;
+    let mut command = configured_mutagen_command(paths, binary, directory)?;
+    command.env("MUTAGEN_DISABLE_AUTOSTART", "1");
+    Ok(command)
 }
 
 pub(crate) fn configured_mutagen_command(
@@ -262,55 +288,9 @@ pub(crate) fn configured_mutagen_command(
     command
         .env("PATH", mutagen_path(paths)?)
         .env("AGENT_REMOTE_HOME", paths.home())
-        .env("MUTAGEN_SSH_PATH", ssh_directory);
+        .env("MUTAGEN_SSH_PATH", ssh_directory)
+        .env("MUTAGEN_DATA_DIRECTORY", desktop::data_directory()?);
     Ok(command)
-}
-
-fn prepare_managed_ssh_environment(paths: &AppPaths, binary: &Path) -> Result<PathBuf> {
-    let ssh_directory = binary
-        .parent()
-        .context("Mutagen binary has no parent directory")?;
-    for command in ["ssh", "scp"] {
-        let proxy = crate::platform::managed_binary(ssh_directory, command);
-        if !proxy.is_file() {
-            bail!(
-                "managed Mutagen {} proxy is missing at {}; reinstall the packaged CLI dependencies",
-                command.to_uppercase(),
-                proxy.display()
-            );
-        }
-    }
-
-    let marker = paths.ssh_dir().join("mutagen-environment");
-    let desired_marker = format!(
-        "{MANAGED_SSH_ENVIRONMENT_VERSION}\n{}\n",
-        ssh_directory.to_string_lossy()
-    );
-    if fs::read_to_string(&marker).ok().as_deref() == Some(desired_marker.as_str()) {
-        return Ok(ssh_directory.to_path_buf());
-    }
-
-    let output = configured_mutagen_command(paths, binary, ssh_directory)?
-        .args(["daemon", "stop"])
-        .output()
-        .context("failed to restart Mutagen for managed SSH configuration")?;
-    let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
-    if !output.status.success() && !daemon_was_not_running(&stderr) {
-        bail!(
-            "unable to restart Mutagen for managed SSH configuration: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    if output.status.success() {
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    fs::write(&marker, desired_marker)
-        .with_context(|| format!("failed to write {}", marker.display()))?;
-    Ok(ssh_directory.to_path_buf())
-}
-
-fn daemon_was_not_running(output: &str) -> bool {
-    output.contains("connection timed out (is the daemon running?)")
 }
 
 fn is_missing_session_output(output: &str) -> bool {

@@ -1,4 +1,18 @@
 pub mod git;
+// Used by the library desktop protocol; the human binary compiles auth separately.
+#[allow(dead_code)]
+pub mod inspection;
+pub mod login;
+pub mod logout;
+mod strict_device;
+pub mod strict_user;
+mod wireguard_lock;
+#[allow(unused_imports)] // The verified-sync foundation is a library-only entry point.
+pub(crate) use strict_device::{existing_refresh_record, load_device_token_existing_locked};
+#[allow(unused_imports)] // Public library types; the human binary shares this module.
+pub use strict_device::{load_device_token_strict_locked, StrictDeviceToken};
+#[allow(unused_imports)] // Public library types; the human binary shares this module.
+pub use wireguard_lock::{lock_wireguard_credentials, WireGuardCredentialLock};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,7 +28,7 @@ use crate::local_state::LocalState;
 use crate::secrets::{device_token_key, SecretBackend, SecretStore};
 
 mod user_session;
-pub use user_session::{load_user_token, logout_user, store_user_token, user_login_error};
+pub use user_session::{load_user_token, store_user_token, user_login_error};
 
 pub fn store_device_token(
     paths: &AppPaths,
@@ -52,6 +66,15 @@ pub fn has_device_token(paths: &AppPaths, server_url: &str, device_id: &str) -> 
 }
 
 pub async fn load_device_token(paths: &AppPaths) -> Result<(String, String, String)> {
+    let guard = login::lock(paths).await?;
+    load_device_token_locked(paths, &guard).await
+}
+
+/// Used by logout while it already holds the shared login/device refresh lock.
+pub async fn load_device_token_locked(
+    paths: &AppPaths,
+    _guard: &login::LoginLock,
+) -> Result<(String, String, String)> {
     let config = Config::load(paths)?;
     let server_url = config
         .server_url

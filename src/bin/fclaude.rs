@@ -26,10 +26,11 @@ enum Mode {
     Run,
     New,
     List(SessionListArgs),
-    Attach(String),
+    Attach(AttachArgs),
     Stop(StopArgs),
     StopStatus(StopStatusArgs),
     Delete(DeleteTarget),
+    DeleteStatus(DeleteStatusArgs),
     Forward(ForwardArgs),
 }
 
@@ -62,7 +63,7 @@ struct FClaudeArgs {
     version = VERSION,
     about = "Run and manage remote Claude Code sessions",
     long_about = "Start Claude Code in the synchronized current workspace, resume the matching remote session, or explicitly list, attach, stop, and delete sessions.",
-    after_help = "Examples:\n  fclaude\n  fclaude --model opus\n  fclaude new -- --model sonnet\n  fclaude list --running\n  fclaude attach b68873d48e07\n  fclaude stop b68873d48e07\n  fclaude delete b68873d48e07\n  fclaude delete --all",
+    after_help = "Examples:\n  fclaude\n  fclaude --model opus\n  fclaude new -- --model sonnet\n  fclaude list --running\n  fclaude attach b68873d48e07\n  fclaude stop b68873d48e07\n  fclaude delete b68873d48e07\n  fclaude delete --all\n  fclaude delete-status <request-id>",
     trailing_var_arg = true,
     subcommand_precedence_over_arg = true
 )]
@@ -117,6 +118,8 @@ enum FClaudeCommand {
     StopStatus(StopStatusArgs),
     /// Delete a stopped, interrupted, or failed session, or all sessions in those states.
     Delete(DeleteArgs),
+    /// Query a managed deletion request by its original caller key.
+    DeleteStatus(DeleteStatusArgs),
     /// Forward a local loopback port to this workspace's remote session.
     Forward(ForwardArgs),
 }
@@ -168,7 +171,7 @@ struct FClaudeListArgs {
     no_trunc: bool,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, PartialEq, Eq, ClapArgs)]
 struct AttachArgs {
     /// Unique session ID prefix or full UUID.
     #[arg(value_name = "SESSION")]
@@ -177,6 +180,14 @@ struct AttachArgs {
     /// Print the authorized SSH command without executing it.
     #[arg(long)]
     print_only: bool,
+
+    /// Require the reviewed server URL before any authentication or authorization work.
+    #[arg(long, requires = "expected_device", value_name = "URL")]
+    expected_server: Option<String>,
+
+    /// Require the reviewed device; together the expectation flags require a full session UUID.
+    #[arg(long, requires = "expected_server", value_name = "DEVICE_UUID")]
+    expected_device: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, ClapArgs)]
@@ -216,8 +227,32 @@ struct DeleteArgs {
     all: bool,
 }
 
+#[derive(Debug, PartialEq, Eq, ClapArgs)]
+struct DeleteStatusArgs {
+    /// Original caller-key UUID printed by delete.
+    request_id: String,
+    /// Wait for deletion to reach a terminal outcome.
+    #[arg(long)]
+    wait: bool,
+    /// Maximum seconds to wait for deletion status.
+    #[arg(
+        long,
+        default_value_t = 60,
+        value_parser = clap::value_parser!(u64).range(1..=86400)
+    )]
+    timeout: u64,
+}
+
 #[tokio::main]
 async fn main() {
+    if agent_remote_cli::desktop_schema::requested() {
+        use clap::CommandFactory;
+        if let Err(error) = agent_remote_cli::desktop_schema::write(FClaudeCli::command()) {
+            eprintln!("failed to write desktop command schema: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let cli = FClaudeCli::parse();
     terminal::configure(cli.color);
     if let Err(error) = run(cli.into_args()).await {
@@ -226,6 +261,16 @@ async fn main() {
             error
                 .downcast_ref::<agent_remote_cli::session_saving::SavingExit>()
                 .map(|exit| exit.0)
+                .or_else(|| {
+                    error
+                        .downcast_ref::<agent_remote_cli::session_stop::StopExit>()
+                        .map(|exit| exit.0)
+                })
+                .or_else(|| {
+                    error
+                        .downcast_ref::<agent_remote_cli::session_stop::StopSubmissionUnknown>()
+                        .map(|_| 3)
+                })
                 .or_else(|| {
                     error
                         .downcast_ref::<agent_remote_cli::session_creation::CreationExit>()
@@ -250,7 +295,8 @@ impl FClaudeCli {
                 false,
             ),
             Some(FClaudeCommand::Attach(args)) => {
-                (Mode::Attach(args.session_id), Vec::new(), args.print_only)
+                let print_only = args.print_only;
+                (Mode::Attach(args), Vec::new(), print_only)
             }
             Some(FClaudeCommand::Stop(args)) => (Mode::Stop(args), Vec::new(), false),
             Some(FClaudeCommand::StopStatus(args)) => (Mode::StopStatus(args), Vec::new(), false),
@@ -260,6 +306,9 @@ impl FClaudeCli {
                     None => DeleteTarget::AllInactive,
                 };
                 (Mode::Delete(target), Vec::new(), false)
+            }
+            Some(FClaudeCommand::DeleteStatus(args)) => {
+                (Mode::DeleteStatus(args), Vec::new(), false)
             }
             Some(FClaudeCommand::Forward(args)) => (Mode::Forward(args), Vec::new(), false),
             None => (Mode::Run, self.claude_args, false),
@@ -300,22 +349,69 @@ async fn run(args: FClaudeArgs) -> Result<()> {
     let paths = AppPaths::new(args.home.clone())?;
     match &args.mode {
         Mode::List(list_args) => list_sessions(&paths, list_args).await,
-        Mode::Attach(session_id) => attach_session(&paths, session_id, args.print_only).await,
+        Mode::Attach(input) => match (&input.expected_server, &input.expected_device) {
+            (Some(server), Some(device)) => {
+                agent_remote_cli::session_attach::run(
+                    &paths,
+                    &agent_remote_cli::session_attach::ExactSessionAttach {
+                        session_id: &input.session_id,
+                        expected_server: server,
+                        expected_device: device,
+                        print_only: input.print_only,
+                    },
+                )
+                .await
+            }
+            (None, None) => attach_session(&paths, &input.session_id, args.print_only).await,
+            _ => bail!("Expected server and expected device must be provided together."),
+        },
         Mode::Stop(args) => stop_session(&paths, &args.session_id, args.timeout).await,
         Mode::StopStatus(args) => {
             let (server_url, _device_id, token) = load_device_token(&paths).await?;
             let client = ApiClient::new(server_url)?;
-            agent_remote_cli::session_saving::observe(
+            if LocalState::session_stop_records(&paths)?
+                .iter()
+                .any(|record| record.request_id == args.operation_id)
+            {
+                let receipt = agent_remote_cli::session_stop::observe(
+                    &paths,
+                    &client,
+                    &token,
+                    &args.operation_id,
+                    args.wait,
+                    args.timeout,
+                )
+                .await?;
+                agent_remote_cli::session_stop::render(&receipt);
+                Ok(())
+            } else {
+                agent_remote_cli::session_saving::observe(
+                    &client,
+                    &token,
+                    &args.operation_id,
+                    None,
+                    args.wait,
+                    args.timeout,
+                )
+                .await
+            }
+        }
+        Mode::Delete(target) => delete_sessions(&paths, target).await,
+        Mode::DeleteStatus(args) => {
+            let (server_url, _device_id, token) = load_device_token(&paths).await?;
+            let client = ApiClient::new(server_url)?;
+            let receipt = agent_remote_cli::session_delete::observe(
+                &paths,
                 &client,
                 &token,
-                &args.operation_id,
-                None,
+                &args.request_id,
                 args.wait,
                 args.timeout,
             )
-            .await
+            .await?;
+            agent_remote_cli::session_delete::render(&receipt);
+            Ok(())
         }
-        Mode::Delete(target) => delete_sessions(&paths, target).await,
         Mode::Forward(forward_args) => {
             agent_remote_cli::port_forward::run(&paths, forward_args, Some(TOOL_TYPE)).await
         }
@@ -525,26 +621,39 @@ async fn attach_session(paths: &AppPaths, session_id: &str, print_only: bool) ->
 
 async fn stop_session(paths: &AppPaths, session_id: &str, timeout: u64) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(paths).await?;
-    let client = ApiClient::new(server_url)?;
+    let client = ApiClient::new(server_url.clone())?;
     let session_id = resolve_session_id(&client, &token, session_id).await?;
-    let session = client.stop_tool_session(&token, &session_id).await?;
+    // Resolve the full row once and freeze its node/backend/task binding. The
+    // Server rejects a stale binding; the CLI never guesses a replacement.
+    let session = client
+        .list_sessions(&token, Some(TOOL_TYPE), &[])
+        .await?
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .context("resolved Claude session disappeared from the session list")?;
+    let (mut receipt, _record) =
+        agent_remote_cli::session_stop::submit(paths, &client, &server_url, &token, &session)
+            .await?;
     terminal::success_line("Claude session stop requested");
-    let mut details = Details::new()
-        .field("Session", &session.id)
-        .status("Status", session.status);
-    if let Some(task_id) = session.stop_task_id {
-        details = details.field("Stop task", task_id);
+    agent_remote_cli::session_stop::render(&receipt);
+    if receipt.phase != "legacy" && !agent_remote_cli::session_stop::is_terminal(&receipt) {
+        receipt = agent_remote_cli::session_stop::observe(
+            paths,
+            &client,
+            &token,
+            &receipt.request_id,
+            true,
+            timeout,
+        )
+        .await?;
+        agent_remote_cli::session_stop::render(&receipt);
     }
-    if let Some(operation) = &session.skill_finalization_operation_id {
-        details = details.field("Operation", operation);
-    }
-    details.render();
-    if let Some(operation) = &session.skill_finalization_operation_id {
+    if let Some(operation) = &receipt.skill_finalization_operation_id {
         agent_remote_cli::session_saving::observe(
             &client,
             &token,
             operation,
-            Some(&session.id),
+            Some(&receipt.session_id),
             true,
             timeout,
         )
@@ -555,17 +664,54 @@ async fn stop_session(paths: &AppPaths, session_id: &str, timeout: u64) -> Resul
 
 async fn delete_sessions(paths: &AppPaths, target: &DeleteTarget) -> Result<()> {
     let (server_url, _device_id, token) = load_device_token(paths).await?;
-    let client = ApiClient::new(server_url)?;
+    let client = ApiClient::new(server_url.clone())?;
     match target {
         DeleteTarget::Session(reference) => {
-            let session_id = resolve_session_id(&client, &token, reference).await?;
-            client.delete_tool_session(&token, &session_id).await?;
-            terminal::success_line("Claude session deleted");
-            Details::new().field("Session", session_id).render();
+            let sessions = client
+                .list_sessions(
+                    &token,
+                    Some(TOOL_TYPE),
+                    &agent_remote_cli::session_delete::deletable_statuses(),
+                )
+                .await?;
+            let selected = agent_remote_cli::session_delete::freeze_selection(
+                sessions,
+                TOOL_TYPE,
+                Some(reference),
+            )?;
+            let (receipt, _) = agent_remote_cli::session_delete::submit(
+                paths,
+                &client,
+                &server_url,
+                &token,
+                TOOL_TYPE,
+                &selected,
+            )
+            .await?;
+            terminal::success_line("Claude session deletion requested");
+            agent_remote_cli::session_delete::render(&receipt);
         }
         DeleteTarget::AllInactive => {
-            client.delete_inactive_tool_sessions(&token).await?;
-            terminal::success_line("Stopped, interrupted, and failed Claude sessions deleted");
+            let sessions = client
+                .list_sessions(
+                    &token,
+                    Some(TOOL_TYPE),
+                    &agent_remote_cli::session_delete::deletable_statuses(),
+                )
+                .await?;
+            let selected =
+                agent_remote_cli::session_delete::freeze_selection(sessions, TOOL_TYPE, None)?;
+            let (receipt, _) = agent_remote_cli::session_delete::submit(
+                paths,
+                &client,
+                &server_url,
+                &token,
+                TOOL_TYPE,
+                &selected,
+            )
+            .await?;
+            terminal::success_line("Claude session collection deletion requested");
+            agent_remote_cli::session_delete::render(&receipt);
         }
     }
     Ok(())

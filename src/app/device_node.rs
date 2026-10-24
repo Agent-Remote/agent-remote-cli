@@ -11,6 +11,7 @@ fn device_uninstall(args: DeviceUninstallArgs) -> Result<()> {
 }
 
 async fn device_revoke(paths: AppPaths, args: DeviceRevokeArgs) -> Result<()> {
+    let _guard = auth::login::lock(&paths).await?;
     let mut config = Config::load(&paths)?;
     let server_url = config
         .server_url
@@ -77,6 +78,7 @@ async fn device_revoke(paths: AppPaths, args: DeviceRevokeArgs) -> Result<()> {
 }
 
 async fn device_rotate_token(paths: AppPaths, args: DeviceRotateTokenArgs) -> Result<()> {
+    let _guard = auth::login::lock(&paths).await?;
     let config = Config::load(&paths)?;
     let server_url = config.server_url.context("server URL is not configured")?;
     let device_id = config
@@ -1040,11 +1042,3 @@ fn node_fingerprint(node: &NodeData) -> String {
         node.execution_admission,
     )
 }
-
-struct DeviceRegistrationOptions {
-    device_name: Option<String>,
-    ssh_public_key: Option<PathBuf>,
-    wireguard_public_key: Option<String>,
-    skip_device_registration: bool,
-}
-

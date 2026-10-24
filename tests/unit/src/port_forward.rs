@@ -165,10 +165,16 @@ fn session_json() -> serde_json::Value {
 fn forward_args(action: ForwardAction) -> ForwardArgs {
     ForwardArgs {
         remote_port: None,
+        forward_id: None,
         session: None,
         local_port: "same".to_string(),
         open: false,
         ttl_seconds: None,
+        expected_server_url: None,
+        expected_device_id: None,
+        expected_node_id: None,
+        expected_runtime_backend: None,
+        caller_request_id: None,
         action: Some(action),
     }
 }
@@ -301,10 +307,16 @@ async fn start_command_cleans_up_created_forward_after_terminal_handshake() {
     let paths = authenticated_paths(&directory, &server_url);
     let args = ForwardArgs {
         remote_port: Some(5173),
+        forward_id: None,
         session: Some("22222222".to_string()),
         local_port: "auto".to_string(),
         open: false,
         ttl_seconds: Some(3600),
+        expected_server_url: None,
+        expected_device_id: None,
+        expected_node_id: None,
+        expected_runtime_backend: None,
+        caller_request_id: None,
         action: None,
     };
 
@@ -330,6 +342,85 @@ async fn start_command_cleans_up_created_forward_after_terminal_handshake() {
     assert!(requests
         .iter()
         .all(|request| !request.contains("initial-connect-secret")));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn resume_command_reconnects_exact_forward_without_creating_duplicate() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("fake-ssh");
+    let leaked = directory.path().join("token-in-argv");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = \"resume-connect-secret\" ] && touch '{}'; done\ndd bs=1 count={} of=/dev/null 2>/dev/null\nprintf 'ARPF\\000\\001\\000\\000\\000\\050{{\"ok\":false,\"error_code\":\"AUTH_INVALID\"}}'\n",
+            leaked.display(),
+            client_handshake_size(
+                "11111111-1111-4111-8111-111111111111",
+                "resume-connect-secret"
+            )
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    let listed = serde_json::json!({"data": {"items": [forward_json("disconnected")]}});
+    let session = serde_json::json!({"data": session_json()});
+    let connection = serde_json::json!({"data": {
+        "token": "resume-connect-secret",
+        "expires_at": "2026-07-30T00:01:00Z",
+        "node_wireguard_ip": "10.77.0.20",
+        "ssh_user": "agent-remote",
+        "ssh_port": 22
+    }});
+    let stopped = serde_json::json!({"data": forward_json("stopped")});
+    let (server_url, server) = fake_control_plane(vec![
+        listed.to_string(),
+        session.to_string(),
+        connection.to_string(),
+        stopped.to_string(),
+    ])
+    .await;
+    let paths = authenticated_paths(&directory, &server_url);
+    let args = ForwardArgs {
+        remote_port: None,
+        forward_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
+        session: None,
+        local_port: "auto".to_string(),
+        open: false,
+        ttl_seconds: None,
+        expected_server_url: Some(server_url.clone()),
+        expected_device_id: Some("device-1".to_string()),
+        expected_node_id: Some("node-1".to_string()),
+        expected_runtime_backend: Some("native".to_string()),
+        caller_request_id: None,
+        action: None,
+    };
+
+    let error = start_with_ssh(&paths, &args, None, script)
+        .await
+        .expect_err("terminal tunnel authorization must fail resume");
+    assert!(error.to_string().contains("AUTH_INVALID"));
+    assert!(!leaked.exists(), "connection token was passed in SSH argv");
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[0].starts_with("GET /api/v1/port-forwards HTTP/1.1"));
+    assert!(requests[1]
+        .starts_with("GET /api/v1/sessions/22222222-2222-4222-8222-222222222222 HTTP/1.1"));
+    assert!(requests[2].starts_with(
+        "POST /api/v1/port-forwards/11111111-1111-4111-8111-111111111111/connections HTTP/1.1"
+    ));
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.contains("/port-forwards HTTP/1.1")
+                && request.starts_with("POST /api/v1/sessions/")),
+        "resume submitted create request"
+    );
+    assert!(requests[3]
+        .starts_with("DELETE /api/v1/port-forwards/11111111-1111-4111-8111-111111111111 HTTP/1.1"));
 }
 
 #[test]
@@ -447,6 +538,9 @@ async fn ssh_tunnel_keeps_token_off_argv_and_redacts_terminal_errors() {
         PortForwardConnectionData {
             token: "secret-connect-token".to_string(),
             expires_at: "2026-07-30T00:01:00Z".to_string(),
+            node_wireguard_ip: None,
+            ssh_user: None,
+            ssh_port: None,
         },
     )
     .await;

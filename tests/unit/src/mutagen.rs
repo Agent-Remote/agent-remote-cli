@@ -7,8 +7,8 @@ use crate::api::SyncSessionData;
 use crate::config::AppPaths;
 
 use super::{
-    combine_output, configured_mutagen_command, create_args, daemon_was_not_running,
-    is_missing_session_output, mutagen_path, session_name,
+    combine_output, configured_mutagen_command, create_args, is_missing_session_output,
+    mutagen_path, session_name,
 };
 
 fn sync_session() -> SyncSessionData {
@@ -101,12 +101,89 @@ fn configures_mutagen_to_use_managed_ssh_commands() {
         environment.get(std::ffi::OsStr::new("MUTAGEN_SSH_PATH")),
         Some(&std::ffi::OsStr::new("/opt/agent-remote/bin"))
     );
+    assert_eq!(
+        environment.get(std::ffi::OsStr::new("MUTAGEN_DATA_DIRECTORY")),
+        Some(&super::desktop::data_directory().unwrap().as_os_str())
+    );
 }
 
 #[test]
-fn recognizes_an_absent_daemon_during_environment_migration() {
-    assert!(daemon_was_not_running(
-        "error: unable to connect to daemon: connection timed out (is the daemon running?)"
-    ));
-    assert!(!daemon_was_not_running("error: access denied"));
+fn legacy_stopped_namespace_probe() {
+    let Some(home) = std::env::var_os("AGENT_REMOTE_TEST_LEGACY_ENVIRONMENT") else {
+        return;
+    };
+    let paths = AppPaths::from_home(home.into());
+    let error = super::mutation_guard(&paths, false).err().unwrap();
+    assert!(error
+        .to_string()
+        .contains("agent-remote deps mutagen-environment --repair"));
+    assert!(format!("{error:#}").contains("sync_mutagen_environment_mismatch"));
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_commands_never_restart_an_existing_stopped_namespace_or_rewrite_old_marker() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let paths = AppPaths::from_home(home.clone());
+    std::fs::create_dir_all(paths.bin_dir()).unwrap();
+    std::fs::create_dir_all(paths.ssh_dir()).unwrap();
+    let marker = paths.ssh_dir().join("mutagen-environment");
+    std::fs::write(&marker, "1\nold-installation\n").unwrap();
+    for name in ["mutagen", "ssh", "scp"] {
+        let binary = paths.bin_dir().join(name);
+        std::fs::write(&binary,"#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$AGENT_REMOTE_HOME/unexpected-execution\"\nexit 91\n").unwrap();
+        std::fs::set_permissions(binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let data = root.path().join("data");
+    std::fs::create_dir_all(data.join("daemon")).unwrap();
+    std::fs::write(data.join("daemon/daemon.lock"), "").unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "mutagen::tests::legacy_stopped_namespace_probe"])
+        .env("AGENT_REMOTE_TEST_LEGACY_ENVIRONMENT", &home)
+        .env("MUTAGEN_DATA_DIRECTORY", &data)
+        .env("HOME", root.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!home.join("unexpected-execution").exists());
+    assert_eq!(
+        std::fs::read_to_string(marker).unwrap(),
+        "1\nold-installation\n"
+    );
+    assert!(!data.join("agent-remote-environment.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_status_is_read_only_and_never_autostarts_or_migrates_daemon() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::from_home(root.path().join("home"));
+    std::fs::create_dir_all(paths.bin_dir()).unwrap();
+    let binary = paths.bin_dir().join("mutagen");
+    std::fs::write(&binary,"#!/bin/sh\n[ \"$MUTAGEN_DISABLE_AUTOSTART\" = 1 ] || exit 92\n[ \"$1 $2\" = 'sync list' ] || exit 93\nprintf '%s\\n' 'connection refused' >&2\nexit 1\n").unwrap();
+    std::fs::set_permissions(binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let result = super::status(&paths, &sync_session()).unwrap();
+    assert!(result.installed);
+    assert!(!result.session_exists);
+    assert!(!result.session_missing);
+    assert_eq!(result.output, "connection refused");
+    assert!(!paths.ssh_dir().exists());
+    assert!(!paths.state_db_path().exists());
+    assert!(!paths.home().join("config-write.lock").exists());
+}
+
+#[test]
+fn legacy_dry_run_does_not_acquire_or_prepare_namespace() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::from_home(root.path().join("absent-home"));
+    assert!(super::mutation_guard(&paths, true).unwrap().is_none());
+    assert!(!paths.home().exists());
 }

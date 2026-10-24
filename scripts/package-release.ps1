@@ -51,7 +51,7 @@ $licenses = Join-Path $dependencies "licenses"
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 New-Item -ItemType Directory -Force $bin, $installers, $sources, $licenses | Out-Null
 
-foreach ($name in @("agent-remote", "fclaude", "agent-remote-wireguard")) {
+foreach ($name in @("agent-remote", "fclaude", "agent-remote-wireguard", "agent-remote-wireguard-broker")) {
     Copy-Item "target/$Target/release/$name.exe" "$bin/$name.exe"
 }
 Copy-Item "target/$Target/release/agent-remote-scp.exe" "$bin/scp.exe"

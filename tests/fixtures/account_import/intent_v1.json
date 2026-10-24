@@ -1,0 +1,48 @@
+{
+  "tool_account_id": "11111111-2222-4333-8444-555555555555",
+  "request": {
+    "schema_version": 1,
+    "request_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "tool_type": "claude",
+    "source": "local_cli",
+    "include": [
+      "~/.claude/agents",
+      "~/.claude/CLAUDE.md"
+    ],
+    "exclude": [
+      "~/.claude/logs",
+      "~/.claude/cache"
+    ],
+    "include_resume_history": false,
+    "dry_run": false,
+    "files": [
+      {
+        "path": "~/.claude/agents/猫.md",
+        "content_base64": "6ZuqCg==",
+        "mode": 384
+      },
+      {
+        "path": "~/.claude/CLAUDE.md",
+        "content_base64": "e30K",
+        "mode": 420
+      }
+    ],
+    "expected_intent_fingerprint": "sha256:2d3b769b81f1f10415ab6ddfffe0fffe2e7596763bfbfaf5a40761784d500e9f"
+  },
+  "manifest": [
+    {
+      "path": "~/.claude/CLAUDE.md",
+      "sha256": "sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "size": 3,
+      "mode": 420
+    },
+    {
+      "path": "~/.claude/agents/猫.md",
+      "sha256": "sha256:fa717a4768de2a0256209be52fe7fd5c9d100983d5454023aca1fec35b92e731",
+      "size": 4,
+      "mode": 384
+    }
+  ],
+  "canonical_json": "{\"dry_run\":false,\"exclude\":[\"~/.claude/logs\",\"~/.claude/cache\"],\"files\":[{\"mode\":420,\"path\":\"~/.claude/CLAUDE.md\",\"sha256\":\"sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356\",\"size\":3},{\"mode\":384,\"path\":\"~/.claude/agents/猫.md\",\"sha256\":\"sha256:fa717a4768de2a0256209be52fe7fd5c9d100983d5454023aca1fec35b92e731\",\"size\":4}],\"include\":[\"~/.claude/agents\",\"~/.claude/CLAUDE.md\"],\"include_resume_history\":false,\"schema_version\":1,\"source\":\"local_cli\",\"tool_account_id\":\"11111111-2222-4333-8444-555555555555\",\"tool_type\":\"claude\"}",
+  "intent_fingerprint": "sha256:2d3b769b81f1f10415ab6ddfffe0fffe2e7596763bfbfaf5a40761784d500e9f"
+}

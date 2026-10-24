@@ -1,3 +1,12 @@
+// Diagnostic-only bounded reads; normal credential fallback remains compatible.
+#[allow(dead_code)]
+mod inspection;
+mod strict;
+pub(crate) use strict::blocking_credential_operation;
+#[cfg(target_os = "macos")]
+pub(crate) use strict::read_private_home_file;
+pub use strict::{SecretValue, StrictSecretError};
+
 use std::env;
 use std::fmt;
 use std::fs;
@@ -76,11 +85,37 @@ impl SecretStore {
         self.get_file_secret(key)
     }
 
+    /// Check storage without exposing credentials or hiding a denied system
+    /// store behind an absent fallback file. This does not refresh credentials.
+    #[allow(dead_code)] // Used by the library's structured diagnostic entry point.
+    pub fn contains_secret(&self, key: &str) -> Result<bool> {
+        inspection::contains(self, key, &std::sync::atomic::AtomicBool::new(false))
+    }
+
+    /// Internal diagnostic cancellation does not alter ordinary credential reads.
+    #[allow(dead_code)]
+    pub(crate) fn contains_secret_cancellable(
+        &self,
+        key: &str,
+        canceled: &std::sync::atomic::AtomicBool,
+    ) -> Result<bool> {
+        inspection::contains(self, key, canceled)
+    }
+
     pub fn delete_secret(&self, key: &str) -> Result<()> {
         if self.prefer_system {
             let _ = delete_system_secret(key);
         }
         self.delete_file_secret(key)
+    }
+
+    /// Remove the enabled stores and report uncertainty instead of hiding a system-store failure.
+    /// File cleanup is still attempted when the system store is unavailable; an
+    /// explicitly selected file-only backend does not access the system store.
+    pub fn delete_secret_confirmed(&self, key: &str) -> bool {
+        let system = !self.prefer_system || delete_system_secret(key).is_ok();
+        let file = self.delete_file_secret(key).is_ok();
+        system && file
     }
 
     fn secret_path(&self, key: &str) -> std::path::PathBuf {
@@ -188,7 +223,8 @@ fn delete_system_secret(key: &str) -> Result<()> {
     let output = Command::new("security")
         .args(["delete-generic-password", "-s", SERVICE, "-a", key])
         .output()?;
-    if output.status.success() {
+    // errSecItemNotFound (-25300) is returned by security as exit status 44.
+    if output.status.success() || output.status.code() == Some(44) {
         Ok(())
     } else {
         Err(anyhow!("security delete-generic-password failed"))
@@ -234,10 +270,10 @@ fn get_system_secret(key: &str) -> Result<Option<String>> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn delete_system_secret(key: &str) -> Result<()> {
-    let status = Command::new("secret-tool")
+    let output = Command::new("secret-tool")
         .args(["clear", "service", SERVICE, "account", key])
-        .status()?;
-    if status.success() {
+        .output()?;
+    if output.status.success() {
         Ok(())
     } else {
         Err(anyhow!("secret-tool clear failed"))

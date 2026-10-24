@@ -21,6 +21,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{sleep, timeout};
+use uuid::Uuid;
 
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -49,24 +50,57 @@ const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const TUNNEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// Runs a forward start, list, or stop command.
+#[allow(dead_code)]
 pub async fn run(paths: &AppPaths, args: &ForwardArgs, workspace_tool: Option<&str>) -> Result<()> {
+    run_with_json(paths, args, workspace_tool, false).await
+}
+
+/// Run a forward while emitting one secret-free startup event when JSON output
+/// is requested.  The process remains attached to the real loopback listener;
+/// callers can therefore keep the child alive and observe its lifetime rather
+/// than treating the control-plane receipt as a listener.
+pub async fn run_with_json(
+    paths: &AppPaths,
+    args: &ForwardArgs,
+    workspace_tool: Option<&str>,
+    json: bool,
+) -> Result<()> {
     match &args.action {
         Some(ForwardAction::List) => list(paths).await,
         Some(ForwardAction::Stop(stop_args)) => stop(paths, stop_args).await,
-        None => start(paths, args, workspace_tool).await,
+        None => start(paths, args, workspace_tool, json).await,
     }
 }
 
-async fn start(paths: &AppPaths, args: &ForwardArgs, workspace_tool: Option<&str>) -> Result<()> {
-    start_with_ssh(paths, args, workspace_tool, platform::ssh_binary()).await
+async fn start(
+    paths: &AppPaths,
+    args: &ForwardArgs,
+    workspace_tool: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    start_with_ssh_json(paths, args, workspace_tool, platform::ssh_binary(), json).await
 }
 
+#[allow(dead_code)]
 async fn start_with_ssh(
     paths: &AppPaths,
     args: &ForwardArgs,
     workspace_tool: Option<&str>,
     ssh_binary: std::path::PathBuf,
 ) -> Result<()> {
+    start_with_ssh_json(paths, args, workspace_tool, ssh_binary, false).await
+}
+
+async fn start_with_ssh_json(
+    paths: &AppPaths,
+    args: &ForwardArgs,
+    workspace_tool: Option<&str>,
+    ssh_binary: std::path::PathBuf,
+    json: bool,
+) -> Result<()> {
+    if args.forward_id.is_some() {
+        return resume_with_ssh_json(paths, args, ssh_binary, json).await;
+    }
     let remote_port = args
         .remote_port
         .filter(|port| *port > 0)
@@ -78,6 +112,17 @@ async fn start_with_ssh(
         .local_addr()?
         .port();
     let (server_url, device_id, token) = load_device_token(paths).await?;
+    if args
+        .expected_server_url
+        .as_deref()
+        .is_some_and(|value| value != server_url)
+        || args
+            .expected_device_id
+            .as_deref()
+            .is_some_and(|value| value != device_id)
+    {
+        bail!("forward context changed; review the server and device before retrying");
+    }
     let state = LocalState::open(paths)?;
     state.init_schema()?;
     state
@@ -86,21 +131,123 @@ async fn start_with_ssh(
         .context("current device has no SSH key metadata; run agent-remote login again")?;
     let client = ApiClient::new(server_url)?;
     let session = resolve_session(&client, &token, args.session.as_deref(), workspace_tool).await?;
+    if args
+        .expected_node_id
+        .as_deref()
+        .is_some_and(|value| value != session.node_id)
+        || args
+            .expected_runtime_backend
+            .as_deref()
+            .is_some_and(|value| value != session.runtime_backend)
+    {
+        bail!("forward session binding changed; review the node and runtime before retrying");
+    }
     let created = client
-        .create_port_forward(
+        .create_port_forward_with_retry(
             &token,
             &session.id,
             &CreatePortForwardRequest {
                 remote_port,
                 local_port,
                 client_instance_id: client_instance_id(),
+                caller_request_id: Some(
+                    args.caller_request_id
+                        .clone()
+                        .unwrap_or_else(|| Uuid::new_v4().to_string()),
+                ),
                 ttl_seconds: args.ttl_seconds,
             },
         )
         .await?;
 
     serve_local_forward(
-        paths, ssh_binary, client, token, created, listeners, args.open,
+        paths, ssh_binary, client, token, created, listeners, args.open, json,
+    )
+    .await
+}
+
+/// Resume one exact existing server-side forward after the desktop process was
+/// restarted.  The forward ID is the only selector; this path never submits
+/// the create endpoint and therefore cannot create a duplicate instance.
+async fn resume_with_ssh_json(
+    paths: &AppPaths,
+    args: &ForwardArgs,
+    ssh_binary: std::path::PathBuf,
+    json: bool,
+) -> Result<()> {
+    let forward_id = args
+        .forward_id
+        .as_deref()
+        .context("FORWARD_ID is required to resume an existing forward")?;
+    if forward_id.len() != 36 || uuid::Uuid::parse_str(forward_id).is_err() {
+        bail!("FORWARD_ID must be a full UUID")
+    }
+    let (server_url, device_id, token) = load_device_token(paths).await?;
+    if args
+        .expected_server_url
+        .as_deref()
+        .is_some_and(|value| value != server_url)
+        || args
+            .expected_device_id
+            .as_deref()
+            .is_some_and(|value| value != device_id)
+    {
+        bail!("forward context changed; review the server and device before retrying");
+    }
+    let state = LocalState::open(paths)?;
+    state.init_schema()?;
+    state
+        .get_device(&device_id)?
+        .and_then(|device| device.ssh_key_id)
+        .context("current device has no SSH key metadata; run agent-remote login again")?;
+    let client = ApiClient::new(server_url)?;
+    let forwards = client.list_port_forwards(&token).await?;
+    let forward = forwards
+        .into_iter()
+        .find(|value| value.id == forward_id && value.device_id == device_id)
+        .context("the exact port forward is unavailable for this device")?;
+    if is_terminal(&forward.status) {
+        bail!("the selected port forward is already settled")
+    }
+    let session = client.get_tool_session(&token, &forward.session_id).await?;
+    ensure_running_session(session.clone())?;
+    if args
+        .expected_node_id
+        .as_deref()
+        .is_some_and(|value| value != session.node_id)
+        || args
+            .expected_runtime_backend
+            .as_deref()
+            .is_some_and(|value| value != session.runtime_backend)
+    {
+        bail!("forward session binding changed; review the node and runtime before retrying");
+    }
+    // Bind the local socket before issuing a one-shot connection token. A
+    // local port conflict therefore cannot consume a server authorization.
+    let listeners = bind_loopback_listeners(&args.local_port, forward.requested_local_port).await?;
+    let connection = client
+        .create_port_forward_connection(&token, &forward.id)
+        .await?;
+    let node_wireguard_ip = connection
+        .node_wireguard_ip
+        .clone()
+        .context("server did not return the exact forward SSH endpoint; upgrade Server")?;
+    let ssh_user = connection
+        .ssh_user
+        .clone()
+        .context("server did not return the exact forward SSH endpoint; upgrade Server")?;
+    let ssh_port = connection
+        .ssh_port
+        .context("server did not return the exact forward SSH endpoint; upgrade Server")?;
+    let resumed = CreatedPortForwardData {
+        forward,
+        node_wireguard_ip,
+        ssh_user,
+        ssh_port,
+        connection,
+    };
+    serve_local_forward(
+        paths, ssh_binary, client, token, resumed, listeners, args.open, json,
     )
     .await
 }
@@ -265,6 +412,7 @@ async fn serve_local_forward(
     created: CreatedPortForwardData,
     listeners: Vec<TcpListener>,
     open: bool,
+    json: bool,
 ) -> Result<()> {
     let forward_id = created.forward.id.clone();
     let session_id = created.forward.session_id.clone();
@@ -275,6 +423,27 @@ async fn serve_local_forward(
         .context("local listener missing")?
         .local_addr()?
         .port();
+    if json {
+        // Binding is complete before the tunnel supervisor starts. Emit this
+        // event immediately so desktop can distinguish a real local socket
+        // from a control-plane create receipt even while the remote service is
+        // still reconnecting.
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema_version": 1,
+                "kind": "port_forward_started",
+                "forward": forward_json(&created.forward),
+                "local_port": local_port,
+                "listener": {"state": "bound", "addresses": [format!("127.0.0.1:{local_port}")]},
+                "remote_ready": false,
+            })
+        );
+        use std::io::Write;
+        std::io::stdout()
+            .flush()
+            .context("failed to flush forward startup event")?;
+    }
     let (sender_tx, sender_rx) = watch::channel::<Option<SendRequest<Bytes>>>(None);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (status_tx, mut status_rx) = mpsc::channel(1);
@@ -284,7 +453,7 @@ async fn serve_local_forward(
         ssh_binary,
         client.clone(),
         token.clone(),
-        created,
+        created.clone(),
         sender_tx,
         shutdown_rx,
         status_tx,
@@ -310,21 +479,24 @@ async fn serve_local_forward(
             }
         };
 
-        terminal::success_line("Forward active");
-        terminal::Details::new()
-            .field("Session", short_id(&session_id))
-            .field("Local", format!("http://127.0.0.1:{local_port}"))
-            .field("Remote", format!("127.0.0.1:{remote_port}"))
-            .field("Forward ID", &forward_id)
-            .field("Expires", expires_at)
-            .render();
-        println!("Press Ctrl-C to stop. The remote dev server is not exposed publicly.");
+        if !json {
+            terminal::success_line("Forward active");
+            terminal::Details::new()
+                .field("Session", short_id(&session_id))
+                .field("Local", format!("http://127.0.0.1:{local_port}"))
+                .field("Remote", format!("127.0.0.1:{remote_port}"))
+                .field("Forward ID", &forward_id)
+                .field("Expires", expires_at)
+                .render();
+            println!("Press Ctrl-C to stop. The remote dev server is not exposed publicly.");
+            if !remote_ready {
+                terminal::note(
+                    "The remote port is not listening yet. The forward will remain active and accept later connections.",
+                );
+            }
+        }
         if open && remote_ready {
             open_browser(&format!("http://127.0.0.1:{local_port}"))?;
-        } else if !remote_ready {
-            terminal::note(
-                "The remote port is not listening yet. The forward will remain active and accept later connections.",
-            );
         }
 
         let (connection_tx, mut connection_rx) = mpsc::channel(128);
@@ -893,6 +1065,31 @@ fn client_instance_id() -> String {
 
 fn sanitize(value: &str) -> String {
     value.replace(['\t', '\n', '\r'], " ")
+}
+
+/// Secret-free projection shared by human JSON startup events. Connection
+/// tokens and node SSH details are intentionally excluded.
+fn forward_json(forward: &crate::api::PortForwardData) -> serde_json::Value {
+    serde_json::json!({
+        "id": forward.id,
+        "session_id": forward.session_id,
+        "node_id": forward.node_id,
+        "remote_port": forward.remote_port,
+        "requested_local_port": forward.requested_local_port,
+        "client_instance_id": forward.client_instance_id,
+        "caller_request_id": forward.caller_request_id,
+        "status": forward.status,
+        "bytes_up": forward.bytes_up,
+        "bytes_down": forward.bytes_down,
+        "connection_count": forward.connection_count,
+        "last_connected_at": forward.last_connected_at,
+        "lease_expires_at": forward.lease_expires_at,
+        "expires_at": forward.expires_at,
+        "stopped_at": forward.stopped_at,
+        "stop_reason": forward.stop_reason,
+        "created_at": forward.created_at,
+        "updated_at": forward.updated_at,
+    })
 }
 
 fn is_terminal(status: &str) -> bool {

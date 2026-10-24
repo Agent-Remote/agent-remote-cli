@@ -149,6 +149,9 @@ for target in $TARGETS; do
   install -m 0755 "$binary" "$work/bin/agent-remote"
   install -m 0755 "$CARGO_TARGET_DIR/$target/release/fclaude" "$work/bin/fclaude"
   install -m 0755 "$CARGO_TARGET_DIR/$target/release/agent-remote-wireguard" "$work/bin/agent-remote-wireguard"
+  # Platform installers copy this service binary to a fixed protected
+  # location. The regular user installer never executes it from $AGENT_REMOTE_HOME.
+  install -m 0755 "$CARGO_TARGET_DIR/$target/release/agent-remote-wireguard-broker" "$work/bin/agent-remote-wireguard-broker"
   install -m 0755 scripts/mutagen-scp "$work/bin/scp"
   install -m 0755 "$CARGO_TARGET_DIR/$target/release/agent-remote-ssh" "$work/bin/ssh"
   download_mutagen "$target" "$work/bin/mutagen"

@@ -61,3 +61,7 @@ Read the [shared Skill contract](https://github.com/Agent-Remote/agent-remote/bl
   no source-controlled paths/links are instantiated. Node recovery requires live renewable original authority.
 - Backend recovery uses caller-retained original task/request IDs and distinct immutable v1/v2/v3 actions;
   default and verify-source remain passive. Unknown acceptance retains the same key and status instruction.
+  Human and desktop callers share one Rust service, read-only explicit user credentials, and a bounded
+  public key/receipt registry. Inspection observes an exact original projection; new acceptance compares
+  that projection under the existing Server writer lock. Registry phases describe submission evidence,
+  not a duplicate backend state machine. See [desktop recovery](../desktop-runtime-recovery.md).

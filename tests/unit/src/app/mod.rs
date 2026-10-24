@@ -20,10 +20,9 @@ fn command_future_fits_small_platform_stacks() {
 }
 
 use super::{
-    collect_claude_config_files_at, config_import_complete, config_import_exclusions,
-    discover_claude_config_paths_at, json_error_value, normalize_server_url, parse_rfc3339_seconds,
-    posix_shell_quote, valid_join_code, valid_join_code_expiry, valid_managed_ssh_host,
-    valid_managed_ssh_user, valid_node_install_server_url,
+    json_error_value, normalize_server_url, parse_rfc3339_seconds, posix_shell_quote,
+    valid_join_code, valid_join_code_expiry, valid_managed_ssh_host, valid_managed_ssh_user,
+    valid_node_install_server_url,
 };
 use anyhow::anyhow;
 
@@ -33,82 +32,6 @@ fn trims_trailing_slashes_from_server_url() {
         normalize_server_url(" https://example.test/// "),
         "https://example.test"
     );
-}
-
-#[test]
-fn config_import_default_keeps_skills_and_exclusion_is_explicit() {
-    let home = tempfile::tempdir().unwrap();
-    let claude = home.path().join(".claude");
-    std::fs::create_dir_all(claude.join("skills/example")).unwrap();
-    std::fs::write(claude.join("skills/example/SKILL.md"), "skill").unwrap();
-    std::fs::write(claude.join("settings.json"), "{}").unwrap();
-    let included = discover_claude_config_paths_at(home.path(), false, false).unwrap();
-    let files = collect_claude_config_files_at(home.path(), &included).unwrap();
-    assert_eq!(files.len(), 2);
-    assert!(files
-        .iter()
-        .any(|file| file.path == "~/.claude/skills/example/SKILL.md"));
-    assert!(!config_import_exclusions(false)
-        .iter()
-        .any(|path| path == "~/.claude/skills"));
-    assert!(config_import_exclusions(true)
-        .iter()
-        .any(|path| path == "~/.claude/skills"));
-}
-
-#[test]
-fn config_import_excludes_skills_before_reading_and_preserves_other_scopes() {
-    let home = tempfile::tempdir().unwrap();
-    let claude = home.path().join(".claude");
-    for path in ["skills/example", "plugins/example/skills", "projects"] {
-        std::fs::create_dir_all(claude.join(path)).unwrap();
-    }
-    std::fs::File::create(claude.join("skills/example/large.bin"))
-        .unwrap()
-        .set_len(super::CONFIG_IMPORT_MAX_FILE_BYTES + 1)
-        .unwrap();
-    std::fs::write(claude.join("settings.json"), "{}").unwrap();
-    std::fs::write(claude.join("plugins/example/skills/SKILL.md"), "plugin").unwrap();
-    std::fs::write(claude.join("projects/history.jsonl"), "history").unwrap();
-    for history in [false, true] {
-        let included = discover_claude_config_paths_at(home.path(), history, true).unwrap();
-        assert!(!included.iter().any(|path| path == "~/.claude/skills"));
-        let files = collect_claude_config_files_at(home.path(), &included).unwrap();
-        assert_eq!(files.len(), if history { 3 } else { 2 });
-        assert!(files
-            .iter()
-            .all(|file| !file.path.starts_with("~/.claude/skills/")));
-        assert!(files
-            .iter()
-            .any(|file| file.path == "~/.claude/plugins/example/skills/SKILL.md"));
-    }
-    let all = discover_claude_config_paths_at(home.path(), false, false).unwrap();
-    assert!(collect_claude_config_files_at(home.path(), &all).is_err());
-}
-
-#[test]
-fn config_import_only_skills_becomes_empty_when_excluded() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(home.path().join(".claude/skills")).unwrap();
-    let included = discover_claude_config_paths_at(home.path(), true, true).unwrap();
-    assert!(included.is_empty());
-    assert!(collect_claude_config_files_at(home.path(), &included)
-        .unwrap()
-        .is_empty());
-}
-
-#[test]
-fn config_import_completion_classifies_terminal_states() {
-    assert!(!config_import_complete("pending", None, "task-1").unwrap());
-    assert!(!config_import_complete("running", None, "task-1").unwrap());
-    assert!(config_import_complete("succeeded", None, "task-1").unwrap());
-
-    let failed = config_import_complete("failed", Some("write failed"), "task-1")
-        .unwrap_err()
-        .to_string();
-    assert!(failed.contains("write failed"));
-    assert!(failed.contains("task-1"));
-    assert!(config_import_complete("unexpected", None, "task-1").is_err());
 }
 
 #[test]

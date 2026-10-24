@@ -10,7 +10,9 @@ fn resumed_session_explains_unapplied_arguments_without_echoing_values() {
     assert!(!message.contains("private-value"));
 }
 
-use super::{compact_workdir, DeleteTarget, FClaudeCli, Mode, SessionListArgs};
+use super::{
+    compact_workdir, AttachArgs, DeleteStatusArgs, DeleteTarget, FClaudeCli, Mode, SessionListArgs,
+};
 use clap::{Command, CommandFactory, Parser};
 
 fn parse_args(values: &[&str]) -> super::FClaudeArgs {
@@ -82,7 +84,49 @@ fn global_options_preserve_claude_passthrough() {
 #[test]
 fn parses_attach_mode() {
     let args = parse_args(&["attach", "01234567"]);
-    assert_eq!(args.mode, Mode::Attach("01234567".into()));
+    assert_eq!(
+        args.mode,
+        Mode::Attach(AttachArgs {
+            session_id: "01234567".into(),
+            print_only: false,
+            expected_server: None,
+            expected_device: None,
+        })
+    );
+}
+
+#[test]
+fn exact_attach_requires_paired_context_flags_without_changing_legacy_prefixes() {
+    let args = parse_args(&[
+        "attach",
+        "11111111-1111-4111-8111-111111111111",
+        "--expected-server",
+        "https://example.org",
+        "--expected-device",
+        "22222222-2222-4222-8222-222222222222",
+        "--print-only",
+    ]);
+    assert!(matches!(
+        args.mode,
+        Mode::Attach(AttachArgs {
+            expected_server: Some(_),
+            expected_device: Some(_),
+            print_only: true,
+            ..
+        })
+    ));
+    for args in [
+        vec![
+            "fclaude",
+            "attach",
+            "prefix",
+            "--expected-server",
+            "https://example.org",
+        ],
+        vec!["fclaude", "attach", "prefix", "--expected-device", "device"],
+    ] {
+        assert!(FClaudeCli::try_parse_from(args).is_err());
+    }
 }
 
 #[test]
@@ -90,6 +134,7 @@ fn global_options_preserve_explicit_session_commands() {
     for command in [
         vec!["stop", "01234567", "--timeout", "5"],
         vec!["stop-status", "original-operation", "--wait"],
+        vec!["delete-status", "11111111-1111-4111-8111-111111111111"],
         vec!["new", "--", "--model", "sonnet"],
         vec!["delete", "01234567"],
         vec!["list", "--running"],
@@ -116,6 +161,25 @@ fn parses_single_and_bulk_delete_modes() {
 
     let bulk = parse_args(&["delete", "--all"]);
     assert_eq!(bulk.mode, Mode::Delete(DeleteTarget::AllInactive));
+}
+
+#[test]
+fn parses_delete_status_as_a_read_only_original_key_query() {
+    let args = parse_args(&[
+        "delete-status",
+        "11111111-1111-4111-8111-111111111111",
+        "--wait",
+        "--timeout",
+        "9",
+    ]);
+    assert!(matches!(
+        args.mode,
+        Mode::DeleteStatus(DeleteStatusArgs {
+            request_id,
+            wait: true,
+            timeout: 9,
+        }) if request_id == "11111111-1111-4111-8111-111111111111"
+    ));
 }
 
 #[test]

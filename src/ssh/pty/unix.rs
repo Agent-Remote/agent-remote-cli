@@ -26,6 +26,10 @@ pub(super) fn streams(master: &dyn MasterPty) -> Result<(ReaderStream, WriterStr
     {
         return Err(io::Error::last_os_error()).context("failed to make the SSH PTY nonblocking");
     }
+    // Tokio 1.x still exposes this constructor on the stable API used by the
+    // supported toolchains. Keep the deprecation isolated until the upstream
+    // `AsyncFd::register` migration can be made without changing PTY ownership.
+    #[allow(deprecated)]
     let fd = Arc::new(AsyncFd::new(fd).context("failed to register SSH PTY readiness")?);
     Ok((
         ReaderStream {

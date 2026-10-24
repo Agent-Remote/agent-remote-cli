@@ -1,0 +1,32 @@
+[Unit]
+Description=Agent Remote protected WireGuard broker
+Documentation=https://github.com/Agent-Remote/agent-remote-cli/blob/main/docs/linux-wireguard-broker.md
+After=dbus.service
+Requires=dbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/agent-remote-wireguard-broker
+User=root
+Group=root
+Restart=on-failure
+RestartSec=2s
+UMask=0077
+NoNewPrivileges=no
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/agent-remote-wireguard
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

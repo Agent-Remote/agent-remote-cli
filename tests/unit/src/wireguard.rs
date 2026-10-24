@@ -19,6 +19,9 @@ fn renders_wireguard_config() {
     let rendered = render_config(
         &WireGuardConfigData {
             device_id: "device-1".to_string(),
+            peer_id: "peer-1".to_string(),
+            peer_public_key: STANDARD.encode([6_u8; 32]),
+            peer_version: 1,
             interface_address: "10.77.0.2".to_string(),
             _private_key_ref: "local-secret".to_string(),
             dns: vec![],
@@ -26,19 +29,20 @@ fn renders_wireguard_config() {
                 node_id: "node-1".to_string(),
                 name: "us-west".to_string(),
                 region_code: "US".to_string(),
-                public_key: "node-public".to_string(),
+                public_key: STANDARD.encode([8_u8; 32]),
                 endpoint: "203.0.113.10:51820".to_string(),
                 allowed_ips: vec!["10.42.0.10/32".to_string()],
                 persistent_keepalive_seconds: 25,
             }],
         },
         &private_key,
-    );
+    )
+    .unwrap();
     assert!(rendered.contains("[Interface]"));
     assert!(rendered.contains(&format!("PrivateKey = {private_key}")));
     assert!(rendered.contains("MTU = 1000"));
     assert!(!rendered.contains("# PrivateKey"));
-    assert!(rendered.contains("PublicKey = node-public"));
+    assert!(rendered.contains(&format!("PublicKey = {}", STANDARD.encode([8_u8; 32]))));
     assert!(rendered.contains("AllowedIPs = 10.42.0.10/32"));
 }
 
@@ -60,6 +64,9 @@ fn writes_owner_only_config() {
     let path = dir.path().join("agent-remote.conf");
     let config = WireGuardConfigData {
         device_id: "device-1".to_string(),
+        peer_id: "peer-1".to_string(),
+        peer_public_key: STANDARD.encode([6_u8; 32]),
+        peer_version: 1,
         interface_address: "10.77.0.2".to_string(),
         _private_key_ref: "local-secret".to_string(),
         dns: vec![],
@@ -94,6 +101,46 @@ fn reports_helper_status_and_errors() {
     assert!(failed.contains("WireGuard helper exited"));
 }
 
+#[cfg(unix)]
+#[test]
+fn machine_helper_rejects_replaceable_files() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().unwrap();
+    let helper = dir.path().join("agent-remote-wireguard");
+    fs::write(&helper, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    super::validate_machine_helper(&helper).unwrap();
+
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o702)).unwrap();
+    let error = super::validate_machine_helper(&helper)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("writable by another principal"), "{error}");
+
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o600)).unwrap();
+    let error = super::validate_machine_helper(&helper)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not executable"), "{error}");
+
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&helper, &link).unwrap();
+    let error = super::validate_machine_helper(&link)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not a regular file"), "{error}");
+
+    let hardlink = dir.path().join("hardlink");
+    fs::hard_link(&helper, &hardlink).unwrap();
+    let error = super::validate_machine_helper(&helper)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("hard-linked"), "{error}");
+}
+
 #[cfg(windows)]
 #[test]
 fn writes_config_readable_by_local_system() {
@@ -103,6 +150,9 @@ fn writes_config_readable_by_local_system() {
     let path = dir.path().join("agent-remote.conf");
     let config = WireGuardConfigData {
         device_id: "device-1".to_string(),
+        peer_id: "peer-1".to_string(),
+        peer_public_key: STANDARD.encode([6_u8; 32]),
+        peer_version: 1,
         interface_address: "10.77.0.2".to_string(),
         _private_key_ref: "local-secret".to_string(),
         dns: vec![],

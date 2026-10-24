@@ -3,9 +3,16 @@ pub async fn run_entry() {
     terminal::configure(cli.color);
     let json = cli.json;
     let skill = matches!(&cli.command, Command::Skill(_));
+    let mutagen_environment = matches!(&cli.command, Command::Deps(DepsCommand::MutagenEnvironment(_)));
     let recovery = runtime_recovery_commands::RecoveryContext::from_command(&cli.command);
     // Keep the command tree out of Tokio's entry future on Windows' small main stack.
     if let Err(error) = Box::pin(run(cli)).await {
+        if mutagen_environment {
+            if error.downcast_ref::<MutagenEnvironmentPrintedFailure>().is_none() {
+                mutagen_environment_failure(&error, json);
+            }
+            std::process::exit(1);
+        }
         if let Some(exit) = error.downcast_ref::<skill_commands::SkillExit>() {
             std::process::exit(exit.0);
         }
@@ -112,13 +119,14 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Status(args) => status(paths, args.online).await,
         Command::Doctor(args) => Doctor::new(paths).run(args.fix).await,
         Command::Deps(DepsCommand::Status(args)) => deps_status(paths, args.fix),
+        Command::Deps(DepsCommand::MutagenEnvironment(args)) => mutagen_environment_command(paths, args, json).await,
         Command::Wireguard(WireGuardCommand::Config(args)) => wireguard_config(paths, args).await,
         Command::Wireguard(WireGuardCommand::Check(args)) => wireguard_action(paths, "check", args),
         Command::Wireguard(WireGuardCommand::Status) => wireguard::show_status(&paths),
         Command::Wireguard(WireGuardCommand::Up(args)) => wireguard_action(paths, "up", args),
         Command::Wireguard(WireGuardCommand::Down(args)) => wireguard_action(paths, "down", args),
         Command::Ssh(SshCommand::Check(args)) => ssh_check(paths, args).await,
-        Command::Forward(args) => port_forward::run(&paths, &args, None).await,
+        Command::Forward(args) => port_forward::run_with_json(&paths, &args, None, json).await,
         Command::Sync(SyncCommand::Ensure(args)) => sync_ensure(paths, args).await,
         Command::Sync(SyncCommand::Status(args)) => sync_status(paths, args).await,
         Command::Sync(SyncCommand::Pause(args)) => sync_action(paths, "pause", args).await,
@@ -128,6 +136,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Account(AccountCommand::List(args)) => account_list(paths, args).await,
         Command::Account(AccountCommand::Create(args)) => account_create(paths, args).await,
         Command::Account(AccountCommand::Bind(args)) => account_bind(paths, args).await,
+        Command::Account(AccountCommand::Attach(args)) => crate::account_binding::run(&paths, &args).await,
         Command::Account(AccountCommand::ImportConfig(args)) => {
             account_import_config(paths, args).await
         }
@@ -147,7 +156,7 @@ async fn run(cli: Cli) -> Result<()> {
             account_default_get(paths, args)
         }
         Command::Account(AccountCommand::Default(AccountDefaultCommand::Clear(args))) => {
-            account_default_clear(paths, args)
+            account_default_clear(paths, args).await
         }
         Command::Credentials(CredentialsCommand::List(args)) => credentials_list(paths, args).await,
         Command::Credentials(CredentialsCommand::Create(args)) => {

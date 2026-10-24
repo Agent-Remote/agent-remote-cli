@@ -1,12 +1,25 @@
+pub mod account_import;
+pub mod binding_attach;
 mod error_response;
 #[cfg(test)]
 #[path = "../tests/unit/src/api/error_response_tests.rs"]
 mod error_response_tests;
+pub mod reviewed_recovery;
 pub mod runtime_recovery;
+// Consumed by the separate fclaude launcher, not the agent-remote binary.
+#[allow(dead_code)]
+pub mod session_attach;
 mod session_readiness;
+mod sync;
 // This transport is consumed by the separate fclaude launcher.
 #[allow(dead_code)]
+pub mod session_creation;
+#[allow(dead_code)]
+pub mod session_delete;
+#[allow(dead_code)]
 pub mod session_saving;
+#[allow(dead_code)]
+pub mod session_stop;
 #[allow(dead_code)]
 pub mod session_takeover;
 pub mod skill_content;
@@ -74,18 +87,50 @@ impl ApiClient {
         Ok(response.data)
     }
 
-    pub async fn start_cli_login(&self) -> Result<CliLoginStart, ApiError> {
-        let response: Envelope<CliLoginStart> =
-            self.post_empty("/api/v1/auth/cli/start", None).await?;
+    pub async fn start_cli_login(
+        &self,
+        completion_request_id: Option<&str>,
+    ) -> Result<CliLoginStart, ApiError> {
+        let response: Envelope<CliLoginStart> = self
+            .post(
+                "/api/v1/auth/cli/start",
+                None,
+                &CliLoginStartRequest {
+                    completion_request_id,
+                },
+            )
+            .await?;
         Ok(response.data)
     }
 
-    pub async fn complete_cli_login(&self, device_code: &str) -> Result<AuthToken, ApiError> {
+    pub async fn complete_cli_login(
+        &self,
+        device_code: &str,
+        completion_request_id: Option<&str>,
+    ) -> Result<AuthToken, ApiError> {
         let response: Envelope<AuthToken> = self
             .post(
                 "/api/v1/auth/cli/complete",
                 None,
-                &CliLoginCompleteRequest { device_code },
+                &CliLoginCompleteRequest {
+                    device_code,
+                    completion_request_id,
+                },
+            )
+            .await?;
+        Ok(response.data)
+    }
+
+    /// Recover one completed device-code login by its exact caller key.
+    #[allow(dead_code)]
+    pub async fn recover_cli_login(
+        &self,
+        completion_request_id: &str,
+    ) -> Result<AuthToken, ApiError> {
+        let response: Envelope<AuthToken> = self
+            .get(
+                &format!("/api/v1/auth/cli/completions/{completion_request_id}"),
+                None,
             )
             .await?;
         Ok(response.data)
@@ -127,6 +172,26 @@ impl ApiClient {
     ) -> Result<DeviceRegistrationResponse, ApiError> {
         let response: Envelope<DeviceRegistrationData> = self
             .post("/api/v1/devices/register", Some(token), request)
+            .await?;
+        Ok(DeviceRegistrationResponse {
+            data: response.data,
+        })
+    }
+
+    /// Recover a device registration response by the caller-owned request key.
+    ///
+    /// The key is deliberately the only lookup selector. Callers must not infer
+    /// a registration from the current device list after a lost response.
+    pub async fn get_device_registration(
+        &self,
+        token: &str,
+        request_id: &str,
+    ) -> Result<DeviceRegistrationResponse, ApiError> {
+        let response: Envelope<DeviceRegistrationData> = self
+            .get(
+                &format!("/api/v1/devices/registration-requests/{request_id}"),
+                Some(token),
+            )
             .await?;
         Ok(DeviceRegistrationResponse {
             data: response.data,
@@ -393,19 +458,37 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    #[allow(dead_code)] // Compatibility API; configuration workflow uses the checked variant.
     pub async fn enroll_wireguard_peer(
         &self,
         token: &str,
         public_key: &str,
-    ) -> Result<(), ApiError> {
-        let _: Envelope<serde_json::Value> = self
+    ) -> Result<WireGuardEnrollmentReceipt, ApiError> {
+        self.enroll_wireguard_peer_with_expected(token, public_key, None, None, None)
+            .await
+    }
+
+    pub async fn enroll_wireguard_peer_with_expected(
+        &self,
+        token: &str,
+        public_key: &str,
+        expected_peer_id: Option<&str>,
+        expected_public_key: Option<&str>,
+        expected_peer_version: Option<u64>,
+    ) -> Result<WireGuardEnrollmentReceipt, ApiError> {
+        let response: Envelope<WireGuardEnrollmentReceipt> = self
             .post(
                 "/api/v1/network/wireguard/peer",
                 Some(token),
-                &EnrollWireGuardPeerRequest { public_key },
+                &EnrollWireGuardPeerRequest {
+                    public_key,
+                    expected_peer_id,
+                    expected_public_key,
+                    expected_peer_version,
+                },
             )
             .await?;
-        Ok(())
+        Ok(response.data)
     }
 
     pub async fn attach_session(
@@ -564,6 +647,25 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    /// Creates a port forward with one bounded retry for a transport failure.
+    /// The caller request key makes a response lost after admission safe to
+    /// replay; a fresh process must keep using the same persisted key.
+    pub async fn create_port_forward_with_retry(
+        &self,
+        token: &str,
+        session_id: &str,
+        request: &CreatePortForwardRequest,
+    ) -> Result<CreatedPortForwardData, ApiError> {
+        match self.create_port_forward(token, session_id, request).await {
+            Ok(value) => Ok(value),
+            Err(error) if error.is_transport_error() && request.caller_request_id.is_some() => {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                self.create_port_forward(token, session_id, request).await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub async fn create_port_forward_connection(
         &self,
         token: &str,
@@ -637,6 +739,7 @@ impl ApiClient {
         Ok(response.data)
     }
 
+    #[allow(dead_code)] // Legacy library API; confirmed desktop/human sync uses conditional actions.
     pub async fn pause_sync_session(
         &self,
         token: &str,
@@ -646,6 +749,7 @@ impl ApiClient {
             .await
     }
 
+    #[allow(dead_code)] // Legacy library API; confirmed desktop/human sync uses conditional actions.
     pub async fn resume_sync_session(
         &self,
         token: &str,
@@ -655,6 +759,7 @@ impl ApiClient {
             .await
     }
 
+    #[allow(dead_code)] // Legacy library API; confirmed desktop/human sync uses conditional actions.
     pub async fn resolve_sync_session(
         &self,
         token: &str,
@@ -664,6 +769,7 @@ impl ApiClient {
             .await
     }
 
+    #[allow(dead_code)] // Legacy library API; confirmed desktop/human sync uses conditional actions.
     pub async fn reset_sync_session(
         &self,
         token: &str,
@@ -843,6 +949,7 @@ impl ApiClient {
         .await
     }
 
+    #[allow(dead_code)] // Compatibility path for older library callers.
     async fn sync_session_action(
         &self,
         token: &str,
@@ -973,7 +1080,12 @@ async fn read_response_body_bounded(
         return Err(ApiError::response_too_large(status, limit));
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(ApiError::transport)? {
+    while let Some(chunk) = response.chunk().await.map_err(|error| ApiError {
+        // Receiving an HTTP response already established its status, even if
+        // the peer truncates the body. Mutation callers must retain known 4xx rejection.
+        status: Some(status),
+        ..ApiError::transport(error)
+    })? {
         if body.len().saturating_add(chunk.len()) > limit {
             return Err(ApiError::response_too_large(status, limit));
         }
@@ -1000,8 +1112,16 @@ struct LoginRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
+struct CliLoginStartRequest<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completion_request_id: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
 struct CliLoginCompleteRequest<'a> {
     device_code: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completion_request_id: Option<&'a str>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1035,6 +1155,9 @@ pub struct CliLoginStart {
     pub verification_url: String,
     pub expires_in: u64,
     pub interval: u64,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub completion_request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1046,6 +1169,8 @@ pub struct RegisterDeviceRequest {
     pub wireguard_public_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub existing_device_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1282,8 +1407,19 @@ struct EgoBrowserDeviceRevokeRequest<'a> {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct WireGuardEnrollmentReceipt {
+    pub device_id: String,
+    pub peer_id: String,
+    pub interface_address: String,
+    pub peer_version: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct WireGuardConfigData {
     pub device_id: String,
+    pub peer_id: String,
+    pub peer_public_key: String,
+    pub peer_version: u64,
     pub interface_address: String,
     #[serde(rename = "private_key_ref")]
     pub _private_key_ref: String,
@@ -1294,6 +1430,12 @@ pub struct WireGuardConfigData {
 #[derive(Debug, Serialize)]
 struct EnrollWireGuardPeerRequest<'a> {
     public_key: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_peer_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_public_key: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_peer_version: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1377,17 +1519,27 @@ pub struct CreatePortForwardRequest {
     pub remote_port: u16,
     pub local_port: u16,
     pub client_instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caller_request_id: Option<String>,
     pub ttl_seconds: Option<u64>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct PortForwardConnectionData {
     pub token: String,
     pub expires_at: String,
+    /// Routing metadata needed to rebuild a local listener after restart.
+    /// These fields are never credentials and are omitted by older Servers.
+    #[serde(default)]
+    pub node_wireguard_ip: Option<String>,
+    #[serde(default)]
+    pub ssh_user: Option<String>,
+    #[serde(default)]
+    pub ssh_port: Option<u16>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct PortForwardData {
     pub id: String,
@@ -1398,6 +1550,7 @@ pub struct PortForwardData {
     pub remote_port: u16,
     pub requested_local_port: u16,
     pub client_instance_id: String,
+    pub caller_request_id: Option<String>,
     pub status: String,
     pub bytes_up: u64,
     pub bytes_down: u64,
@@ -1411,7 +1564,7 @@ pub struct PortForwardData {
     pub updated_at: String,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CreatedPortForwardData {
     #[serde(flatten)]
     pub forward: PortForwardData,
@@ -1488,6 +1641,7 @@ fn default_sync_git() -> bool {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[allow(dead_code)] // Compatibility payload for older library callers.
 struct SyncSessionActionRequest {
     note: Option<String>,
 }
@@ -1664,6 +1818,14 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    #[allow(dead_code)]
+    pub(crate) fn local(code: &'static str, message: &'static str) -> Self {
+        Self {
+            status: None,
+            code: Some(code.to_owned()),
+            message: message.to_owned(),
+        }
+    }
     /// Stable server error code, when the response contained one.
     pub fn code(&self) -> Option<&str> {
         self.code.as_deref()
@@ -1703,6 +1865,10 @@ impl ApiError {
             code: None,
             message: error.to_string(),
         }
+    }
+
+    pub fn is_transport_error(&self) -> bool {
+        self.status.is_none() && self.code.is_none()
     }
 
     fn decode(status: StatusCode, body: String, error: serde_json::Error) -> Self {

@@ -75,7 +75,7 @@ impl RecoveryStatus {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeRecovery {
     pub binding: RecoveryBinding,
@@ -83,6 +83,7 @@ pub struct RuntimeRecovery {
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)] // Retained public library compatibility; human commands use reviewed requests.
 struct RecoveryRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     action: Option<RecoveryAction>,
@@ -101,7 +102,7 @@ pub fn original_task_matches(account: &str, original: &str) -> bool {
 }
 
 impl RuntimeRecovery {
-    fn validate(
+    pub(crate) fn validate(
         &self,
         account: &str,
         key: &str,
@@ -148,6 +149,7 @@ impl RuntimeRecovery {
 
 impl ApiClient {
     /// Submit an explicit caller-retained key; the Server preserves original task results.
+    #[allow(dead_code)] // Retained public library API for the legacy Server route.
     pub async fn recover_runtime(
         &self,
         token: &str,
@@ -180,6 +182,7 @@ impl ApiClient {
     }
 
     /// Read one original recovery request without authorizing another inspection.
+    #[allow(dead_code)] // Retained public library API for the legacy Server route.
     pub async fn runtime_recovery_status(
         &self,
         token: &str,

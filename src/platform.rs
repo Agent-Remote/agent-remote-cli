@@ -4,6 +4,19 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
+#[cfg(windows)]
+pub(crate) mod child_job;
+mod private_file;
+#[allow(dead_code)] // Privileged broker storage foundation; installation and IPC follow.
+pub(crate) mod protected_directory;
+#[cfg(unix)]
+pub(crate) use private_file::sync_directory;
+pub use private_file::{file_identity, set_private_wireguard_file_permissions};
+pub(crate) use private_file::{
+    set_private_file_permissions, validate_private_directory, validate_private_file,
+    validate_private_wireguard_file, validate_single_regular_file,
+};
+
 pub fn current_platform() -> Result<String> {
     if cfg!(target_os = "macos") {
         Ok("macos".to_string())
@@ -163,6 +176,7 @@ pub fn set_owner_only_permissions(path: &std::path::Path) -> Result<()> {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)] // Compatibility API; confirmed publication uses a native handle.
 pub fn set_wireguard_config_permissions(path: &std::path::Path) -> Result<()> {
     let principal = windows_current_principal()?;
     let status = Command::new("icacls.exe")
@@ -190,6 +204,7 @@ fn windows_current_principal() -> Result<String> {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)] // Compatibility API; confirmed publication uses a native handle.
 pub fn set_wireguard_config_permissions(path: &std::path::Path) -> Result<()> {
     set_owner_only_permissions(path)
 }

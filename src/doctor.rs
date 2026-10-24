@@ -22,15 +22,18 @@ impl Doctor {
     pub async fn run(&self, fix: bool) -> Result<()> {
         terminal::section("Agent Remote Doctor");
         if fix {
-            self.paths.ensure_base_dirs()?;
+            let report = crate::setup::initialize(&self.paths)?;
+            if !report.complete {
+                anyhow::bail!("local metadata preparation is incomplete; inspect setup diagnostics before retrying")
+            }
         }
 
         self.check_paths();
         let config = Config::load(&self.paths)?;
         self.check_config(&config);
-        self.check_state(fix)?;
+        self.check_state()?;
         self.check_token(&config)?;
-        self.check_dependencies(fix)?;
+        self.check_dependencies()?;
         #[cfg(windows)]
         self.check_windows_tools();
         self.check_server(&config).await?;
@@ -97,11 +100,8 @@ impl Doctor {
         }
     }
 
-    fn check_state(&self, fix: bool) -> Result<()> {
-        let state = LocalState::open(&self.paths)?;
-        if fix {
-            state.init_schema()?;
-        }
+    fn check_state(&self) -> Result<()> {
+        let _state = LocalState::open(&self.paths)?;
         status_line(
             "sqlite",
             self.paths.state_db_path().exists(),
@@ -194,11 +194,8 @@ impl Doctor {
         }
     }
 
-    fn check_dependencies(&self, fix: bool) -> Result<()> {
+    fn check_dependencies(&self) -> Result<()> {
         let manager = DependencyManager::new(self.paths.clone());
-        if fix {
-            manager.ensure_manifest()?;
-        }
         status_line(
             "dependency manifest",
             self.paths.dependency_manifest_path().exists(),

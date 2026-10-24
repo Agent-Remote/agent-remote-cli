@@ -132,6 +132,28 @@ pub fn load_active_broker_credential(paths: &AppPaths) -> Result<Option<BrokerCr
     Ok(Some(credential))
 }
 
+/// WireGuard uses bounded no-follow reads for the community credential too.
+pub(crate) fn load_active_broker_credential_strict(
+    paths: &AppPaths,
+) -> Result<Option<BrokerCredential>> {
+    #[cfg(target_os = "macos")]
+    if production_access_group().is_none() && CREDENTIAL_MODE == Some("community-file") {
+        let Some(value) =
+            crate::secrets::read_private_home_file(paths, COMMUNITY_CREDENTIAL_FILENAME)?
+        else {
+            return Ok(None);
+        };
+        if value.as_str().len() > 16 * 1024 {
+            bail!("community Network Broker credential exceeds size limit")
+        }
+        let credential: BrokerCredential =
+            serde_json::from_str(value.as_str()).context("broker credential JSON is invalid")?;
+        credential.validate_at(unix_time_seconds()?)?;
+        return Ok(Some(credential));
+    }
+    load_active_broker_credential(paths)
+}
+
 /// Deletes the active production Broker credential when configured.
 pub fn delete_active_broker_credential(paths: &AppPaths) -> Result<bool> {
     delete_platform_credential(paths)

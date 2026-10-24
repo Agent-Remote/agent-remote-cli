@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use agent_remote_cli::cli::VERSION;
-use agent_remote_cli::terminal::{self, ColorChoice, Details};
+use agent_remote_cli::terminal::{self, ColorChoice};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 
@@ -51,6 +51,10 @@ struct ConfigArgs {
     /// WireGuard configuration file.
     #[arg(long, value_name = "PATH")]
     config: PathBuf,
+
+    /// Perform the same read-only check without executing a tunnel command.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -77,8 +81,12 @@ fn run(command: WireGuardCommand) -> Result<()> {
     if matches!(command, WireGuardCommand::Status) {
         return show_status();
     }
+    if let WireGuardCommand::Check(args) = command {
+        let paths = agent_remote_cli::config::AppPaths::new(None)?;
+        return agent_remote_cli::wireguard::check_config(&paths, &args.config, args.dry_run);
+    }
     let (action, config, dry_run) = match command {
-        WireGuardCommand::Check(args) => ("check", args.config, false),
+        WireGuardCommand::Check(_) => unreachable!(),
         WireGuardCommand::Up(args) => ("up", args.config, args.dry_run),
         WireGuardCommand::Down(args) => ("down", args.config, args.dry_run),
         WireGuardCommand::Status => unreachable!(),
@@ -93,18 +101,6 @@ fn run(command: WireGuardCommand) -> Result<()> {
         }
     }
     match action {
-        "check" => {
-            terminal::success_line("WireGuard configuration is readable");
-            if let Some(path) = find_tunnel_tool() {
-                Details::new()
-                    .field("Config", config.display())
-                    .field("Tunnel tool", path.display())
-                    .render();
-                Ok(())
-            } else {
-                bail!("WireGuard tunnel tool is missing; {}", install_hint());
-            }
-        }
         "up" | "down" => run_tunnel_tool(action, &config, dry_run),
         value => bail!("unknown action {value}"),
     }
@@ -145,6 +141,8 @@ fn wg_requires_elevation(output: &[u8]) -> bool {
     stderr.contains("permission denied")
         || stderr.contains("operation not permitted")
         || stderr.contains("access is denied")
+        || stderr.contains("must be root")
+        || stderr.contains("not permitted")
 }
 
 #[cfg(unix)]
@@ -196,7 +194,7 @@ fn run_wg_quick(action: &str, config: &Path, dry_run: bool) -> Result<()> {
     let managed_bin = env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
-    let mut command = Command::new(wg_quick);
+    let mut command = Command::new(&wg_quick);
     if let Some(managed_bin) = managed_bin {
         let mut paths = vec![managed_bin];
         paths.extend(env::split_paths(&env::var_os("PATH").unwrap_or_default()));
@@ -205,13 +203,38 @@ fn run_wg_quick(action: &str, config: &Path, dry_run: bool) -> Result<()> {
             env::join_paths(paths).context("failed to build managed PATH")?,
         );
     }
-    let status = command
+    let output = command
         .arg(action)
         .arg(config)
-        .status()
+        .output()
         .context("failed to execute wg-quick")?;
-    if !status.success() {
-        bail!("wg-quick exited with {status}");
+    if !output.status.success() {
+        // A desktop process has no controlling terminal, so retry only when
+        // the native tool explicitly reports a privilege failure. The sudo
+        // invocation uses fixed argv and the exact reviewed config path;
+        // shell interpretation and automatic retries remain disabled.
+        if wg_requires_elevation(&output.stderr) {
+            let sudo = find_sudo_tool().context(
+                "WireGuard requires administrator permission; install sudo or run from an elevated shell",
+            )?;
+            let mut elevated = Command::new(sudo);
+            elevated.arg("--").arg(&wg_quick).arg(action).arg(config);
+            let elevated_output = elevated
+                .output()
+                .context("failed to execute elevated wg-quick")?;
+            io::stdout().write_all(&elevated_output.stdout)?;
+            io::stderr().write_all(&elevated_output.stderr)?;
+            if !elevated_output.status.success() {
+                bail!("elevated wg-quick exited with {}", elevated_output.status);
+            }
+        } else {
+            io::stdout().write_all(&output.stdout)?;
+            io::stderr().write_all(&output.stderr)?;
+            bail!("wg-quick exited with {}", output.status);
+        }
+    } else {
+        io::stdout().write_all(&output.stdout)?;
+        io::stderr().write_all(&output.stderr)?;
     }
     terminal::success_line(format!("WireGuard interface {action} complete"));
     Ok(())
@@ -374,16 +397,6 @@ fn find_wg_tool() -> Option<PathBuf> {
         }
     }
     agent_remote_cli::platform::windows_wg_path()
-}
-
-fn install_hint() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "reinstall agent-remote to restore the managed WireGuard tools"
-    } else if cfg!(windows) {
-        "install WireGuard for Windows from https://www.wireguard.com/install/"
-    } else {
-        "install the wireguard-tools package for this system"
-    }
 }
 
 #[cfg(test)]

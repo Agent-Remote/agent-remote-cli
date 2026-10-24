@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=dev.agentremote.WireGuardBroker
+Exec=/usr/libexec/agent-remote-wireguard-broker
+User=root
+SystemdService=agent-remote-wireguard-broker.service

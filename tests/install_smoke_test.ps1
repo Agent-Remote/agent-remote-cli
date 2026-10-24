@@ -42,6 +42,7 @@ $binFiles = @(
     "agent-remote.exe",
     "fclaude.exe",
     "agent-remote-wireguard.exe",
+    "agent-remote-wireguard-broker.exe",
     "mutagen.exe",
     "mutagen-agents.tar.gz",
     "scp.exe",
@@ -169,7 +170,16 @@ if ($wireGuardProcess.ExitCode -ne 1 -or $wireGuardOutput -notmatch "Command Lin
 }
 
 $wireGuardConfig = Join-Path $env:RUNNER_TEMP "agent-remote-install-smoke.conf"
-Set-Content -Path $wireGuardConfig -Value "[Interface]`nPrivateKey = install-smoke-test" -Encoding ascii
+$fixtureKey = [Convert]::ToBase64String([byte[]](1..32))
+Set-Content -Path $wireGuardConfig -Value "[Interface]`nPrivateKey = $fixtureKey`nAddress = 10.77.0.2`nMTU = 1000" -Encoding ascii
+$fixtureAcl = New-Object System.Security.AccessControl.FileSecurity
+$fixtureUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$fixtureSystem = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")
+$fixtureAcl.SetOwner($fixtureUser)
+$fixtureAcl.SetAccessRuleProtection($true, $false)
+$fixtureAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($fixtureUser, "FullControl", "Allow")))
+$fixtureAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($fixtureSystem, "Read", "Allow")))
+Set-Acl -Path $wireGuardConfig -AclObject $fixtureAcl
 & (Join-Path $InstallHome "bin/agent-remote-wireguard.exe") check --config $wireGuardConfig
 if ($LASTEXITCODE -ne 0) { throw "agent-remote-wireguard did not find the installed WireGuard executable" }
 

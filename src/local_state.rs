@@ -1,5 +1,27 @@
+mod account_import;
+mod runtime_recovery;
+pub use account_import::ImportRecord;
+mod account_defaults;
+mod credential_refresh;
+pub(crate) use credential_refresh::RefreshRecord;
+mod initialization;
+mod port_forward;
+mod session_creation;
+mod session_delete;
+mod session_stop;
 mod skill_commands;
+mod sync;
+pub use initialization::{LocalStateInitializationError, StateInitialization};
+#[allow(unused_imports)]
+pub use port_forward::PortForwardCreateRecord;
+#[allow(unused_imports)]
+pub use session_creation::SessionCreateRecord;
+#[allow(unused_imports)]
+pub use session_delete::SessionDeleteRecord;
+#[allow(unused_imports)]
+pub use session_stop::SessionStopRecord;
 pub use skill_commands::{skill_command_state, SkillCommandRecord};
+pub use sync::SyncSnapshot;
 
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -23,25 +45,31 @@ pub struct LocalDevice {
     pub last_seen_at: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalWorkspace {
     pub id: String,
     pub server_url: String,
     pub project_key: String,
     pub local_path: String,
     pub display_name: String,
+    #[serde(deserialize_with = "required_sync_option")]
     pub remote_path: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalSyncSession {
     pub id: String,
     pub server_url: String,
     pub workspace_id: String,
+    #[serde(deserialize_with = "required_sync_option")]
     pub node_id: Option<String>,
     pub status: String,
     pub conflict_status: String,
+    #[serde(deserialize_with = "required_sync_option")]
     pub mutagen_session_id: Option<String>,
+    #[serde(deserialize_with = "required_sync_option")]
     pub remote_endpoint: Option<String>,
 }
 
@@ -59,16 +87,33 @@ pub struct LocalEgoBrowserBinding {
 }
 
 impl LocalState {
+    /// Open existing metadata without creating a database or migrating schema.
+    /// SQLite may use its normal WAL coordination files; no records are changed.
+    #[allow(dead_code)] // Library desktop diagnostics; also compiled into the human binary.
+    pub fn inspect_readonly(paths: &AppPaths) -> Result<()> {
+        let connection = Connection::open_with_flags(
+            paths.state_db_path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        connection.busy_timeout(std::time::Duration::from_secs(3))?;
+        let _: i64 =
+            connection.query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| row.get(0))?;
+        Ok(())
+    }
+
     pub fn open(paths: &AppPaths) -> Result<Self> {
+        initialization::checked_home(paths, true)?;
         paths.ensure_base_dirs()?;
-        let connection = Connection::open(paths.state_db_path())?;
-        Ok(Self { connection })
+        Self::open_metadata(paths)
     }
 
     pub fn init_schema(&self) -> Result<()> {
+        self.initialize_schema().map(|_| ())
+    }
+
+    fn create_schema(&self) -> Result<()> {
         self.connection.execute_batch(
-            "PRAGMA foreign_keys = ON;
-             CREATE TABLE IF NOT EXISTS kv (
+            "CREATE TABLE IF NOT EXISTS kv (
                  key TEXT PRIMARY KEY,
                  value TEXT NOT NULL,
                  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -127,7 +172,6 @@ impl LocalState {
                  ON ego_browser_bindings (server_url, status);",
         )?;
         self.init_skill_commands()?;
-        self.connection.pragma_update(None, "user_version", 4)?;
         Ok(())
     }
 
@@ -495,3 +539,9 @@ impl LocalState {
 #[cfg(test)]
 #[path = "../tests/unit/src/local_state.rs"]
 mod tests;
+
+fn required_sync_option<'de, D: serde::Deserializer<'de>, T: serde::Deserialize<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<T>, D::Error> {
+    <Option<T> as serde::Deserialize>::deserialize(deserializer)
+}

@@ -58,9 +58,11 @@ pub async fn execute_attach_with_context(
     let managed = is_managed_attach(&remote_command.iter().map(Into::into).collect::<Vec<_>>());
     let ssh = crate::platform::ssh_binary();
     let mut command = tokio::process::Command::new(&ssh);
+    let exact = is_binding_attach(&remote_command) || is_exact_session_attach(&remote_command);
+    command.kill_on_drop(exact);
     command.args(attach_args(attach, remote_command, &known_hosts));
     let status = if managed {
-        execute_interactive_with_attachments(&mut command, attachment, Some(paths)).await
+        execute_interactive_with_attachments(&mut command, attachment, Some(paths), exact).await
     } else {
         command.status().await.map_err(Into::into)
     }
@@ -76,13 +78,14 @@ pub async fn execute_attach_with_context(
 pub async fn execute_interactive(
     command: &mut tokio::process::Command,
 ) -> Result<std::process::ExitStatus> {
-    execute_interactive_with_attachments(command, None, None).await
+    execute_interactive_with_attachments(command, None, None, false).await
 }
 
 async fn execute_interactive_with_attachments(
     command: &mut tokio::process::Command,
     attachment: Option<AttachmentContext>,
     app_paths: Option<&AppPaths>,
+    kill_on_cancel: bool,
 ) -> Result<std::process::ExitStatus> {
     use std::io::IsTerminal;
 
@@ -127,6 +130,9 @@ async fn execute_interactive_with_attachments(
     let input_exit = exit.clone();
     let session = pty::Session::spawn(command, pty::command_size())?;
     let (mut output, writer, resize_handle, pty_child) = session.parts();
+    // The binding CLI handles SIGTERM by dropping this future. Its blocking PTY
+    // waiter must not survive cancellation and keep the runtime alive.
+    let mut cancellation = SshCancellation(kill_on_cancel.then(|| pty_child.killer()));
     let resize_task_handle = resize_handle.clone();
     // JoinSet also aborts both relays if the attach future is dropped.
     let mut tasks = tokio::task::JoinSet::new();
@@ -208,6 +214,9 @@ async fn execute_interactive_with_attachments(
         }
     };
 
+    if status_result.is_ok() {
+        cancellation.0 = None;
+    }
     // Closing the receiver cancels and joins the native reader before local
     // terminal modes are restored. No reader survives to steal shell input.
     tasks.abort_all();
@@ -226,6 +235,15 @@ async fn execute_interactive_with_attachments(
         None => {}
     }
     Ok(status)
+}
+
+struct SshCancellation(Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>);
+impl Drop for SshCancellation {
+    fn drop(&mut self) {
+        if let Some(killer) = self.0.as_mut() {
+            let _ = killer.kill();
+        }
+    }
 }
 
 async fn relay_passthrough<W>(
@@ -356,13 +374,40 @@ pub fn is_managed_attach(arguments: &[std::ffi::OsString]) -> bool {
         .filter_map(|value| value.to_str())
         .flat_map(str::split_whitespace)
         .collect();
+    let valid_id = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_:".contains(&b))
+    };
+    if words.len() >= 5 {
+        let last = &words[words.len() - 5..];
+        if last[0] == "agent-remote-attach"
+            && ((last[1] == "--binding" && last[3] == "--binding-session")
+                || (last[1] == "--session" && last[3] == "--expected-device"))
+        {
+            return valid_id(last[2]) && valid_id(last[4]);
+        }
+    }
     words.len() >= 3
         && words[words.len() - 3] == "agent-remote-attach"
         && matches!(words[words.len() - 2], "--binding" | "--session")
-        && words[words.len() - 1].len() <= 128
-        && words[words.len() - 1]
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-_:".contains(&b))
+        && valid_id(words[words.len() - 1])
+}
+
+fn is_binding_attach(command: &[String]) -> bool {
+    command.len() == 5
+        && command[0] == "agent-remote-attach"
+        && command[1] == "--binding"
+        && command[3] == "--binding-session"
+}
+
+fn is_exact_session_attach(command: &[String]) -> bool {
+    command.len() == 5
+        && command[0] == "agent-remote-attach"
+        && command[1] == "--session"
+        && command[3] == "--expected-device"
 }
 
 fn attach_args(
@@ -371,7 +416,24 @@ fn attach_args(
     known_hosts: &std::path::Path,
 ) -> Vec<String> {
     let mut args = Vec::with_capacity(remote_command.len() + 19);
-    if attach.forward_ssh_agent {
+    if is_binding_attach(&remote_command) {
+        // Override configured forwarding, not merely the absence of a CLI -A.
+        args.extend([
+            "-a".into(),
+            "-x".into(),
+            "-o".into(),
+            "ClearAllForwardings=yes".into(),
+        ]);
+    } else if is_exact_session_attach(&remote_command) {
+        args.extend([
+            if attach.forward_ssh_agent { "-A" } else { "-a" }.into(),
+            "-x".into(),
+            "-o".into(),
+            "ClearAllForwardings=yes".into(),
+            "-o".into(),
+            "PermitLocalCommand=no".into(),
+        ]);
+    } else if attach.forward_ssh_agent {
         args.push("-A".to_string());
     }
     args.extend([

@@ -12,312 +12,96 @@
 
 [English](README.md) | 中文
 
-agent-remote 本地设备管理的 Rust CLI。
+`agent-remote-cli` 是 Agent Remote 的 Rust 本地客户端，负责本地配置、凭据、设备登记、WireGuard、SSH、Mutagen、远程会话操作，以及供 desktop 使用的结构化控制合同。
 
-该包提供 `agent-remote` 命令。`fclaude` 等工具专用启动器会刻意保持独立，确保常规 `claude` 使用不受影响。
+## 二进制程序
 
-## 命令
+- `agent-remote`：配置、登录、设备、账户、工作区、网络、诊断、Skills 和会话管理。
+- `fclaude`：Claude 会话创建、列表、接管、停止/删除和端口转发。
+- `agent-remote-wireguard`：用户侧 WireGuard helper。
+- `agent-remote-wireguard-broker`：执行获准隧道操作的受保护主机 broker。
+- `agent-remote-ssh`、`agent-remote-scp`：受管 SSH 和文件传输 helper。
+
+当前包版本记录在 `Cargo.toml`。除非协调更新 Server、Node 和 desktop 合同，否则必须保持命令名、参数、退出码和机器输出兼容。
+
+## 命令族
 
 ```sh
 agent-remote init
-agent-remote login --server-url https://agent-remote.example.com --username alice
+agent-remote login
 agent-remote status
-agent-remote doctor --fix
-agent-remote deps status
-agent-remote wireguard config
-agent-remote wireguard check
-agent-remote wireguard status
-agent-remote sync ensure
+agent-remote doctor
 agent-remote sync status
-agent-remote account create --tool claude --name "Claude US" --region US --timezone America/Los_Angeles --tag us
+agent-remote sync ensure
+agent-remote wireguard check
 agent-remote account list
-agent-remote account bind <account-id>
-agent-remote account verify <account-id>
-agent-remote account status <account-id>
-agent-remote ssh check --session-id <session-id>
-agent-remote attach <session-id> --print-only
-agent-remote node install --node <node-id-or-prefix> [--enable-ego-browser] [--yes]
-agent-remote device install --source "/path/to/agent-remote-device-macos-0.2.12.zip"
-agent-remote device uninstall [--yes]
 agent-remote device status
-agent-remote device diagnose
-agent-remote device revoke [--device <device-id>] [--yes]
-agent-remote device rotate-token [--yes]
-agent-remote ego-browser setup
-agent-remote ego-browser connect [<tool-session-id-or-prefix>]
-agent-remote ego-browser status [<binding-id>]
-agent-remote ego-browser repair|upgrade
-agent-remote ego-browser pause|resume|stop [<binding-id>] [--binding-generation <generation>]
-agent-remote ego-browser remove
-agent-remote ego-browser forget-this-mac
-agent-remote ego-browser register --signer-certificate-sha256 HEX [--server-url URL] # 高级兼容入口
-agent-remote ego-browser requests <binding-id>
-agent-remote ego-browser cancel-request <binding-id> <request-ledger-id> [--yes]
-agent-remote ego-browser revoke [<binding-id>] [--binding-generation <generation>] [--yes]
-agent-remote ego-browser delete-binding <binding-id> [--yes]
-agent-remote ego-browser delete-device <device-id> [--yes]
-agent-remote logout [--no-revoke-remote]
+agent-remote skill list
+fclaude list
+fclaude new
+fclaude attach <session-id>
+fclaude forward <remote-port>
 ```
 
-每个命令和嵌套命令都提供 `--help`。运行时输出支持
-`--color auto|always|never`；`auto` 同时遵循 `NO_COLOR` 和 `TERM=dumb`。
-错误、警告、成功操作、分区标题、详情和状态表格使用统一的终端样式。
+使用 `--help` 查看当前准确 schema。`agent-remote` 管理共享状态；`fclaude` 管理远程 Claude 启动器和面向会话的命令。密码、token、MFA 验证码和私钥通过受控输入或平台凭据存储处理，不进入 argv 或 desktop 状态。
 
-首次绑定 Claude 账户，以及在 `fclaude` / `agent-remote attach` 中重新登录时，登录链接会自动
-复制到本机剪贴板。执行 `account bind` / `account status` 显示的连接命令时，请使用安装包放入
-PATH 的 `ssh`，不要绕过它调用 `/usr/bin/ssh`。CLI 会识别完整登录页面、拼接换行链接，每个新
-链接只复制一次；普通 SSH、文件同步、输出重定向和 `--print-only` 不会触发复制。
+## 共享状态与操作安全
 
-macOS 使用 `pbcopy`，Windows 使用 PowerShell `Set-Clipboard`，WSL 使用 Windows 剪贴板，
-Linux 使用 `wl-copy` / `xclip` / `xsel`，不依赖具体桌面终端品牌。没有可用桌面剪贴板，或 CLI
-本身运行在 SSH 远端时，回退到 OSC 52，兼容 tmux / screen 透传。回退需要终端支持并允许
-剪贴板访问，提示仅表示已发送请求，不代表复制已成功；被禁止时仍可使用页面中的原始链接。
-登录链接不会保存到本地文件或日志。设置 `AGENT_REMOTE_LOGIN_CLIPBOARD=0` 可关闭自动复制。
+选定的 `AGENT_REMOTE_HOME`（或 `--home`）是配置、本地 SQLite 状态和凭据引用的权威位置。CLI 为可能跨进程存活的操作持久化调用方生成的请求键和有界公开回执。传输失败后，状态查询使用原始 key 和完整上下文；不会猜测 latest 对象或生成替代 key 重放 mutation。
 
-升级 Node 和 CLI 后，在 Claude 回复上拖选文字，松开鼠标即可自动复制到本机剪贴板。普通点击
-和滚轮保留原有行为。本机 CLI 会把 tmux 的 OSC 52 写入请求转交系统剪贴板，因此桌面终端
-本身不支持 OSC 52 也能复制。支持中文、缩进和换行，单次最多 64 KiB；剪贴板读取请求会被
-丢弃，选中文本不会写入本地文件或日志。也可按住终端的原生选择修饰键（通常 Shift，iTerm2
-通常 Option）绕过 tmux。Ctrl+B 后按 `[` 进入受管历史模式；方向键／PageUp／PageDown
-移动，空格开始选择，Enter／Y 复制，Esc／Q 返回 Claude。受管 tmux 禁止命令入口、新建窗口、菜单和跨会话切换。
-`AGENT_REMOTE_CLIPBOARD=0` 可单独关闭本机
-选区复制桥接，不影响登录链接自动复制。两端升级后，Native 会话重新连接即可应用鼠标设置；旧版 Docker 终端需要停止并重建，
-登录终端需要重新发起账户绑定。新 pane 保留 20,000 行历史。
-SSH 输出结束后，CLI 最多等待 3 秒完成当前复制及最后一个待复制选区。被拒绝或超大选区会触发
-终端响铃，退出交互后显示拒绝／超时说明。Node 的短暂提示仅表示已发送选区，不代表本机剪贴板写入成功。
+会话、账户、配置导入、运行时恢复、同步、端口转发和设备操作都会绑定用户、服务器、设备、工作区、节点和代次等相关字段。未知结果会被保留，并要求用户显式查询或执行恢复动作。
 
-macOS、Windows、Linux 和 WSL 均支持剪贴板图片、文件粘贴及文件拖放。附件通过已授权的 SSH
-通道按需直传，完成 SHA-256 校验并收到远端确认后才将路径插入 Claude。临时附件位于账户目录下的
-`.agent-remote-attachments`，与项目和 Claude 配置目录隔离；Native 中位于 `/account` 下，
-Docker Sandbox 使用已挂载的账户路径。附件传输不创建 Mutagen 会话或常驻传输进程。
-每次连接使用独立临时目录，多次上传复用一个 SSH 通道，断开和退出时自动清理自己的附件；清理中断会保留私有恢复记录，在同一账户与 SSH 端点下一次
-上传附件时重试，不会删除其他仍在线终端的附件。图片上限为 64 MiB，每次文件拖放上限为 256 MiB、
-32 个路径和 10,000 个目录项。本地临时归档自动删除。设置 `AGENT_REMOTE_ATTACHMENTS=0` 可关闭附件桥接。
-支持同次拖放多个带引号或转义的路径、本地 file URI、Windows 盘符／UNC 与 WSL 路径转换，保留中文。
-普通文本中的裸文件名不会被误判为附件；列表中任一路径无法解析时，整体保留原始粘贴。
-PNG／JPEG／GIF／WebP 保留原格式，BMP／TIFF 转为 PNG，转换限制为单边 8192 像素和 64 MiB 解码分配。
-Linux 图片／文件读取需要 Wayland 的 `wl-paste` 或 X11 的 `xclip`；`xsel` 仅用于文本复制。
-CLI 本身通过 SSH 运行时不会读取跳板机的桌面剪贴板。Ctrl+V 必须能传递给 CLI（支持原始键码和常见增强键码）；
-终端自身拦截的图片粘贴快捷键无法被 CLI 捕获，拖放需要终端发送 bracketed paste。超过 1 MiB 的普通粘贴仍保持完整边界。
-远端使用 Node 安装流程已提供的 Python 3，并保持现有 SSH 用户沙箱和服务端授权校验。
+## Desktop 集成
 
-启动新的 Claude 进程前，会等待 Mutagen 完成同步周期，最多 30 秒；失败、冲突或取消时不启动 Claude。
-恢复运行中的会话不重复等待。恢复时传入新的启动参数会明确提示未应用，可用 `fclaude new` 创建新进程。
-新终端连接会接管旧终端；Ctrl+B 后按 D 断开但保留 Claude，重新执行 `fclaude` 即可连接，不会重放启动命令。
+Desktop 使用两个版本化 CLI 接口：
 
-`agent-remote init` 是推荐的首次运行路径。它会引导用户完成：
+- `--desktop-schema` 描述命令节点、参数、客户端平台和终端能力。
+- `--desktop-control` 通过 JSONL 交换请求、有界进度事件和一个最终 result/error，承载结构化读写操作。
 
-- 选择控制平面 API URL
-- 使用已有 agent-remote 用户账户登录
-- 注册本地设备和 SSH 公钥
-- 检查托管的外部依赖
-- 在可用时获取默认 WireGuard 配置
+登录、设备码审批、凭据、账户导入和 WireGuard 执行等敏感流程仍由 CLI 负责。Desktop 只能收到批准的公开投影。没有专用结构化页面的命令使用经过审阅的受管终端流程；发现 schema 不等于远程操作已成功。
 
-CLI 初始化流程不会创建用户。服务器完成 bootstrap 后，管理员应从管理控制台创建普通用户。
+## 远程操作
 
-`agent-remote login` 会在可用时把 token 保存到平台凭据存储：
+CLI 协调 WireGuard、SSH、Mutagen 以及 Server/Node API。远程 Claude 会话通过准确会话身份选择，并经 Node 授权 gateway 接入。工作区同步分别展示 Server 状态、本地 Mutagen 状态、冲突和 Agent 状态。端口转发使用 owner-scoped caller key、有界本地监听器和短期 Server 连接授权。
 
-Server 支持 CLI 登录会话时，用户命令会将仍有效的旧登录迁移为可续期会话，自动轮换短期
-访问令牌。会话默认最长 30 天；过期、撤销或账号禁用后才需要重新登录。两种凭据都保存在
-凭据存储中，注销会撤销会话。普通设备登记也会保留浏览器管理需要的用户登录。旧版 Server
-继续使用原有短期登录行为。浏览器 connect/resume 的 full-trust 确认仍然单独执行。
-
-- macOS：通过 `security` 命令使用 Keychain
-- Linux：通过 `secret-tool` 使用 Secret Service
-- Windows：通过原生 Win32 API 使用 Windows 凭据管理器
-
-当配置的服务器和当前设备注册均未变化时，重新执行 `agent-remote login` 会复用该设备，
-更新设备元数据和 SSH 公钥，并替换设备 token。只有本地未配置 active device 时才会注册新设备，
-从而保证 CLI 升级前后已有 workspace 仍绑定同一设备。
-
-如果系统凭据存储不可用，CLI 会回退到 agent-remote home 目录下仅所有者可访问的文件。SQLite 只保存本地元数据，绝不会保存 access token 或工具账户登录状态。
-
-## 本地路径
-
-macOS 和 Linux 默认使用 `~/.config/agent-remote/`，Windows 默认使用
-`%LOCALAPPDATA%\agent-remote\`：
-
-```text
-~/.config/agent-remote/
-```
-
-测试或自定义安装时可以覆盖：
-
-```sh
-AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
-```
-
-托管外部依赖预期位于：
-
-```text
-~/.config/agent-remote/bin/
-~/.config/agent-remote/dependencies/manifest.json
-```
-
-四个 macOS/Linux 发行目标都会内置托管的 `mutagen`、`tmux`、`wg`、`wg-quick`，以及负责受管主机验证的 SSH/SCP 包装器；macOS 包还会内置 `wireguard-go`。Windows x64 和 ARM64 包内置原生 CLI、Mutagen、兼容用的 `ssh.exe` 和 `scp.exe` 代理，以及对应架构的官方 WireGuard for Windows MSI。该 MSI 提供 Windows 上与 `wg`、`wg-quick` 和隧道后端等价的 tunnel manager、`wg.exe` 与 Wintun 驱动。`tmux` 运行在远端 Linux 节点上，在 Windows 客户端没有原生用途。
-
-当前实现会记录并检查 Mutagen 和 WireGuard helper 的 manifest。发布包会为每个支持的平台包含托管 Mutagen 二进制和 WireGuard helper。
-
-## 本地设备控制
-
-`agent-remote device install` 接受显式指定的本地发布 ZIP 压缩包，或名称固定为 `Agent Remote Device.app` 的 app bundle。CLI 会限制并校验 ZIP 的大小和成员路径，将其复制到私有临时目录后自动解压；压缩包根目录只能包含该固定 app bundle。community 正式 CLI 随后会在暂存前后验证固定 bundle identifier、编译进 CLI 的项目自签名证书指纹、由同一身份签名的 Network Broker 与 GUI Executor XPC service，以及完整代码签名；只对已验证的暂存 bundle 移除 quarantine，并原子安装到 `~/Applications/Agent Remote Device.app`。允许重装相同语义版本和升级；拒绝降级，以及缺少版本或版本格式无效的 bundle。该命令不会下载或执行项目内容或 API 响应提供的安装地址。community 构建只从受保护的 `production-community-release` 环境取得证书指纹，并将 Gatekeeper 状态显示为 `manual trust`，不会声称已经 Apple 公证。
-
-`agent-remote device status` 显示已安装版本、签名、XPC 和进程状态；`agent-remote device diagnose` 执行相同的严格检查，安装不可信时返回非零状态。`agent-remote device uninstall` 要求 app 已停止，删除固定 app bundle、共享 Broker 凭据、TCC 授权及各 bundle 自有的沙盒数据，但不会撤销远端注册；存在隐藏应用恢复日志时会拒绝继续。`agent-remote device revoke` 要求本地已保存用户 token，未指定 `--yes` 时先确认，通过控制平面撤销指定或当前设备，并删除对应的本地设备凭据与刷新状态。`agent-remote device rotate-token` 只轮换当前 active device，通过控制面取得新令牌后不会打印令牌，并立即覆盖本机平台凭据和共享 Network Broker 凭据；执行前必须先停止活动的设备控制 session。
-
-## Node Enrollment
-
-`agent-remote node install --node <node-id-or-prefix>` 会先在控制工作站验证固定 Node release 的
-checksum 与 Sigstore workflow identity，再通过独立 SSH stdin 传输归档并运行暂存 installer；
-只有安装成功后才向控制面申请短期加入码。加入码使用另一次 SSH stdin，不会进入 argv、环境
-变量、URL、日志或终端输出。重试可以复用字节完全相同的暂存归档，但签发加入码前始终重新运行
-installer。固定的 `0.2.23` release 只有在 tag-bound 制品与 Sigstore evidence 完整时才会被接受。
-
-## Ego Browser Bridge 控制
-
-普通流程先运行 `agent-remote ego-browser setup`；准备连接时，再运行 `agent-remote ego-browser connect` 选择并授权一个远端 session。`setup` 复用 `agent-remote login` 保存的服务器与凭据，自动发现已验证 release profile 和证书 pin，确保复用现有 Device identity，且不会自动 claim session。普通使用不需要输入 Server URL、registration token、Device ID 或证书摘要。
-
-运行 `setup`、`repair` 或 `upgrade` 时，会先暂停本机已有的可执行绑定，再重启 Bridge，并保留恢复所需的 generation。存在暂停绑定时，按提示运行 `resume`；没有时再运行 `connect`。暂停失败会阻止安装继续。重复执行 `claim` 或 `connect` 会先检查保留的绑定，再决定是否修改本机执行入口；已有连接保持可用，暂停绑定提示 `resume`。若服务端显示 active 但本机入口关闭，`status` 会提示先 `pause` 对应绑定，再执行 `resume`。高级 `register` 命令要求通过参数或 `EGO_BROWSER_SIGNER_CERTIFICATE_SHA256` 提供已核验的 64 位十六进制证书摘要；缺少或格式错误时，在读取登录凭据前即返回 `signer_certificate_required` 或 `signer_certificate_invalid`，文本和 JSON 使用相同错误码。
-
-已有验证安装时，`setup` 与 `repair` 只运行该 current release 的 owner-only installer，绝不
-隐式升级。缺少安装或显式执行 `upgrade` 时使用由 commit 与 SHA-256 固定的 bootstrap；它只能
-请求 `release-dependencies.json` 指定的 Bridge 版本、仓库、profile 和签名证书，且不会收到 Server URL、
-token、session ID 或 full-trust claim。缺少或无效的 release asset 与 Sigstore evidence
-都会 fail closed。
-
-`repair` 通过 Device Client 暂停绑定并保存新的本机 handoff 代次。生命周期恢复仅在
-绑定、设备、工具会话均一致时使用服务器的新代次；显式指定的过期代次仍会被拒绝。
-
-安装后，`upgrade` 会显式重新登记保留的设备，更新 Server 上的发布元数据，保留设备 ID、
-generation 与密钥。Server 必须支持规范接口的同身份重新登记；普通 `setup` 和 `repair`
-不能更新发布元数据。
-
-本机信任以 owner-only 文件绑定准确的 profile ID、profile version、Bridge version 与证书 pin。
-例行 `repair` 在四项完全匹配时无需 `--yes`；首次使用或任一项变化都重新确认，非交互调用若未
-显式传入 `--yes` 则返回 `trust_confirmation_required`。
-
-`connect` 与 `resume` 会显示全信任警告并要求明确确认。`pause` 可恢复：它保留 paused binding，之后经再次确认的 `resume` 推进到新的 binding generation。`stop` 是终态，之后必须重新 `connect`。省略 ID 时，这些生命周期命令只会使用 active handoff 或唯一候选；无法唯一解析时会 fail closed，不会猜测。浏览器脚本以当前 macOS 用户身份在无 App Sandbox 的环境中运行，可以访问文件、网络、登录数据、子进程以及任意 ego lite Tab 或 Task Space；取消只能终止受监管执行，无法回滚副作用，也不能保证清理主动脱离监管的进程。
-
-`register`、显式 `--server-url` 与 `--signer-certificate-sha256` 仅作为自定义或旧版 release 的高级兼容入口保留。`register` 仍通过 stdin 将保存的 token 传给 Device Client，因此不会出现在进程参数或 CLI 输出中。`status` 显示本地 Bridge 设备与 binding；`status <binding>` 还会显示该 binding 的活动 request。`requests <binding>` 会刷新活动 request ledger，`cancel-request <binding> <request-ledger-id>` 只停止这一条准确执行，不会使整个 binding 失效。binding、request、claim session 和删除命令的 ID 都支持唯一十六进制前缀；`--no-trunc` 显示完整 ID。`delete-binding` 会在 binding 进入终态且撤销通知投递完成后永久删除 binding 及其请求账本；`delete-device` 会在设备已撤销且其全部 binding 历史已删除后永久删除设备。两个删除命令默认要求确认，使用 `--yes` 可跳过确认。
-
-设备尚未撤销或 binding 尚未进入终态时，删除命令返回 `device_not_revoked` 或
-`binding_not_terminal` 及对应恢复操作，`--yes` 不会绕过这些条件。身份操作被拒绝时报告实际
-本地准入状态，不关闭准入；未经核实的连接和可用性字段保持 `null`。
-
-全局添加 `--json` 可获得机器可读的生命周期输出。成功变更、status、binding 列表和 request
-列表都只输出一个 JSON 文档；JSON 模式不会提示输入或猜测候选。该投影明确排除 credential、
-private key、脚本、页面数据、Cookie、URL 和 relay ciphertext。
-
-## WireGuard 和 SSH
-
-`agent-remote wireguard config` 会生成或复用本地 X25519 私钥，将其保存在系统凭据存储中（失败时回退到权限为 `0600` 的文件），只向控制平面登记公钥，并写入本地 agent-remote home 下的 `wireguard/agent-remote.conf`。生成的隧道固定使用 `1000` MTU，避免实际路径 MTU 低于 WireGuard 平台默认值时 SSH 密钥交换被静默卡住。该配置在 Unix 上使用 `0600` 权限；在 Windows 上仅允许当前用户完全控制，并允许 WireGuard 的 `LocalSystem` 隧道服务读取。重复执行该命令可以自动修复注册时缺少 WireGuard peer 的设备；私钥绝不会发送到服务端。
-
-`agent-remote wireguard check|up|down` 会调用托管的 `agent-remote-wireguard` helper，并支持用于诊断的 `--dry-run`。`agent-remote wireguard status` 会显示 `wg show` 报告的活动接口和 peer 运行状态，包括 endpoint、最近握手、传输计数和 keepalive 设置；macOS 和 Linux 上的非特权查询被内核拒绝时，会自动通过 `sudo` 重试。macOS 和 Linux 发布包提供所需的托管 WireGuard 工具；Windows 发布包内置官方 WireGuard for Windows MSI，helper 使用 `/installtunnelservice` 和 `/uninstalltunnelservice` 控制其 tunnel service，`status`、`up` 和 `down` 会在需要时通过 UAC 确认框自动请求管理员权限。
-
-`agent-remote attach <id>` 会向控制平面请求会话级 SSH 授权，等待节点完成设备级 SSH key 同步（最长 30 秒），然后使用本地 `ssh` 执行节点侧 forced command。Windows 使用系统的 OpenSSH Client 可选功能。旧的 `--session-id <id>` 写法仍然兼容。
-
-## Workspace 同步
-
-`agent-remote sync ensure` 会识别当前目录，在创建新的远端同步关系前询问用户，向控制平面注册 workspace，创建 sync session，并启动托管 Mutagen session。
-
-启动 Mutagen 前，CLI 会等待节点完成远端 workspace 准备。托管同步 session 使用目录模式 `0770` 和文件模式 `0660`，让账户专属 Native Runtime 身份可以访问 workspace，同时不向其他用户开放。
-
-常用命令：
-
-```sh
-agent-remote sync ensure --yes
-agent-remote sync status --fail-on-conflict
-agent-remote sync pause
-agent-remote sync resume
-agent-remote sync resolve
-agent-remote sync reset
-```
-
-CLI 会使用 agent-remote home 中托管的 `bin/mutagen`，或使用同级打包二进制。Mutagen 和直接 attach 的 SSH 连接都使用 agent-remote 独立管理的 `known_hosts`；新的 WireGuard 节点密钥会被自动信任，已记录密钥发生变化时仍会拒绝连接。升级引入新的受管 SSH 环境后，CLI 会重启一次 Mutagen daemon，使其继承受管代理路径。项目 workspace 默认启用 `.git` 同步，同时排除各端独立的 Git index、lock 文件、hooks、worktrees 以及常见构建/缓存目录。Mutagen 创建后会先完成一次初始 flush，远端 runtime 再基于完整 workspace 建立自己的 Git index。当控制面同步关系仍为 active、但本地 Mutagen session 已丢失时，`sync ensure` 会自动重建本地 session。
-
-## Session 端口转发
-
-把一个 Native session 的 loopback TCP 端口转发到当前设备，而不发布 Node 或容器端口：
-
-```sh
-agent-remote forward 5173 --session <session-id> --local-port auto --open
-fclaude forward 3000
-agent-remote forward list
-agent-remote forward stop <forward-id>
-agent-remote forward stop --session <session-id> --all
-```
-
-本地 listener 只绑定 `127.0.0.1`，系统支持时同时绑定 `::1`。默认本地端口与远端相同；端口占用时使用 `--local-port auto`。一条受限 SSH stdio 隧道可多路复用 HTTP、WebSocket/HMR、SSE、gRPC 和普通 TCP 连接。OpenSSH `-L/-R/-D/-W`、任意目标、公网 bind 和 token 持久化继续保持关闭。隧道断开后 CLI 会申请新的一次性 token 并在保留本地 listener 的同时重连，但不会重放已有 stream。
-
-远端应用应监听 runtime loopback，例如 `npm run dev -- --host 127.0.0.1`。当前发布只支持 Native Runtime session；Docker Sandbox session 会返回明确的 capability 错误。
-
-## 工具账户
-
-`agent-remote account create` 会创建包含地区、时区、locale 和首选节点标签的远端工具账户记录。控制平面会把每个账户固定到可用 runtime backend；客户端会展示该 backend，但不能静默切换。`agent-remote account bind` 会请求控制平面在选定节点上创建临时远端 tmux 登录 session；登录完成后，`agent-remote account verify` 会调度 verifier 任务。CLI 只保存 agent-remote 设备 token；工具登录状态保留在远端节点账户归档中。
-
-`fclaude` 在创建或恢复 session 时会显示选定的 runtime backend。如果控制平面把丢失的 Native Runtime session 对账为 `interrupted`，`fclaude` 会创建有关联关系的 replacement session，而不会 attach 到失效资源或重放之前的命令。
-
-`fclaude list` 默认输出按空格对齐的紧凑表格，session 和 node ID 缩短为 12 位，并从左侧省略过长的工作目录以保留项目名。使用 `fclaude list --no-trunc` 可查看完整值。列表中的短 session ID 可直接传给 `fclaude attach <id>`、`fclaude stop <id>` 或 `fclaude delete <id>`；如果前缀不唯一，命令会拒绝执行。删除仅允许用于 stopped、interrupted 或 failed session；`fclaude delete --all` 会一键删除当前用户处于这三种状态的全部 session。 受管会话的 Skill 内容尚未完整保留时，单个和批量删除均返回 `STATE_PENDING`。保留 Node 上的数据，使用 `fclaude stop-status <operation-id> --wait` 观察保存进度后再重试删除。
-
-`agent-remote account list` 和 `agent-remote credentials list` 使用相同的紧凑 ID 规则，并支持 `--no-trunc`。显示出的 account 和 credential profile 短 ID 可直接用于账户绑定、状态查询、配置导入、默认账户选择和凭据绑定等操作。`fclaude --account-id <id>` 同样接受账户短 ID。前缀至少需要 4 个十六进制字符，并且必须唯一匹配一条记录。
-
-`agent-remote account import-config --account <id>` 会等待目标节点完成已接受 Claude 配置的写入；任务失败、取消、过期或 120 秒内未进入终态时，命令以非零状态退出。超时信息会保留 task ID，因为本地停止等待后远端任务仍可能继续完成。可先用 `--dry-run` 预览路径；只有明确需要导入提示词、transcript 和本地路径时才使用 `--include-resume-history`。添加 `--exclude-skills` 可在读取和打包前排除 `~/.claude/skills`，继续迁移其他配置；插件内容和项目历史仍按原选择规则处理，该选项本身不会启用受管目录模式。
-
-`connect` 支持 `fclaude list` 显示的 12 位会话 ID、唯一十六进制前缀或完整 UUID，大小写不敏感；前缀有歧义时需提供更完整的 ID。生命周期命令被拒绝时报告实际读取的本地准入状态，未观测到的连接状态在 JSON 中保持 `null`。`request_not_active` 表示请求已结束或不在活动账本中，应按提示运行 `requests` 刷新列表，无需修复 Bridge；有歧义或格式错误的请求 ID 会单独报告。
+WireGuard 执行路径 fail-closed：配置字节以及 plan/target 摘要必须先审阅，随后才能由获准的平台 broker 执行 `up` 或 `down`。客户端不回退到 sudo、runas、PATH helper 或未验证进程。
 
 ## 开发
 
+需要 Rust 2021 和仓库固定的 toolchain。在仓库根目录运行完整门禁：
+
 ```sh
+bash -n scripts/*.sh
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-```
-
-或者：
-
-```sh
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 scripts/run-quality-checks.sh
 ```
 
-## 发布打包
+使用临时 home、loopback 夹具和一次性 server/node 数据。不要对生产凭据执行验收，也不要在测试输出中保存真实私钥。
 
-构建 macOS 和 Linux CLI 归档：
+## 安装与打包
 
-```sh
-VERSION="$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "agent-remote-cli") | .version')" \
-  scripts/package-release.sh
-```
-
-在 Windows PowerShell 中构建 Windows x64 归档（ARM64 可传入 `-Target aarch64-pc-windows-msvc`）：
-
-```powershell
-$version = ((cargo metadata --format-version=1 --no-deps | ConvertFrom-Json).packages | Where-Object name -eq "agent-remote-cli").version
-./scripts/package-release.ps1 -Version $version
-```
-
-发布归档包含：
-
-- `agent-remote`
-- `fclaude`
-- `agent-remote-wireguard`
-- 托管 `mutagen`
-- dependency manifest 和第三方声明
-
-打包文件应安装到 agent-remote home，或由平台安装器放到 `PATH` 中。
-
-GitHub Actions 会在 `v*` tag 上运行相同打包流程，并把归档上传到 GitHub Release。`install-smoke` workflow 还会在 Windows、Linux 和 macOS 原生 runner 的隔离目录中构建并安装发布包，检查所有 manifest 校验和与依赖文件，并实际执行安装后的 CLI。在 Windows 上，该流程还会安装发布包内的 WireGuard MSI，并验证其命令行入口和 `agent-remote-wireguard` 集成。
-
-直接安装最新 release：
+在类 Unix 主机安装最新发布的 CLI：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | bash
 ```
 
-安装指定版本或自定义路径：
+如需固定版本或明确指定 home、链接目录：
 
 ```sh
 VERSION=VERSION_TO_INSTALL
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | \
   bash -s -- --version "$VERSION" --home ~/.config/agent-remote --bin-dir ~/.local/bin
+```
+
+Windows 使用 PowerShell 下载并运行 `scripts/install.ps1`。仅当缺少 OpenSSH
+Client 或随包提供的 WireGuard 依赖时才使用 `-InstallPrerequisites`；该选项可能需要提权。
+构建发布归档：
+
+```sh
+VERSION="$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "agent-remote-cli") | .version')" \
+  scripts/package-release.sh
 ```
 
 安装已下载的发布归档：
@@ -326,52 +110,68 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
 ./install.sh
 ```
 
-在 x64 或 ARM64 Windows PowerShell 中安装：
+Windows 的等价安装器调用：
 
 ```powershell
 Invoke-WebRequest https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.ps1 -OutFile install.ps1
 .\install.ps1 -InstallPrerequisites
 ```
 
-`-InstallPrerequisites` 会在缺失时安装 Windows OpenSSH Client 可选功能和发布包内置的官方 WireGuard，可能需要管理员 PowerShell。WireGuard 安装不再依赖 `winget` 或额外联网下载；两者已经安装时可省略。升级时，安装器会检测从受管安装目录运行的 Mutagen daemon，在替换被锁定的可执行文件前停止它，并在完成后重新启动；其他 Mutagen 安装不会被停止。安装器会把 `%LOCALAPPDATA%\agent-remote\bin` 加入用户 `PATH`，安装后请打开新终端。
+归档包含 CLI、受管 helper、依赖清单、校验和和第三方声明。安装不会在没有用户明确
+选择的情况下替换生产 home。
 
-安装器会把托管二进制复制到 `AGENT_REMOTE_HOME/bin`，写入 dependency manifest，并默认把 `agent-remote`、`fclaude` 和 `agent-remote-wireguard` 链接到 `~/.local/bin`。它也可以覆盖 GitHub 仓库、版本、target、OS、架构、home 目录、链接目录，以及 symlink/copy 行为。
+## 发布
 
-## Skill 管理
+`prepare-release.sh` 和包流程负责构建 CLI 与受管 helper。发布制品必须包含准确版本、源码 commit、依赖声明和校验和。原生 broker 验收独立于合同测试，必须在目标主机运行。协调的 Server、Node 和 desktop 门禁全部通过前不得发布。
+
+## 文档
+
+当前合同集中在 `docs/`：
+
+- `desktop-control.md`、`desktop-schema.md`：desktop 结构化 API。
+- `desktop-accounts.md`、`desktop-account-binding.md`、`desktop-account-import.md`、`desktop-account-defaults.md`：账户流程。
+- `desktop-session-attach.md`、`desktop-sync.md`、`desktop-port-forward.md`：会话和工作区流程。
+- `desktop-wireguard*.md`、`linux-wireguard-broker.md`、`macos-wireguard-broker.md`：网络与 broker 流程。
+- `desktop-runtime-recovery.md`、`desktop-mutagen-environment.md`：恢复与共享服务状态。
+- `exact-session-attachment-transfer.md`、`verified-session-sync.md`：附件与同步边界。
+
+这些文档描述当前合同；文档过时时以代码和测试为准。
+
+## 脚本入口
+
+仓库保留以下安装、构建、打包和主机验收入口：
 
 ```sh
-agent-remote skill add ./my-skill --dry-run
-agent-remote skill add ./my-skill --yes
-agent-remote skill list
-agent-remote skill list --account-id ACCOUNT_UUID --effective
-agent-remote skill status --last
-agent-remote skill status --storage
-agent-remote skill --help
+# 构建托管 Mutagen 和 WireGuard helper 输入。
+scripts/build-managed-tools.sh
+# 准备版本化发布元数据并运行发布检查。
+scripts/prepare-release.sh
+# 构建 Unix 发布归档。
+VERSION="$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "agent-remote-cli") | .version')" \
+  scripts/package-release.sh
+# 安装 Linux/macOS broker 并运行原生 broker 验收。
+scripts/install-macos-wireguard-broker.sh
+# 使用受保护系统服务时安装 Linux broker。
+scripts/install-linux-wireguard-broker.sh
+scripts/native-wireguard-broker-acceptance.sh
+# 为本地开发安装仓库 hooks。
+scripts/install-githooks.sh
+# 仓库质量与专项测试门禁。
+scripts/run-static-checks.sh
+scripts/run-tests.sh
+scripts/run-quality-checks.sh
 ```
 
-技能属于当前登录的远端用户；仅针对某账号安装时加 `--account-id`，否则按用户范围生效。
-规则变更影响后续会话，现有会话保持原快照。提交结果不确定时查询原操作/幂等键，超时或中断不代表回滚。
-Git/本地安装、更新、规则、状态恢复、导出和排障统一见
-[使用指南](https://github.com/Agent-Remote/agent-remote/blob/main/docs/skill-manager.md)，
-真实 Claude 剩余测试见[验收状态](https://github.com/Agent-Remote/agent-remote/blob/main/docs/skill-acceptance-plan.md)。
-完整参数以已安装版本各子命令的 `--help` 为准。
+Windows 使用 PowerShell 打包和 broker 验收入口：
 
-## 后端迁移恢复
-
-```sh
-agent-remote account recover-runtime ACCOUNT_UUID --original-task migrate_tool_account_runtime:ACCOUNT_UUID:ORIGINAL_UUID --request-id RECOVERY_UUID
-agent-remote --json account recovery-status ACCOUNT_UUID --request-id RECOVERY_UUID
+```powershell
+./scripts/package-release.ps1 -Version $version
+./scripts/native-wireguard-broker-acceptance.ps1
 ```
 
-需要管理员用户登录和完整 UUID。保留原任务与自选 request UUID；status 只读，结果不确定先按原键查询。
-默认恢复只验证已完成的目标迁移；`--verify-source` 只验证已完成的源回滚；`--repair-source` 才显式
-根据原备份/基线修复源权限。后二者互斥，同一请求的 action 不可改。不删除原失败任务、不解除管理员禁用，
-证据不完整仍阻止准入。详见[恢复契约](https://github.com/Agent-Remote/agent-remote/blob/main/docs/skill-manager-wire-v1.md)。
-JSON schema 分别为默认 v1、verify-source v2、repair-source v3。响应验证成功退出 0 不等于迁移成功，
-仍须检查 pending/failed 等状态；错误保留原身份和提交确定性。
+`install.sh` 和 `install.ps1` 是上文说明的终端用户安装器；其他脚本用于构建或主机验证，
+不会自行发布版本。
 
 ## 许可证
 
-agent-remote-cli 使用 GPL-3.0-only 许可证。详见 `LICENSE`。
-
-第三方依赖声明见 `THIRD_PARTY_NOTICES.md`。
+GPL-3.0-only。详见 `LICENSE` 和 `THIRD_PARTY_NOTICES.md`。

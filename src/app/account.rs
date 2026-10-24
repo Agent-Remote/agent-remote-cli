@@ -1,11 +1,10 @@
 async fn init(paths: AppPaths, args: crate::cli::InitArgs) -> Result<()> {
     terminal::section("Agent Remote Setup");
-    paths.ensure_base_dirs()?;
-    let state = LocalState::open(&paths)?;
-    state.init_schema()?;
+    if !crate::setup::initialize(&paths)?.complete {
+        bail!("local metadata preparation is incomplete; inspect setup diagnostics before retrying")
+    }
 
     let manager = DependencyManager::new(paths.clone());
-    manager.ensure_manifest()?;
     terminal::section("Managed Dependencies");
     for status in manager.check_all()? {
         let message = format!("{} at {}", status.name, status.binary_path.display());
@@ -40,26 +39,21 @@ async fn init(paths: AppPaths, args: crate::cli::InitArgs) -> Result<()> {
         wireguard_public_key: args.wireguard_public_key.clone(),
         skip_device_registration: args.skip_device_registration,
     };
+    let registration = DeviceRegistrationOptions {
+        device_name: args.device_name,
+        ssh_public_key: init_ssh_public_key(args.ssh_public_key, args.skip_device_registration)?,
+        wireguard_public_key: args.wireguard_public_key,
+        skip_device_registration: args.skip_device_registration,
+    }
+    .prepare()?;
     let user_token = match login_args.method {
         LoginMethod::Password => password_login(&client, &login_args).await?,
-        LoginMethod::DeviceCode => device_code_login(&client).await?,
+        LoginMethod::DeviceCode => device_code_login(&paths, &server_url, &client).await?,
     };
 
-    let registered_device_id = finalize_login(
-        paths.clone(),
-        server_url.clone(),
-        user_token,
-        DeviceRegistrationOptions {
-            device_name: args.device_name,
-            ssh_public_key: init_ssh_public_key(
-                args.ssh_public_key,
-                args.skip_device_registration,
-            )?,
-            wireguard_public_key: args.wireguard_public_key,
-            skip_device_registration: args.skip_device_registration,
-        },
-    )
-    .await?;
+    let registered_device_id =
+        finalize_login(paths.clone(), server_url.clone(), user_token, registration).await?;
+    clear_pending_cli_login(&paths, &server_url)?;
 
     if !args.skip_wireguard_config && registered_device_id.is_some() {
         let should_write = args.yes
@@ -97,23 +91,20 @@ async fn login(paths: AppPaths, args: crate::cli::LoginArgs) -> Result<()> {
     DependencyManager::new(paths.clone()).ensure_manifest()?;
 
     let client = ApiClient::new(server_url.clone())?;
+    let registration = DeviceRegistrationOptions {
+        device_name: args.device_name.clone(),
+        ssh_public_key: args.ssh_public_key.clone(),
+        wireguard_public_key: args.wireguard_public_key.clone(),
+        skip_device_registration: args.skip_device_registration,
+    }
+    .prepare()?;
     let user_token = match args.method {
         LoginMethod::Password => password_login(&client, &args).await?,
-        LoginMethod::DeviceCode => device_code_login(&client).await?,
+        LoginMethod::DeviceCode => device_code_login(&paths, &server_url, &client).await?,
     };
 
-    finalize_login(
-        paths,
-        server_url,
-        user_token,
-        DeviceRegistrationOptions {
-            device_name: args.device_name,
-            ssh_public_key: args.ssh_public_key,
-            wireguard_public_key: args.wireguard_public_key,
-            skip_device_registration: args.skip_device_registration,
-        },
-    )
-    .await?;
+    finalize_login(paths.clone(), server_url.clone(), user_token, registration).await?;
+    clear_pending_cli_login(&paths, &server_url)?;
     Ok(())
 }
 
@@ -121,91 +112,30 @@ async fn finalize_login(
     paths: AppPaths,
     server_url: String,
     user_token: AuthToken,
-    options: DeviceRegistrationOptions,
+    options: auth::login::PreparedRegistration,
 ) -> Result<Option<String>> {
-    paths.ensure_base_dirs()?;
-    let mut config = Config::load(&paths)?;
-    let existing_device_id = match config.server_url.as_deref() {
-        Some(configured_server_url)
-            if normalize_server_url(configured_server_url) == server_url =>
-        {
-            config.active_device_id.clone()
-        }
-        _ => None,
-    };
-    config.server_url = Some(server_url.clone());
-    config.save(&paths)?;
-
-    let state = LocalState::open(&paths)?;
-    state.init_schema()?;
-    DependencyManager::new(paths.clone()).ensure_manifest()?;
-    if options.skip_device_registration {
-        let backend = auth::store_user_token(&paths, &server_url, &user_token).await?;
-        state.set_kv("last_login_mode", "user_token")?;
-        terminal::success_line(format!("Logged in to {server_url}"));
+    let outcome = auth::login::finalize(&paths, &server_url, &user_token, options, None).await?;
+    terminal::success_line(format!("Logged in to {server_url}"));
+    if let Some(device_id) = &outcome.device_id {
         Details::new()
-            .field("Credential store", backend)
             .field(
-                "Token lifetime",
-                format!("{} seconds", user_token.expires_in),
+                "Device",
+                format!(
+                    "{} ({device_id})",
+                    outcome.device_name.as_deref().unwrap_or("")
+                ),
             )
+            .field("Credential store", outcome.backend)
+            .field("Token lifetime", format!("{} seconds", outcome.expires_in))
+            .render();
+    } else {
+        Details::new()
+            .field("Credential store", outcome.backend)
+            .field("Token lifetime", format!("{} seconds", outcome.expires_in))
             .field("Device", "not registered")
             .render();
-        return Ok(None);
     }
-
-    let ssh_public_key = resolve_ssh_public_key(options.ssh_public_key.as_deref())?;
-    let device_name = options
-        .device_name
-        .unwrap_or_else(platform::default_device_name);
-    let platform = platform::current_platform()?;
-    let request = RegisterDeviceRequest {
-        name: device_name.clone(),
-        platform,
-        cli_version: VERSION.to_string(),
-        ssh_public_key,
-        wireguard_public_key: options.wireguard_public_key,
-        existing_device_id,
-    };
-    let registration = ApiClient::new(server_url.clone())?
-        .register_device(&user_token.access_token, &request)
-        .await
-        .context("failed to register local device")?;
-    let device = registration.data.device;
-
-    state.upsert_device(&LocalDevice {
-        id: device.id.clone(),
-        server_url: server_url.clone(),
-        name: device.name.clone(),
-        platform: device.platform.clone(),
-        status: device.status.clone(),
-        ssh_key_id: Some(registration.data.ssh_key_id),
-        wireguard_peer_id: registration.data.wireguard_peer_id,
-        created_at: Some(device.created_at),
-        last_seen_at: device.last_seen_at,
-    })?;
-    state.set_kv("last_login_mode", "device_token")?;
-    config.active_device_id = Some(device.id.clone());
-    config.save(&paths)?;
-
-    let backend = store_device_token(
-        &paths,
-        &server_url,
-        &device.id,
-        &registration.data.device_token,
-    )?;
-    auth::store_user_token(&paths, &server_url, &user_token).await?;
-
-    terminal::success_line(format!("Logged in to {server_url}"));
-    Details::new()
-        .field("Device", format!("{} ({})", device.name, device.id))
-        .field("Credential store", backend)
-        .field(
-            "Token lifetime",
-            format!("{} seconds", registration.data.device_token.expires_in),
-        )
-        .render();
-    Ok(Some(device.id))
+    Ok(outcome.device_id)
 }
 
 async fn password_login(client: &ApiClient, args: &crate::cli::LoginArgs) -> Result<AuthToken> {
@@ -223,66 +153,138 @@ async fn password_login(client: &ApiClient, args: &crate::cli::LoginArgs) -> Res
         .context("login failed")
 }
 
-async fn device_code_login(client: &ApiClient) -> Result<AuthToken> {
-    let start = client.start_cli_login().await?;
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PendingCliLogin {
+    server_url: String,
+    completion_request_id: String,
+    user_code: String,
+    expires_at_unix: u64,
+    interval: u64,
+}
+
+fn pending_cli_login_key(server: &str) -> String {
+    format!("cli_login.pending.v1:{server}")
+}
+
+fn clear_pending_cli_login(paths: &AppPaths, server: &str) -> Result<()> {
+    let state = LocalState::open(paths)?;
+    state.init_schema()?;
+    state.delete_kv(&pending_cli_login_key(server))
+}
+
+async fn device_code_login(
+    paths: &AppPaths,
+    server: &str,
+    client: &ApiClient,
+) -> Result<AuthToken> {
+    let state = LocalState::open(paths)?;
+    state.init_schema()?;
+    let pending_key = pending_cli_login_key(server);
+    if let Some(raw) = state.get_kv(&pending_key)? {
+        let pending: PendingCliLogin = serde_json::from_str(&raw)
+            .context("stored device-code completion metadata is malformed")?;
+        if pending.server_url != server
+            || Uuid::parse_str(&pending.completion_request_id)
+                .ok()
+                .is_none_or(|id| id.to_string() != pending.completion_request_id)
+        {
+            bail!("stored device-code completion metadata does not match this server")
+        }
+        if SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(true, |now| now.as_secs() >= pending.expires_at_unix)
+        {
+            state.delete_kv(&pending_key)?;
+            bail!("CLI login expired before its completion could be recovered")
+        }
+        let token = client
+            .recover_cli_login(&pending.completion_request_id)
+            .await
+            .map_err(|error| {
+                if error.is_pending_cli_login() {
+                    anyhow::anyhow!(
+                        "CLI login completion remains pending; resume the original login"
+                    )
+                } else {
+                    anyhow::anyhow!("CLI login completion outcome is unknown")
+                }
+            })?;
+        drop(state);
+        return Ok(token);
+    }
+    let completion_request_id = Uuid::new_v4().to_string();
+    let start = client
+        .start_cli_login(Some(&completion_request_id))
+        .await?;
     terminal::section("Device Login");
     Details::new()
         .field("Open", start.verification_url)
-        .field("Code", terminal::command(start.user_code))
+        .field("Code", terminal::command(start.user_code.clone()))
         .status("Status", "waiting for approval")
         .render();
 
+    state.set_kv(
+        &pending_key,
+        &serde_json::to_string(&PendingCliLogin {
+            server_url: server.to_owned(),
+            completion_request_id: completion_request_id.clone(),
+            user_code: start.user_code.clone(),
+            expires_at_unix: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |now| now.as_secs().saturating_add(start.expires_in)),
+            interval: start.interval,
+        })?,
+    )?;
+
     let deadline = Instant::now() + Duration::from_secs(start.expires_in);
     while Instant::now() < deadline {
-        match client.complete_cli_login(&start.device_code).await {
+        match client
+            .complete_cli_login(&start.device_code, Some(&completion_request_id))
+            .await
+        {
             Ok(token) => return Ok(token),
             Err(error) if error.is_pending_cli_login() => {
                 sleep(Duration::from_secs(start.interval.max(1))).await;
             }
+            Err(error)
+                if error.is_transport_error()
+                    || error
+                        .status_code()
+                        .is_none_or(|status| !(400..500).contains(&status)) =>
+            {
+                match client.recover_cli_login(&completion_request_id).await {
+                    Ok(token) => return Ok(token),
+                    Err(recovery) if recovery.is_pending_cli_login() => {
+                        sleep(Duration::from_secs(start.interval.max(1))).await;
+                    }
+                    Err(_) => return Err(error.into()),
+                }
+            }
             Err(error) => return Err(error.into()),
         }
     }
+    drop(state);
     bail!("CLI login expired before approval")
 }
 
 async fn logout(paths: AppPaths, revoke_remote: bool) -> Result<()> {
-    let config = Config::load(&paths)?;
-    let Some(server_url) = config.server_url.clone() else {
+    let outcome = auth::logout::execute(&paths, revoke_remote, None).await?;
+    let Some(server_url) = &outcome.server_url else {
         terminal::note("Not logged in.");
         return Ok(());
     };
-    let secret_store = SecretStore::new(paths.clone());
-    let mut token = None;
-
-    if let Some(device_id) = config.active_device_id.clone() {
-        let key = device_token_key(&server_url, &device_id);
-        token = load_device_token(&paths)
-            .await
-            .ok()
-            .map(|(_, _, token)| token);
-        let _ = delete_broker_credential_if_matches(&paths, &server_url, &device_id);
-        let _ = secret_store.delete_secret(&key);
-        let _ = clear_device_token_refresh(&paths, &server_url, &device_id);
+    if outcome.user.remote == auth::logout::Revocation::Unconfirmed {
+        terminal::warning_line(
+            "User logout could not be fully confirmed: remote revocation is unconfirmed",
+        );
     }
-    if let Err(error) = auth::logout_user(&paths, &server_url, revoke_remote).await {
-        terminal::warning_line(format!("User logout could not be fully confirmed: {error}"));
+    if outcome.device.remote == auth::logout::Revocation::Unconfirmed {
+        terminal::warning_line("Remote logout failed: device revocation is unconfirmed");
     }
-
-    if revoke_remote {
-        if let Some(access_token) = token {
-            let client = ApiClient::new(server_url.clone())?;
-            if let Err(error) = client.logout(&access_token).await {
-                eprintln!(
-                    "{} Remote logout failed: {error}",
-                    terminal::warning("WARN")
-                );
-            }
-        }
+    if !outcome.local_complete() {
+        bail!("local logout is incomplete; inspect credentials and current configuration");
     }
-
-    let mut config = config;
-    config.active_device_id = None;
-    config.save(&paths)?;
     terminal::success_line(format!("Logged out from {server_url}"));
     Ok(())
 }
@@ -357,28 +359,16 @@ async fn write_default_wireguard_config(paths: AppPaths) -> Result<()> {
 }
 
 async fn write_wireguard_config(paths: AppPaths, output: Option<PathBuf>) -> Result<()> {
-    let (server_url, device_id, token) = load_device_token(&paths).await?;
-    let store = SecretStore::new(paths.clone());
-    let private_key_name = wireguard_private_key_key(&server_url, &device_id);
-    let private_key = match store.get_secret(&private_key_name)? {
-        Some(private_key) => private_key,
-        None => {
-            let private_key = wireguard::generate_private_key();
-            store.set_secret(&private_key_name, &private_key)?;
-            private_key
-        }
-    };
-    let public_key = wireguard::public_key_from_private(&private_key)?;
-    let client = ApiClient::new(server_url)?;
-    client.enroll_wireguard_peer(&token, &public_key).await?;
-    let config = client.get_wireguard_config(&token).await?;
-    let output = output.unwrap_or_else(|| wireguard::default_config_path(&paths));
-    wireguard::write_config(&output, &config, &private_key)?;
+    let plan = wireguard::configuration::plan(&paths, output.as_deref())?;
+    let outcome = wireguard::configuration::apply(&paths, &plan).await?;
+    if !outcome.complete {
+        bail!("WireGuard configuration is incomplete ({}); inspect current state before confirming another attempt", outcome.code)
+    }
     terminal::success_line("WireGuard configuration written");
     Details::new()
-        .field("Path", output.display())
-        .field("Device", config.device_id)
-        .field("Peers", config.peers.len())
+        .field("Path", outcome.output_path.display())
+        .field("Device", outcome.context.active_device_id)
+        .field("Peers", outcome.peer_count.unwrap_or(0))
         .render();
     Ok(())
 }
@@ -391,7 +381,11 @@ fn wireguard_action(
     let config = args
         .config
         .unwrap_or_else(|| wireguard::default_config_path(&paths));
-    wireguard::run_helper(&paths, action, &config, args.dry_run)?;
+    if action == "check" {
+        wireguard::check_config(&paths, &config, args.dry_run)?;
+    } else {
+        wireguard::run_helper(&paths, action, &config, args.dry_run)?;
+    }
     terminal::success_line(format!("WireGuard {action} using {}", config.display()));
     Ok(())
 }
@@ -539,132 +533,69 @@ async fn account_bind(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Resul
     Ok(())
 }
 
-async fn account_import_config(
-    paths: AppPaths,
-    args: crate::cli::AccountImportConfigArgs,
-) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths).await?;
-    let client = ApiClient::new(server_url)?;
-    let account_id = resolve_account_reference(&client, &token, &args.account).await?;
-    let include = discover_claude_config_paths(args.include_resume_history, args.exclude_skills)?;
-    if include.is_empty() {
-        terminal::note("No supported local Claude configuration paths found.");
+async fn account_import_config(paths: AppPaths, args: crate::cli::AccountImportConfigArgs) -> Result<()> {
+    use crate::account_import::{self, Apply, Selection, Status};
+    if !(Selection{tool:args.tool.clone(),include_resume_history:args.include_resume_history,exclude_skills:args.exclude_skills}).valid() {
+        bail!("configuration import currently supports only claude");
+    }
+    if args.status || args.forget {
+        let request_id=args.request_id.as_deref().context("request ID required")?;
+        let record=account_import::pending(&paths)?.items.into_iter().find(|v|v.request_id==request_id).context("original import request is not recorded in this home")?;
+        let account=crate::identifiers::resolve_id(&args.account,"tool account",std::iter::once(record.account_id.as_str()))?;
+        let input=Status{expected_context:record.context,account_id:account,request_id:record.request_id,expected_digest:record.digest,expected_task_id:record.task_id};
+        if args.forget {
+            if !args.yes && !prompt_yes_no("Forget this settled local import receipt? [y/N] ")? {bail!("receipt removal not confirmed");}
+            account_import::forget(&paths,input).await?;
+            terminal::success_line("Local import receipt removed");
+        } else {
+            let result=account_import::status(&paths,input).await?;
+            Details::new().field("Request",result.request_id).field("Task",result.task_id).field("Status",result.phase).field("Files",result.file_count).render();
+        }
         return Ok(());
     }
+    let config=Config::load_strict(&paths)?;
+    let context=crate::account_defaults::Context{home:paths.home().into(),server_url:config.server_url,active_device_id:config.active_device_id};
+    let (server_url,_device_id,token)=load_device_token(&paths).await?;
+    let client=ApiClient::new(server_url)?;
+    let account_id=resolve_account_reference(&client,&token,&args.account).await?;
+    let selection=Selection{tool:args.tool,include_resume_history:args.include_resume_history,exclude_skills:args.exclude_skills};
+    let discovery=account_import::discover(&selection)?;
+    if discovery.include.is_empty(){terminal::note("No supported local Claude configuration paths found.");return Ok(());}
     terminal::section("Configuration Import");
-    println!("{}", terminal::label("Candidate paths"));
-    for path in &include {
-        println!("  {}", terminal::command(path));
+    for path in &discovery.include {println!("  {}",terminal::command(path));}
+    if selection.include_resume_history {terminal::warning_line("Resume history may include private prompts, transcripts, and local paths.");}
+    if args.dry_run {
+        terminal::note("Checking Server policy writes an audit record; file contents are not read or uploaded.");
+        let result=account_import::validate(&paths,context,&account_id,selection,discovery.source_home,discovery.include).await?;
+        terminal::success_line("Configuration import preview complete");
+        for path in result.accepted {println!("  {path}");}
+        for path in result.rejected {terminal::warning_line(format!("Rejected: {path}"));}
+        return Ok(());
     }
-    if args.include_resume_history {
-        terminal::warning_line(
-            "Resume history may include private prompts, transcripts, and local paths.",
-        );
-    }
-    if !args.yes
-        && !args.dry_run
-        && !prompt_yes_no("Import these files to the remote account now? [y/N] ")?
-    {
-        bail!("config import not confirmed");
-    }
-    let files = if args.dry_run {
-        Vec::new()
-    } else {
-        collect_claude_config_files(&include)?
+    let plan=account_import::prepare(&paths,context.clone(),&account_id,selection.clone(),discovery.source_home.clone()).await?;
+    Details::new().field("Files",plan.manifest.len()).field("Bytes",plan.total_bytes).field("Snapshot",&plan.digest).render();
+    if !args.yes && !prompt_yes_no("Import this exact file snapshot to the remote account now? [y/N] ")? {bail!("config import not confirmed");}
+    let request_id=if let Some(id)=args.request_id {if !account_import::valid_uuid(&id){bail!("request ID must be a canonical nonzero UUID");}id}else{
+        use rand_core::RngCore;
+        let mut bytes=[0u8;16];rand_core::OsRng.fill_bytes(&mut bytes);bytes[6]=(bytes[6]&0x0f)|0x40;bytes[8]=(bytes[8]&0x3f)|0x80;uuid::Uuid::from_bytes(bytes).hyphenated().to_string()
     };
-    let result = client
-        .create_tool_account_config_import(
-            &token,
-            &account_id,
-            &ToolAccountConfigImportRequest {
-                tool_type: args.tool,
-                source: "local_cli".to_string(),
-                include,
-                exclude: config_import_exclusions(args.exclude_skills),
-                files,
-                include_resume_history: args.include_resume_history,
-                dry_run: args.dry_run,
-            },
-        )
-        .await?;
-    terminal::success_line(if result.dry_run {
-        "Configuration import preview complete"
-    } else {
-        "Configuration import queued"
-    });
-    Details::new()
-        .field("Tool account", result.tool_account_id)
-        .field("Dry run", result.dry_run)
-        .render();
-    println!("{}", terminal::label("Accepted"));
-    for path in &result.accepted {
-        println!("  {path}");
-    }
-    println!("{}", terminal::label("Rejected"));
-    for path in &result.rejected {
-        println!("  {path}");
-    }
-    for warning in &result.warnings {
-        terminal::warning_line(warning);
-    }
-    if let Some(task_id) = &result.task_id {
-        Details::new().field("Task", task_id).render();
-    }
-    if let Some(path) = &result.account_remote_path {
-        Details::new().field("Remote path", path).render();
-    }
-    if let Some(count) = result.imported_file_count {
-        Details::new().field("Files queued", count).render();
-    }
-    if let Some(task_id) = &result.task_id {
-        wait_for_config_import(&client, &token, &account_id, task_id).await?;
-    }
-    Ok(())
-}
-
-async fn wait_for_config_import(
-    client: &ApiClient,
-    token: &str,
-    account_id: &str,
-    task_id: &str,
-) -> Result<()> {
-    terminal::note("Waiting for the remote node to finish the configuration import...");
-    let deadline = Instant::now() + CONFIG_IMPORT_WAIT_TIMEOUT;
+    let recovery=format!("agent-remote account import-config --account {account_id} --request-id {request_id} --status");
+    terminal::note(format!("Original request: {request_id}. Recover with: {recovery}"));
+    let result=account_import::apply(&paths,Apply{confirmed:true,expected_context:context,account_id:account_id.clone(),selection,expected_source_home:discovery.source_home,expected_digest:plan.digest,request_id}).await.with_context(||format!("import not confirmed; retain the original request and query: {recovery}"))?;
+    terminal::success_line("Configuration import queued");
+    Details::new().field("Task",&result.task_id).field("Files queued",result.file_count).render();
+    let deadline=Instant::now()+CONFIG_IMPORT_WAIT_TIMEOUT;
     loop {
-        let status = client
-            .get_tool_account_config_import_status(token, account_id, task_id)
-            .await?;
-        if config_import_complete(&status.status, status.error.as_deref(), task_id)? {
-            terminal::success_line("Configuration import completed");
-            Details::new()
-                .field("Files imported", status.file_count)
-                .field("Task", status.task_id)
-                .render();
-            for path in status.files_written {
-                println!("  {path}");
-            }
-            return Ok(());
+        let current=account_import::status(&paths,Status{expected_context:result.context.clone(),account_id:account_id.clone(),request_id:result.request_id.clone(),expected_digest:result.digest.clone(),expected_task_id:Some(result.task_id.clone())}).await?;
+        match current.phase.as_str(){
+            "succeeded"=>{terminal::success_line("Configuration import completed");break;},
+            "failed"|"cancelled"|"expired"=>bail!("configuration import {} (task {}); query original request: {}",current.phase,current.task_id,recovery),
+            _=>{},
         }
-        if Instant::now() >= deadline {
-            bail!(
-                "configuration import did not finish within {} seconds; the remote task may still continue (task {task_id})",
-                CONFIG_IMPORT_WAIT_TIMEOUT.as_secs()
-            );
-        }
+        if Instant::now()>=deadline {bail!("configuration import did not finish within {} seconds; the remote task may still continue; query: {}",CONFIG_IMPORT_WAIT_TIMEOUT.as_secs(),recovery);}
         sleep(Duration::from_secs(1)).await;
     }
-}
-
-fn config_import_complete(status: &str, error: Option<&str>, task_id: &str) -> Result<bool> {
-    match status {
-        "succeeded" => Ok(true),
-        "pending" | "leased" | "running" => Ok(false),
-        "failed" | "cancelled" | "expired" => bail!(
-            "configuration import {status}: {} (task {task_id})",
-            error.unwrap_or("the remote node did not provide an error summary")
-        ),
-        value => bail!("configuration import returned unknown status {value} (task {task_id})"),
-    }
+    Ok(())
 }
 
 async fn account_verify(paths: AppPaths, args: crate::cli::AccountIdArgs) -> Result<()> {
@@ -785,32 +716,17 @@ async fn account_default_set(
     paths: AppPaths,
     args: crate::cli::AccountDefaultSetArgs,
 ) -> Result<()> {
-    let (server_url, _device_id, token) = load_device_token(&paths).await?;
-    let client = ApiClient::new(server_url.clone())?;
-    let account_id = resolve_account_reference(&client, &token, &args.account_id).await?;
-    let account = client.get_tool_account(&token, &account_id).await?;
-    if account.tool_type != args.tool {
-        bail!(
-            "account {} is {}, not {}",
-            account.id,
-            account.tool_type,
-            args.tool
-        );
-    }
-    let state = LocalState::open(&paths)?;
-    state.init_schema()?;
-    state.set_kv(&default_account_key(&args.tool), &account.id)?;
+    let outcome = crate::account_defaults::set(&paths, &args.tool, &args.account_id, None, true).await?;
+    let account_id = outcome.account_id.context("default account was not stored")?;
     terminal::success_line(format!(
         "Default {} account set to {}",
-        args.tool, account.id
+        args.tool, account_id
     ));
     Ok(())
 }
 
 fn account_default_get(paths: AppPaths, args: crate::cli::AccountDefaultGetArgs) -> Result<()> {
-    let state = LocalState::open(&paths)?;
-    state.init_schema()?;
-    match state.get_kv(&default_account_key(&args.tool))? {
+    match crate::account_defaults::get(&paths, &args.tool)?.account_id {
         Some(account_id) => Details::new()
             .field(format!("Default {} account", args.tool), account_id)
             .render(),
@@ -819,10 +735,8 @@ fn account_default_get(paths: AppPaths, args: crate::cli::AccountDefaultGetArgs)
     Ok(())
 }
 
-fn account_default_clear(paths: AppPaths, args: crate::cli::AccountDefaultGetArgs) -> Result<()> {
-    let state = LocalState::open(&paths)?;
-    state.init_schema()?;
-    state.delete_kv(&default_account_key(&args.tool))?;
+async fn account_default_clear(paths: AppPaths, args: crate::cli::AccountDefaultGetArgs) -> Result<()> {
+    crate::account_defaults::clear(&paths, &args.tool, None).await?;
     terminal::success_line(format!("Default {} account cleared", args.tool));
     Ok(())
 }
@@ -864,204 +778,6 @@ fn print_developer_credential_profile(profile: &DeveloperCredentialProfileData) 
     details.render();
 }
 
-fn config_import_exclusions(exclude_skills: bool) -> Vec<String> {
-    let mut paths = vec![
-        "~/.claude.json".to_string(),
-        "~/.claude/cache".to_string(),
-        "~/.claude/logs".to_string(),
-        "~/.claude/transcripts".to_string(),
-    ];
-    if exclude_skills {
-        paths.push("~/.claude/skills".to_string());
-    }
-    paths
-}
-
-fn discover_claude_config_paths(
-    include_resume_history: bool,
-    exclude_skills: bool,
-) -> Result<Vec<String>> {
-    discover_claude_config_paths_at(&home_dir()?, include_resume_history, exclude_skills)
-}
-
-fn discover_claude_config_paths_at(
-    home: &Path,
-    include_resume_history: bool,
-    exclude_skills: bool,
-) -> Result<Vec<String>> {
-    let claude = home.join(".claude");
-    let mut paths = Vec::new();
-    for relative in [
-        "settings.json",
-        "CLAUDE.md",
-        "agents",
-        "skills",
-        "plugins",
-        "hooks",
-        "rules",
-    ] {
-        if relative != "skills" || !exclude_skills {
-            push_if_exists(&claude, relative, &mut paths);
-        }
-    }
-    for entry in std::fs::read_dir(&claude)
-        .with_context(|| format!("failed to read {}", claude.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file()
-            && path.extension().and_then(|value| value.to_str()) == Some("md")
-            && path.file_name().and_then(|value| value.to_str()) != Some("CLAUDE.md")
-        {
-            if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
-                paths.push(format!("~/.claude/{name}"));
-            }
-        }
-    }
-    if include_resume_history {
-        for relative in [
-            "projects",
-            "sessions",
-            "history.jsonl",
-            "file-history",
-            "plans",
-            "tasks",
-            "session-env",
-        ] {
-            push_if_exists(&claude, relative, &mut paths);
-        }
-    }
-    paths.sort();
-    paths.dedup();
-    Ok(paths)
-}
-
-fn push_if_exists(root: &Path, relative: &str, output: &mut Vec<String>) {
-    if root.join(relative).exists() {
-        output.push(format!("~/.claude/{relative}"));
-    }
-}
-
-fn collect_claude_config_files(include: &[String]) -> Result<Vec<ToolAccountConfigImportFile>> {
-    collect_claude_config_files_at(&home_dir()?, include)
-}
-
-fn collect_claude_config_files_at(
-    home: &Path,
-    include: &[String],
-) -> Result<Vec<ToolAccountConfigImportFile>> {
-    let mut files = Vec::new();
-    let mut total_bytes = 0_u64;
-    for path in include {
-        let local_path = expand_claude_config_path(home, path)?;
-        if local_path.is_file() {
-            push_config_file(home, &local_path, &mut files, &mut total_bytes)?;
-        } else if local_path.is_dir() {
-            collect_config_dir(home, &local_path, &mut files, &mut total_bytes)?;
-        }
-    }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    files.dedup_by(|left, right| left.path == right.path);
-    Ok(files)
-}
-
-fn collect_config_dir(
-    home: &Path,
-    dir: &Path,
-    files: &mut Vec<ToolAccountConfigImportFile>,
-    total_bytes: &mut u64,
-) -> Result<()> {
-    let mut entries = std::fs::read_dir(dir)
-        .with_context(|| format!("failed to read config directory {}", dir.display()))?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    entries.sort_by_key(|entry| entry.path());
-    for entry in entries {
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            collect_config_dir(home, &path, files, total_bytes)?;
-        } else if file_type.is_file() {
-            push_config_file(home, &path, files, total_bytes)?;
-        }
-    }
-    Ok(())
-}
-
-fn push_config_file(
-    home: &Path,
-    path: &Path,
-    files: &mut Vec<ToolAccountConfigImportFile>,
-    total_bytes: &mut u64,
-) -> Result<()> {
-    let metadata = std::fs::metadata(path)
-        .with_context(|| format!("failed to stat config file {}", path.display()))?;
-    if metadata.len() > CONFIG_IMPORT_MAX_FILE_BYTES {
-        bail!(
-            "config file {} is larger than {} bytes",
-            path.display(),
-            CONFIG_IMPORT_MAX_FILE_BYTES
-        );
-    }
-    *total_bytes += metadata.len();
-    if *total_bytes > CONFIG_IMPORT_MAX_TOTAL_BYTES {
-        bail!(
-            "config import exceeds {} bytes; use --include-resume-history only for small histories",
-            CONFIG_IMPORT_MAX_TOTAL_BYTES
-        );
-    }
-    let content = std::fs::read(path)
-        .with_context(|| format!("failed to read config file {}", path.display()))?;
-    files.push(ToolAccountConfigImportFile {
-        path: to_claude_import_path(home, path)?,
-        content_base64: BASE64_STANDARD.encode(content),
-        mode: 0o600,
-    });
-    Ok(())
-}
-
-fn expand_claude_config_path(home: &Path, path: &str) -> Result<PathBuf> {
-    let suffix = path
-        .strip_prefix("~/.claude/")
-        .or_else(|| path.strip_prefix("$HOME/.claude/"))
-        .context("only ~/.claude paths can be imported")?;
-    if suffix
-        .split('/')
-        .any(|part| part.is_empty() || part == "." || part == "..")
-    {
-        bail!("unsafe config import path: {path}");
-    }
-    Ok(home.join(".claude").join(suffix))
-}
-
-fn to_claude_import_path(home: &Path, path: &Path) -> Result<String> {
-    let claude = home.join(".claude");
-    let relative = path
-        .strip_prefix(&claude)
-        .with_context(|| format!("{} is outside {}", path.display(), claude.display()))?;
-    let relative = relative
-        .to_str()
-        .context("Claude config path is not valid UTF-8")?
-        .replace('\\', "/");
-    if relative
-        .split('/')
-        .any(|part| part.is_empty() || part == "." || part == "..")
-    {
-        bail!("unsafe config import path: {}", path.display());
-    }
-    Ok(format!("~/.claude/{relative}"))
-}
-
-fn home_dir() -> Result<PathBuf> {
-    platform::user_home_dir().context(if cfg!(windows) {
-        "USERPROFILE is not set"
-    } else {
-        "HOME is not set"
-    })
-}
-
 fn print_binding_status(status: &BindingStatusData) {
     terminal::section("Account Binding");
     let mut details = Details::new().status("Status", status.status.clone());
@@ -1091,4 +807,3 @@ fn print_binding_status(status: &BindingStatusData) {
     }
     details.render();
 }
-

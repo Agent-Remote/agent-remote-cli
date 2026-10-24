@@ -13,7 +13,10 @@ async fn server(
     let handle = tokio::spawn(async move {
         let mut requests = Vec::new();
         for (status, body) in responses {
-            let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            // The fixture can run beside the full workspace suite. Keep the
+            // server deadline bounded while allowing a heavily loaded runner
+            // to schedule the client's first request.
+            let (mut stream, _) = tokio::time::timeout(Duration::from_secs(30), listener.accept())
                 .await
                 .unwrap()
                 .unwrap();

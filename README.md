@@ -12,337 +12,82 @@
 
 English | [中文](README.zh-CN.md)
 
-Rust CLI for agent-remote local device management.
+`agent-remote-cli` is the Rust local client for Agent Remote. It owns local configuration, credentials, device enrollment, WireGuard, SSH, Mutagen, remote session operations and the structured control contracts consumed by desktop clients.
 
-The package provides the `agent-remote` command. Tool-specific launchers such as `fclaude` are intentionally separate so regular `claude` usage remains untouched.
+## Binaries
 
-## Commands
+- `agent-remote`: configuration, login, device, account, workspace, network, diagnostics, Skills and session administration.
+- `fclaude`: Claude session creation, listing, attachment, stop/delete and port forwarding.
+- `agent-remote-wireguard`: user-side WireGuard helper.
+- `agent-remote-wireguard-broker`: protected host broker for approved tunnel operations.
+- `agent-remote-ssh`, `agent-remote-scp`: managed SSH and file transfer helpers.
+
+The current package version is recorded in `Cargo.toml`. Keep command names, flags, exit codes and machine-readable output compatible unless a coordinated change updates the Server, Node and desktop contracts.
+
+## Command families
 
 ```sh
 agent-remote init
-agent-remote login --server-url https://agent-remote.example.com --username alice
+agent-remote login
 agent-remote status
-agent-remote doctor --fix
-agent-remote deps status
-agent-remote wireguard config
-agent-remote wireguard check
-agent-remote wireguard status
-agent-remote sync ensure
+agent-remote doctor
 agent-remote sync status
-agent-remote account create --tool claude --name "Claude US" --region US --timezone America/Los_Angeles --tag us
+agent-remote sync ensure
+agent-remote wireguard check
 agent-remote account list
-agent-remote account bind <account-id>
-agent-remote account verify <account-id>
-agent-remote account status <account-id>
-agent-remote ssh check --session-id <session-id>
-agent-remote attach <session-id> --print-only
-agent-remote node install --node <node-id-or-prefix> [--enable-ego-browser] [--yes]
-agent-remote device install --source "/path/to/agent-remote-device-macos-0.2.12.zip"
-agent-remote device uninstall [--yes]
 agent-remote device status
-agent-remote device launch
-agent-remote device diagnose
-agent-remote device revoke [--device <device-id>] [--yes]
-agent-remote device rotate-token [--yes]
-agent-remote ego-browser setup
-agent-remote ego-browser connect [<tool-session-id-or-prefix>]
-agent-remote ego-browser status [<binding-id>]
-agent-remote ego-browser repair|upgrade
-agent-remote ego-browser pause|resume|stop [<binding-id>] [--binding-generation <generation>]
-agent-remote ego-browser remove
-agent-remote ego-browser forget-this-mac
-agent-remote ego-browser register --signer-certificate-sha256 HEX [--server-url URL] # advanced compatibility
-agent-remote ego-browser requests <binding-id>
-agent-remote ego-browser cancel-request <binding-id> <request-ledger-id> [--yes]
-agent-remote ego-browser revoke [<binding-id>] [--binding-generation <generation>] [--yes]
-agent-remote ego-browser delete-binding <binding-id> [--yes]
-agent-remote ego-browser delete-device <device-id> [--yes]
-agent-remote logout [--no-revoke-remote]
+agent-remote skill list
+fclaude list
+fclaude new
+fclaude attach <session-id>
+fclaude forward <remote-port>
 ```
 
-Every command and nested command provides `--help`. Runtime output supports
-`--color auto|always|never`; `auto` also honors `NO_COLOR` and `TERM=dumb`.
-Errors, warnings, successful actions, section headings, details, and status
-tables use consistent terminal styling.
+Use `--help` for the exact current schema. `agent-remote` owns shared state; `fclaude` owns the remote Claude launcher and session-facing commands. Passwords, tokens, MFA codes and private keys use controlled input or the platform credential store and are never placed in argv or desktop state.
 
-Claude login links are automatically copied to the local clipboard during first account binding
-and subsequent logins in `fclaude` / `agent-remote attach`. For the connection command shown by
-`account bind` / `account status`, use the packaged `ssh` on your PATH (not `/usr/bin/ssh`).
-The CLI recognizes the completed login screen, joins wrapped links, and copies each new link once;
-ordinary SSH, sync, redirected output, and `--print-only` do not copy anything.
+## Shared state and operation safety
 
-Copying uses macOS `pbcopy`, Windows PowerShell `Set-Clipboard`, WSL's Windows clipboard,
-or Linux `wl-copy` / `xclip` / `xsel`. This works independently of the desktop terminal brand.
-If no desktop clipboard is available, or the CLI itself runs over SSH, it sends OSC 52 to the
-terminal, with tmux / screen passthrough. That fallback requires terminal clipboard support
-and permission; it reports a request, not confirmed success. The displayed link remains available
-if copying is blocked. Login URLs are not saved to local files or logs. Set
-`AGENT_REMOTE_LOGIN_CLIPBOARD=0` to disable automatic copying.
+The selected `AGENT_REMOTE_HOME` (or `--home`) is the authority for configuration, local SQLite state and credential references. The CLI persists caller-generated request keys and bounded public receipts for operations that can outlive a process. After a transport failure, status queries use the original key and exact context; mutations are never replayed by guessing the latest object or generating a replacement key.
 
-With an updated Node and CLI, drag over Claude's response and release the mouse to copy the
-selection to your local clipboard. Normal clicks and wheel events keep their existing behavior.
-The CLI handles tmux's OSC 52 writes through the same native clipboard backends, including terminals
-without native OSC 52 support. Selections preserve Unicode, indentation, and newlines, up to 64 KiB.
-Clipboard read requests are discarded; selected text is never written to local files or logs.
-Use your terminal's native selection modifier (commonly Shift; Option in iTerm2) to bypass tmux.
-Keyboard selection remains available: Ctrl+B, then `[` opens managed history mode; use arrows or
-PageUp/PageDown, Space to start a selection, Enter/Y to copy, and Esc/Q to return to Claude.
-Command prompts, window creation, menus and session switching are disabled in managed tmux.
-Set `AGENT_REMOTE_CLIPBOARD=0` to disable the CLI selection bridge independently of login-link copying.
-For an attached `fclaude` session, the CLI also bridges image and file
-attachments on macOS, Linux, WSL, and Windows. Use the terminal's paste shortcut (or Ctrl+V when
-the terminal forwards it) for an image/file clipboard, or drag files into the terminal. The CLI
-streams a bounded archive over the existing authorized SSH gateway, verifies SHA-256 and the remote
-acknowledgement, then inserts its remote paths. Attachments live under the account's
-`.agent-remote-attachments` directory, outside the project and Claude configuration; Native exposes
-it under `/account`, while Docker Sandbox uses the mounted account path. No attachment Mutagen
-session or background transfer daemon is created. Each connection owns a separate temporary
-directory and reuses one owned SSH channel for successive uploads. EOF and detach remove its
-files automatically. Interrupted cleanup retains a private local receipt and retries on
-the next attachment transfer to the same account and SSH endpoint; another live terminal's files are never removed.
-Quoted/escaped multi-file drops and local file URIs are recognized atomically; plain filenames
-in ordinary text are not uploaded implicitly. Windows drive/UNC paths and WSL path translation
-preserve Unicode. PNG/JPEG/GIF/WebP keep their formats; BMP/TIFF are converted to PNG with
-8192-pixel dimension and 64 MiB decoder allocation limits. Linux image/file reads require
-`wl-paste` (Wayland) or `xclip` (X11); `xsel` supports text copying only. An SSH jump host never
-reads its own desktop clipboard on behalf of the local terminal.
-Ctrl+V must reach the CLI (raw or supported enhanced keyboard encoding); terminal shortcuts
-that consume image pastes cannot be intercepted. File drops require bracketed-paste framing.
-Ordinary text paste keeps its original bracketed-paste behavior, including pastes above 1 MiB. Images are limited to 64 MiB, files/directories to
-256 MiB and 10,000 entries per paste, and 32 paths. Local archives are removed automatically.
-The Node installer already provides the Python 3 interpreter used inside its existing user-isolated
-SSH sync sandbox; no additional public endpoint or server credential is needed.
-Set `AGENT_REMOTE_ATTACHMENTS=0` to turn off this input bridge and retain direct SSH terminal input.
-Upgrade both components and reattach Native sessions; legacy Docker terminals must be stopped
-and recreated (restart account binding for a login terminal). New panes retain 20,000 history lines.
-After SSH output closes, the CLI waits up to three seconds for the current and latest pending copy.
-Rejected or oversized selections ring the terminal bell; rejection/timeout details appear after
-leaving the TUI. A Node message means the selection was sent, not that local clipboard access succeeded.
+Session, account, configuration-import, runtime-recovery, sync, port-forward and device operations bind their request to the relevant user, server, device, workspace, node and generation fields. Unknown outcomes remain observable and require an explicit query or recovery action.
 
-Starting a new Claude process waits up to 30 seconds for a Mutagen synchronization cycle; failure,
-conflicts or cancellation prevent the launch. Resuming a running session does not repeat that wait.
-New startup arguments supplied when resuming are explicitly reported as unapplied; use `fclaude new`
-to apply them to a new process. A new terminal connection takes over from the old one. Ctrl+B then D
-detaches without stopping Claude; run `fclaude` again to reconnect. Startup commands are not replayed.
+## Desktop integration
 
-`agent-remote init` is the recommended first-run path. It guides the user through:
+The desktop uses two versioned CLI interfaces:
 
-- selecting the control-plane API URL
-- logging in with an existing agent-remote user account
-- registering the local device and SSH public key
-- checking managed external dependencies
-- fetching the default WireGuard configuration when available
+- `--desktop-schema` describes command nodes, parameters, client platforms and terminal capabilities.
+- `--desktop-control` exchanges JSONL requests, bounded progress events and one final result/error for structured read and mutation operations.
 
-The CLI initialization flow does not create users. Administrators create regular users from the admin console after the server has been bootstrapped.
+Sensitive flows such as login, device-code approval, credentials, account import and WireGuard execution remain inside the CLI. Desktop receives only the approved public projection. Commands without a dedicated structured page use a reviewed managed terminal workflow; schema discovery alone is not a claim that the remote operation succeeded.
 
-`agent-remote login` stores tokens in the platform credential store when available:
+## Remote operations
 
-On Servers supporting CLI sessions, user commands migrate a still-valid login to a
-remembered session and automatically rotate its short-lived access token. The default
-session lifetime is 30 days; expiry, revocation, or account disablement requires login
-again. Both credentials remain in the credential store, and logout revokes the session.
-Device registration also retains the user login needed for browser management. Older
-Servers retain their existing short-lived login behavior. Browser connect/resume still
-requires a separate full-trust confirmation.
+The CLI coordinates WireGuard, SSH, Mutagen and the server/node APIs. A remote Claude session is selected by exact session identity and attaches through the authorized Node gateway. Workspace synchronization distinguishes Server state, local Mutagen state, conflicts and Agent state. Port forwarding uses an owner-scoped caller key, a bounded local listener and a short-lived server connection authorization.
 
-- macOS: Keychain through the `security` command
-- Linux: Secret Service through `secret-tool`
-- Windows: Windows Credential Manager through the native Win32 API
-
-When the configured server and active device registration are unchanged, logging in again reuses
-that device, refreshes its metadata and SSH public key, and replaces its device token. A new device
-is registered only when no active local registration is configured. This keeps existing workspaces
-bound to the same device across CLI upgrades.
-
-If the system credential store is unavailable, the CLI falls back to files under the agent-remote home directory with owner-only permissions. SQLite stores only local metadata and never stores access tokens or tool account login state.
-
-## Local Paths
-
-By default the CLI uses `~/.config/agent-remote/` on macOS and Linux, and
-`%LOCALAPPDATA%\agent-remote\` on Windows:
-
-```text
-~/.config/agent-remote/
-```
-
-Override it for tests or custom installs:
-
-```sh
-AGENT_REMOTE_HOME=/path/to/state agent-remote doctor --fix
-```
-
-Managed external dependencies are expected under:
-
-```text
-~/.config/agent-remote/bin/
-~/.config/agent-remote/dependencies/manifest.json
-```
-
-The four macOS/Linux release targets bundle managed `mutagen`, `tmux`, `wg`, and `wg-quick` binaries plus SSH/SCP wrappers for managed host verification. macOS packages additionally bundle `wireguard-go`. Windows x64 and ARM64 packages bundle native CLI executables, Mutagen, `ssh.exe` and `scp.exe` compatibility proxies, and the architecture-specific official WireGuard for Windows MSI. That MSI provides the Windows equivalents of `wg`, `wg-quick`, and the tunnel backend (the tunnel manager, `wg.exe`, and Wintun driver). `tmux` runs on the remote Linux node and has no native Windows client role.
-
-The current implementation records and checks the manifest for Mutagen and WireGuard helpers. Release packages include the managed Mutagen binary and WireGuard helper for each supported platform.
-
-## Local Device Control
-
-`agent-remote device install` accepts an explicit local release ZIP archive or an app bundle named `Agent Remote Device.app`. ZIP archives are size- and path-validated, copied into a private temporary directory, and automatically extracted; they must contain only the fixed app bundle at the archive root. The community release CLI then verifies the fixed bundle identifier, the self-signed certificate fingerprint pinned into the CLI, the Network Broker and GUI Executor XPC services signed by that same identity, and the complete code signature before and after staging. It removes quarantine only from the verified staging bundle and atomically installs it at `~/Applications/Agent Remote Device.app`. Reinstalling the same semantic version and upgrading are allowed; downgrades and missing or malformed bundle versions are rejected. It never downloads or executes an installer URL supplied by a project or API response. Community builds obtain the certificate fingerprint only from the protected `production-community-release` environment and report Gatekeeper as `manual trust`; they do not claim Apple notarization.
-
-Use `agent-remote device status` for the installed version, signature, XPC, and process state. `agent-remote device launch` verifies the installed bundle and the shared device credential before opening the local APP; the APP then lists the owning user's running Claude sessions and performs claim, rebind, and local approval itself. `agent-remote device diagnose` performs the same strict checks and exits non-zero when the installation is not trusted. `agent-remote device uninstall` requires the app to be stopped, removes its fixed app bundle, shared Broker credential, TCC grants, and bundle-owned sandbox data, but does not revoke the remote registration. It refuses to proceed while hidden-application recovery state remains. `agent-remote device revoke` requires a stored user token, asks for confirmation unless `--yes` is supplied, revokes the selected or active device through the control plane, and removes its local device credential and refresh state. `agent-remote device rotate-token` rotates only the active device through the control plane, never prints the returned token, and immediately replaces the local platform credential and shared Network Broker credential; stop active device-control sessions before using it.
-
-## Node Enrollment
-
-`agent-remote node install --node <node-id-or-prefix>` authenticates the fixed Node release checksum
-and Sigstore workflow identity on the control workstation, transfers its archive over a dedicated SSH
-stdin, runs the staged installer, and only then asks the control plane for a short-lived join code. The
-code is sent over a separate SSH stdin and never enters argv, environment variables, URLs, logs, or
-terminal output. A retry may reuse a byte-identical staged archive, but it always reruns the installer
-before issuing a code. The pinned `0.2.23` release is accepted only with its tag-bound assets
-and Sigstore evidence.
-
-## Ego Browser Bridge Control
-
-The normal flow is `agent-remote ego-browser setup`, followed by `agent-remote ego-browser connect` when the user is ready to select and authorize one remote session. `setup` reuses the server and credential from `agent-remote login`, discovers the verified release profile and certificate pin, ensures the existing Device identity, and never claims a session. Ordinary use does not require a Server URL, registration token, Device ID, or certificate digest.
-
-Running `setup`, `repair`, or `upgrade` pauses this Mac's existing executable bindings before restarting the Bridge and preserves their recovery generation. If a paused binding remains, follow its `resume` instruction; otherwise use `connect`. A failed pause stops installation. Repeating `claim` or `connect` checks the retained binding before changing local admission: a live binding remains usable, and a paused binding offers `resume`. If Server state is active but local execution is closed, `status` directs you to `pause` that binding before `resume`. The advanced `register` command requires a verified 64-character certificate fingerprint through its flag or `EGO_BROWSER_SIGNER_CERTIFICATE_SHA256`; missing or malformed values produce `signer_certificate_required` or `signer_certificate_invalid` in both text and JSON output before loading login credentials.
-
-With an existing verified installation, `setup` and `repair` run only that release's owner-only
-installer and never upgrade it. A missing installation or an explicit `upgrade` uses a bootstrap
-pinned by commit and SHA-256; that bootstrap may request only the Bridge version, repository,
-profile, and signing certificate selected by `release-dependencies.json`. It receives no Server URL,
-token, session ID, or full-trust claim. Missing or invalid release assets and Sigstore evidence
-fail closed.
-
-Repair pauses through the Device Client so the local handoff retains the new binding generation.
-Lifecycle recovery verifies the same binding, device, and tool session before using a newer Server
-generation; explicit stale generations still fail closed.
-
-After installation, `upgrade` explicitly re-enrolls the retained device to update the Server's
-release metadata without changing its ID, generation, or keys. The Server must support canonical
-same-identity re-enrollment; ordinary `setup` and `repair` cannot update release metadata.
-
-Local trust is stored owner-only against the exact profile ID, profile version, Bridge version, and
-certificate pin. Routine `repair` reuses an exact match without `--yes`; first use or any tuple change
-requires confirmation, and non-interactive use returns `trust_confirmation_required` unless the
-caller explicitly supplies `--yes`.
-
-`connect` and `resume` show the full-trust warning and require explicit confirmation. `pause` is recoverable: it preserves the paused binding for a separately confirmed `resume` at a new binding generation. `stop` is terminal and requires a fresh `connect`. These lifecycle commands resolve the active handoff or one unambiguous candidate when IDs are omitted and fail closed instead of guessing. Browser scripts run as the current macOS user without an App Sandbox and can access files, network, login data, subprocesses, and any ego lite Tab or Task Space; cancellation stops supervised work but cannot undo side effects or guarantee cleanup of deliberately detached processes.
-
-`register`, explicit `--server-url`, and `--signer-certificate-sha256` remain advanced compatibility surfaces for custom or older releases. `register` still passes the stored token to the Device Client over stdin, so it never appears in process arguments or CLI output. `status` shows local Bridge devices and bindings, while `status <binding>` also shows that binding's active requests. Use `requests <binding>` to refresh the active request ledger and `cancel-request <binding> <request-ledger-id>` to stop only that exact execution without invalidating the binding. Binding, request, claim-session, and deletion identifiers accept unique hexadecimal prefixes; `--no-trunc` prints full values. `delete-binding` permanently removes a terminal binding and its retained request ledger after revocation delivery has completed. `delete-device` permanently removes a revoked device after all of its binding history has been deleted. Both deletion commands ask for confirmation unless `--yes` is supplied.
-
-Deletion before revocation or termination returns `device_not_revoked` or `binding_not_terminal`
-with a recovery action, even with `--yes`. Rejected identity operations report the observed local
-admission without closing it; unverified connection and availability fields remain `null`.
-
-Add global `--json` for machine-readable lifecycle output. Successful mutations, status, binding
-lists, and request lists each emit exactly one JSON document; JSON mode never prompts or guesses a
-candidate. The projection deliberately excludes credentials, keys, scripts, page data, cookies,
-URLs, and relay ciphertext.
-
-## WireGuard and SSH
-
-`agent-remote wireguard config` creates or reuses a local X25519 private key, stores it in the platform credential store (with a `0600` file fallback), enrolls only its public key with the control plane, and writes `wireguard/agent-remote.conf` under the local agent-remote home. The generated tunnel uses an MTU of `1000` to avoid silent SSH key-exchange stalls on paths whose effective MTU is lower than WireGuard's platform default. The config uses `0600` permissions on Unix; on Windows, only the current user has full control and the WireGuard `LocalSystem` tunnel service has read access. Running the command repairs devices that were registered without a WireGuard peer. The private key is never sent to the server.
-
-`agent-remote wireguard check|up|down` calls the managed `agent-remote-wireguard` helper and supports `--dry-run` for diagnostics. `agent-remote wireguard status` displays the active interfaces and peer runtime state reported by `wg show`, including endpoints, latest handshakes, transfer counters, and keepalive settings. On macOS and Linux, it automatically retries through `sudo` when the kernel denies an unprivileged status query. Release packages provide the required managed WireGuard tools. On Windows, the release includes the official WireGuard for Windows MSI and the helper controls its tunnel service with `/installtunnelservice` and `/uninstalltunnelservice`; `status`, `up`, and `down` automatically request elevation through a UAC prompt when needed.
-
-`agent-remote attach <id>` asks the control plane for a session-specific SSH authorization, waits up to 30 seconds for device-scoped SSH key synchronization to finish on the node, and then uses local `ssh` to run the node-side forced command. Windows uses the built-in OpenSSH Client optional feature. The former `--session-id <id>` form remains supported for compatibility.
-
-## Workspace Sync
-
-`agent-remote sync ensure` identifies the current directory, asks before creating a new remote sync relationship, registers the workspace with the control plane, creates a sync session, and starts the managed Mutagen session.
-
-Before starting Mutagen, the CLI waits for the node to finish preparing the remote workspace. Managed sync sessions use directory mode `0770` and file mode `0660` so the account-specific Native Runtime identity can access the workspace without making it world-accessible.
-
-Useful commands:
-
-```sh
-agent-remote sync ensure --yes
-agent-remote sync status --fail-on-conflict
-agent-remote sync pause
-agent-remote sync resume
-agent-remote sync resolve
-agent-remote sync reset
-```
-
-The CLI uses the managed `bin/mutagen` binary from the agent-remote home or a sibling packaged binary. Mutagen and direct attach SSH connections use an agent-remote-managed `known_hosts` file and automatically trust new WireGuard endpoint keys while continuing to reject changed keys. After an upgrade introduces a new managed SSH environment, the CLI restarts the Mutagen daemon once so that it inherits the managed proxy path. `.git` sync is enabled by default for project workspaces, while the machine-local Git index, lock files, hooks, worktrees, and common build/cache directories are excluded. Mutagen creation includes an initial flush so the remote runtime can build its own Git index from a complete workspace snapshot. `sync ensure` recreates a missing local Mutagen session when the control-plane relationship is still active. It also repairs stale local Workspace and Sync IDs after their control-plane resources were deleted.
-
-## Session Port Forwarding
-
-Forward one Native session loopback TCP port to this device without publishing a node or container port:
-
-```sh
-agent-remote forward 5173 --session <session-id> --local-port auto --open
-fclaude forward 3000
-agent-remote forward list
-agent-remote forward stop <forward-id>
-agent-remote forward stop --session <session-id> --all
-```
-
-The local listener binds only `127.0.0.1` and, when available, `::1`. The default local port matches the remote port; use `--local-port auto` when it is occupied. One restricted SSH stdio tunnel multiplexes HTTP, WebSocket/HMR, SSE, gRPC, and ordinary TCP connections. OpenSSH `-L/-R/-D/-W`, arbitrary targets, public binds, and token persistence remain disabled. A disconnected tunnel obtains a new one-time token and reconnects while preserving the local listener; existing streams are not replayed.
-
-Run the remote application on its runtime loopback, for example `npm run dev -- --host 127.0.0.1`. The current release supports Native Runtime sessions only and reports a clear capability error for Docker Sandbox sessions.
-
-## Tool Accounts
-
-`agent-remote account create` creates a remote tool-account record with region, timezone, locale, and preferred node tags. The control plane pins each account to an available runtime backend; clients display that backend but cannot silently switch it. `agent-remote account bind` asks the control plane to create a temporary remote tmux login session on the selected node, and `agent-remote account verify` schedules the verifier task after login is complete. The CLI only stores the agent-remote device token; tool login state remains on the remote node account archive.
-
-`fclaude` displays the selected runtime backend when it creates or resumes a session. If the control plane reconciles a lost Native Runtime session as `interrupted`, `fclaude` creates a linked replacement session instead of attaching to the stale resource or replaying the previous command.
-
-`fclaude list` prints a compact, space-aligned table with 12-character session and node IDs and a suffix-preserving working directory. Use `fclaude list --no-trunc` for complete values. The displayed short session ID can be passed directly to `fclaude attach <id>`, `fclaude stop <id>`, or `fclaude delete <id>`; ambiguous prefixes are rejected. Deletion is restricted to stopped, interrupted, or failed sessions. `fclaude delete --all` deletes all sessions in those three states for the current user. Managed sessions whose Skill content is still pending return `STATE_PENDING` for both individual and bulk deletion. Keep the retained Node data and use `fclaude stop-status <operation-id> --wait` to observe saving before retrying deletion.
-
-`agent-remote account list` and `agent-remote credentials list` use the same compact ID convention and support `--no-trunc`. Displayed account and credential profile IDs can be used anywhere those IDs are accepted, including account binding, status, configuration import, default selection, and credential binding. `fclaude --account-id <id>` accepts the same account prefixes. Prefixes must contain at least four hexadecimal characters and must uniquely identify one item.
-
-`agent-remote account import-config --account <id>` waits for the selected node to finish writing the accepted Claude configuration and exits non-zero when the task fails, is cancelled, expires, or does not reach a terminal state within 120 seconds. The timeout message preserves the task ID because the remote task may still complete after the local wait ends. Use `--dry-run` to preview paths and `--include-resume-history` only when prompts, transcripts, and local paths are intentionally included. Add `--exclude-skills` to omit `~/.claude/skills` before file collection while importing other configuration. Plugin content and project history keep their existing selection rules; this option does not itself enable managed skill ownership.
-
-`connect` accepts the same displayed 12-character session ID as `fclaude list`, a unique hexadecimal prefix, or a full UUID (case-insensitive). An ambiguous prefix requires a more specific ID. Rejected lifecycle commands report the observed local admission; an unobserved connection state remains `null` in JSON. `request_not_active` means the requested execution has ended or is absent from the active ledger: refresh with the suggested `requests` command instead of repairing the Bridge. Ambiguous or malformed request IDs are reported separately.
+The WireGuard execution path is fail-closed: configuration bytes and plan/target digests are reviewed before an approved platform broker can perform `up` or `down`. The client does not fall back to sudo, runas, PATH helpers or an unverified process.
 
 ## Development
 
+Rust 2021 and the toolchain pinned by the repository are required. Run the full gate from the repository root:
+
 ```sh
+bash -n scripts/*.sh
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-```
-
-or:
-
-```sh
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 scripts/run-quality-checks.sh
 ```
 
-## Release Packaging
+Use temporary homes, loopback fixtures and disposable server/node data. Never run acceptance against a production credential or persist a real private key in test output.
 
-Build macOS and Linux CLI archives:
+## Install and package
 
-```sh
-VERSION="$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "agent-remote-cli") | .version')" \
-  scripts/package-release.sh
-```
-
-Build a Windows x64 archive from PowerShell on Windows (pass `-Target aarch64-pc-windows-msvc` for ARM64):
-
-```powershell
-$version = ((cargo metadata --format-version=1 --no-deps | ConvertFrom-Json).packages | Where-Object name -eq "agent-remote-cli").version
-./scripts/package-release.ps1 -Version $version
-```
-
-The release archive includes:
-
-- `agent-remote`
-- `fclaude`
-- `agent-remote-wireguard`
-- managed `mutagen`
-- dependency manifest and third-party notices
-
-The packaged files should be installed into the agent-remote home or placed on `PATH` by the platform installer.
-
-GitHub Actions runs the same packaging flow for `v*` tags and uploads the archives to the GitHub Release. The `install-smoke` workflow also builds and installs native packages in isolated directories on Windows, Linux, and macOS, verifies every manifest checksum and dependency file, and executes the installed CLI binaries. On Windows it additionally installs the packaged WireGuard MSI and verifies both its command-line entry point and the `agent-remote-wireguard` integration.
-
-Install the latest release directly:
+Install the latest published CLI on Unix-like hosts:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.sh | bash
 ```
 
-Install a specific version or customize paths:
+Pin a version or choose the home and link directory explicitly:
 
 ```sh
 VERSION=VERSION_TO_INSTALL
@@ -350,62 +95,86 @@ curl -fsSL https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/
   bash -s -- --version "$VERSION" --home ~/.config/agent-remote --bin-dir ~/.local/bin
 ```
 
-Install a downloaded release archive:
+On Windows, download `scripts/install.ps1` and run it in PowerShell. Use
+`-InstallPrerequisites` only when the OpenSSH Client or the packaged WireGuard
+dependency is missing; it may require elevation. To build a release archive:
+
+```sh
+VERSION="$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "agent-remote-cli") | .version')" \
+  scripts/package-release.sh
+```
+
+Install a downloaded release archive with its bundled script:
 
 ```sh
 ./install.sh
 ```
 
-Install on x64 or ARM64 Windows from PowerShell:
+On Windows, the equivalent installer invocation is:
 
 ```powershell
 Invoke-WebRequest https://raw.githubusercontent.com/Agent-Remote/agent-remote-cli/main/scripts/install.ps1 -OutFile install.ps1
 .\install.ps1 -InstallPrerequisites
 ```
 
-`-InstallPrerequisites` installs the Windows OpenSSH Client optional feature and the bundled official WireGuard package when they are missing, and may require an elevated PowerShell. WireGuard installation does not require `winget` or another network download. Omit the option when both are already installed. During an upgrade, the installer detects a Mutagen daemon running from the managed installation, stops it before replacing the locked executable, and restarts it afterward; unrelated Mutagen installations are not stopped. The installer adds `%LOCALAPPDATA%\agent-remote\bin` to the user `PATH`; open a new terminal after installation.
+The archive contains the CLI, managed helpers, dependency manifest, checksums
+and third-party notices. Installation never replaces a production home without
+the user's explicit choice.
 
-The installer copies managed binaries into `AGENT_REMOTE_HOME/bin`, writes the dependency manifest, and links `agent-remote`, `fclaude`, and `agent-remote-wireguard` into `~/.local/bin` by default. It can also override the GitHub repository, version, target, OS, architecture, home directory, link directory, and symlink/copy behavior.
+## Release
 
-## Skill Management
+`prepare-release.sh` and the package workflows build the CLI and managed helpers. Release artifacts must include their exact version, source commit, dependency notices and checksums. Native broker acceptance is separate from contract tests and must run on the target host. Do not publish a release until coordinated Server, Node and desktop gates are green.
+
+## Documentation
+
+Current contracts are grouped under `docs/`:
+
+- `desktop-control.md`, `desktop-schema.md`: structured desktop APIs.
+- `desktop-accounts.md`, `desktop-account-binding.md`, `desktop-account-import.md`, `desktop-account-defaults.md`: account flows.
+- `desktop-session-attach.md`, `desktop-sync.md`, `desktop-port-forward.md`: session and workspace flows.
+- `desktop-wireguard*.md`, `linux-wireguard-broker.md`, `macos-wireguard-broker.md`: network and broker flows.
+- `desktop-runtime-recovery.md`, `desktop-mutagen-environment.md`: recovery and shared service state.
+- `exact-session-attachment-transfer.md`, `verified-session-sync.md`: attachment and synchronization boundaries.
+
+These documents describe current contracts. Tests and code take precedence if a document is stale.
+
+## Script entry points
+
+The repository keeps the following installation, build, packaging and host
+acceptance entry points:
 
 ```sh
-agent-remote skill add ./my-skill --dry-run
-agent-remote skill add ./my-skill --yes
-agent-remote skill list
-agent-remote skill list --account-id ACCOUNT_UUID --effective
-agent-remote skill status --last
-agent-remote skill status --storage
-agent-remote skill --help
+# Build managed Mutagen and WireGuard helper inputs.
+scripts/build-managed-tools.sh
+# Prepare versioned release metadata and run release checks.
+scripts/prepare-release.sh
+# Build Unix release archives.
+VERSION="$(cargo metadata --format-version=1 --no-deps | jq -r '.packages[] | select(.name == "agent-remote-cli") | .version')" \
+  scripts/package-release.sh
+# Install the Linux/macOS broker and run native broker acceptance.
+scripts/install-macos-wireguard-broker.sh
+# Install the Linux broker when running the protected system service.
+scripts/install-linux-wireguard-broker.sh
+scripts/native-wireguard-broker-acceptance.sh
+# Install repository hooks for local development.
+scripts/install-githooks.sh
+# Repository quality and focused test gates.
+scripts/run-static-checks.sh
+scripts/run-tests.sh
+scripts/run-quality-checks.sh
 ```
 
-Skills belong to the authenticated remote user. Use `--account-id` for an account-specific installation;
-otherwise rules apply at user scope. Configuration changes affect future sessions, not existing snapshots.
-Inspect uncertain submissions by their original operation/key; timeout or interruption does not imply rollback.
-See the [shared guide](https://github.com/Agent-Remote/agent-remote/blob/main/docs/skill-manager.md)
-for Git/local installs, updates, rules, state recovery, export and troubleshooting, and
-[acceptance status](https://github.com/Agent-Remote/agent-remote/blob/main/docs/skill-acceptance-plan.md)
-for the remaining real Claude tests. Exact flags are available through each installed subcommand's `--help`.
+On Windows, use the PowerShell packaging and broker acceptance entry points:
 
-## Backend Migration Recovery
-
-```sh
-agent-remote account recover-runtime ACCOUNT_UUID --original-task migrate_tool_account_runtime:ACCOUNT_UUID:ORIGINAL_UUID --request-id RECOVERY_UUID
-agent-remote --json account recovery-status ACCOUNT_UUID --request-id RECOVERY_UUID
+```powershell
+./scripts/package-release.ps1 -Version $version
+./scripts/native-wireguard-broker-acceptance.ps1
 ```
 
-Administrator user login and full UUIDs are required. Retain the original task and chosen request UUID;
-status is read-only, and uncertain acceptance must be queried with the same key. Default recovery only
-verifies completed target evidence. `--verify-source` verifies an already completed source rollback;
-`--repair-source` explicitly repairs source permissions from original backup/baseline evidence. The two
-flags are mutually exclusive; the action is immutable per request. None erases the original failed task
-or overrides account disable. Incomplete/unknown evidence remains blocked. See the
-[shared recovery contract](https://github.com/Agent-Remote/agent-remote/blob/main/docs/skill-manager-wire-v1.md).
-JSON schemas are v1/default, v2/verify-source and v3/repair-source. A verified response exits 0 even when
-the reported recovery is pending/failed; inspect its status. Errors retain original IDs and acceptance state.
+`install.sh` and `install.ps1` are the end-user installers documented above;
+the other scripts are build or host verification tools and do not publish a
+release by themselves.
 
 ## License
 
-agent-remote-cli is licensed under GPL-3.0-only. See `LICENSE`.
-
-Third-party dependency notices are listed in `THIRD_PARTY_NOTICES.md`.
+GPL-3.0-only. See `LICENSE` and `THIRD_PARTY_NOTICES.md`.

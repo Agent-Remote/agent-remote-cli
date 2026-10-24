@@ -4,7 +4,8 @@ param(
     [Alias("Home")]
     [string]$AgentRemoteHome = $(if ($env:AGENT_REMOTE_HOME) { $env:AGENT_REMOTE_HOME } else { Join-Path $env:LOCALAPPDATA "agent-remote" }),
     [switch]$NoPathUpdate,
-    [switch]$InstallPrerequisites
+    [switch]$InstallPrerequisites,
+    [switch]$InstallBroker
 )
 
 $ErrorActionPreference = "Stop"
@@ -89,7 +90,7 @@ function Install-Package([string]$PackageDirectory) {
     $destinationBin = Join-Path $AgentRemoteHome "bin"
     $destinationDependencies = Join-Path $AgentRemoteHome "dependencies"
     New-Item -ItemType Directory -Force $destinationBin, $destinationDependencies | Out-Null
-    $packageFiles = @("agent-remote.exe", "fclaude.exe", "agent-remote-wireguard.exe", "mutagen.exe", "mutagen-agents.tar.gz", "scp.exe", "ssh.exe")
+    $packageFiles = @("agent-remote.exe", "fclaude.exe", "agent-remote-wireguard.exe", "agent-remote-wireguard-broker.exe", "mutagen.exe", "mutagen-agents.tar.gz", "scp.exe", "ssh.exe")
     foreach ($file in $packageFiles) {
         $source = Join-Path $PackageDirectory "bin/$file"
         if (-not (Test-Path $source -PathType Leaf)) { throw "Missing packaged file: $source" }
@@ -123,6 +124,34 @@ function Install-Package([string]$PackageDirectory) {
         }
         if (($env:Path -split ";") -notcontains $destinationBin) { $env:Path += ";$destinationBin" }
     }
+
+    if ($InstallBroker) { Install-WireGuardBroker $PackageDirectory }
+}
+
+function Install-WireGuardBroker([string]$PackageDirectory) {
+    $source = Join-Path $PackageDirectory "bin/agent-remote-wireguard-broker.exe"
+    if (-not (Test-Path $source -PathType Leaf)) { throw "Missing packaged broker: $source" }
+    $programRoot = Join-Path $env:ProgramFiles "Agent-Remote"
+    $brokerRoot = Join-Path $programRoot "bin"
+    $brokerPath = Join-Path $brokerRoot "agent-remote-wireguard-broker.exe"
+    $stateRoot = Join-Path $env:ProgramData "Agent-Remote/WireGuard"
+    New-Item -ItemType Directory -Force $brokerRoot, (Join-Path $stateRoot "configs"), (Join-Path $stateRoot "journal") | Out-Null
+    Copy-Item $source $brokerPath -Force
+    & icacls.exe $programRoot /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to protect the broker installation directory" }
+    & icacls.exe $stateRoot /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to protect the broker state directory" }
+    $existing = Get-Service -Name "AgentRemoteWireGuardBroker" -ErrorAction SilentlyContinue
+    if ($existing) {
+        if ($existing.Status -ne "Stopped") { Stop-Service -Name $existing.Name -Force -ErrorAction Stop }
+        & sc.exe delete AgentRemoteWireGuardBroker | Out-Null
+        Start-Sleep -Milliseconds 250
+    }
+    New-Service -Name "AgentRemoteWireGuardBroker" -BinaryPathName "`"$brokerPath`"" -DisplayName "Agent Remote WireGuard Broker" -Description "Protected LocalSystem broker for reviewed agent-remote WireGuard operations" -StartupType Automatic | Out-Null
+    & sc.exe sdset AgentRemoteWireGuardBroker "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to protect the broker service ACL" }
+    Start-Service -Name "AgentRemoteWireGuardBroker"
+    Write-Host "Protected WireGuard broker installed as LocalSystem service AgentRemoteWireGuardBroker"
 }
 
 function Install-SystemPrerequisites([string]$PackageDirectory) {

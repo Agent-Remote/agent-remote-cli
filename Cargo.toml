@@ -15,6 +15,10 @@ name = "agent-remote-wireguard"
 path = "src/bin/agent-remote-wireguard.rs"
 
 [[bin]]
+name = "agent-remote-wireguard-broker"
+path = "src/bin/agent-remote-wireguard-broker.rs"
+
+[[bin]]
 name = "fclaude"
 path = "src/bin/fclaude.rs"
 
@@ -49,7 +53,8 @@ tokio-util = { version = "0.7", features = ["io"] }
 toml = "0.8"
 unicode-width = "0.2"
 unicode-normalization = "0.1"
-uuid = "1.18"
+uuid = { version = "1.18", features = ["v4"] }
+zeroize = "1"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 cap-std = "3.4.5"
@@ -65,16 +70,29 @@ image = { version = "0.25", default-features = false, features = ["bmp", "tiff",
 libc = "0.2"
 security-framework = "=3.2.0"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# The Linux WireGuard bridge speaks directly to the system D-Bus.  There is no
+# PATH-selected busctl/pkcheck fallback: a missing system bus or broker remains
+# an unavailable execution bridge.
+zbus = { version = "6.0", default-features = false, features = ["proxy", "service", "tokio-multithread"] }
+
 [target.'cfg(windows)'.dependencies]
 dunce = "1.0"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Security_Credentials",
+    "Win32_Storage_FileSystem",
     "Win32_System_JobObjects",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Console",
     "Win32_System_IO",
+    "Win32_System_Pipes",
     "Win32_System_Registry",
+    "Win32_System_Services",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

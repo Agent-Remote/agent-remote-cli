@@ -271,7 +271,14 @@ async fn ctrl_c_interrupts_status_http_without_replaying_creation() {
         (200, progress("reserved"), Duration::from_secs(5)),
     ])
     .await;
-    let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+    // macOS native certificate loading initializes CFBundle, which scans the executable's
+    // directory. A large Cargo deps directory can exhaust the readiness deadline before
+    // any request starts. Run the unchanged helper binary from an isolated directory.
+    let helper_dir = tempfile::tempdir().unwrap();
+    let current_exe = std::env::current_exe().unwrap();
+    let helper_exe = helper_dir.path().join(current_exe.file_name().unwrap());
+    tokio::fs::copy(&current_exe, &helper_exe).await.unwrap();
+    let child = tokio::process::Command::new(&helper_exe)
         .args(["--exact", "creation_interrupt_probe", "--nocapture"])
         .env("AGENT_REMOTE_TEST_TAKEOVER_URL", &server.url)
         .stdout(std::process::Stdio::piped())

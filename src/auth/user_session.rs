@@ -22,14 +22,35 @@ pub fn user_login_error() -> anyhow::Error {
     anyhow::anyhow!("error_code=login_required state=installed admission=unknown next_action=login next_command=agent-remote login stale=false")
 }
 
-async fn user_credential_lock(paths: &AppPaths, server_url: &str) -> Result<File> {
-    paths.ensure_base_dirs()?;
+pub(super) async fn user_credential_lock(paths: &AppPaths, server_url: &str) -> Result<File> {
+    user_credential_lock_mode(paths, server_url, true).await
+}
+
+pub(super) async fn user_credential_lock_existing(
+    paths: &AppPaths,
+    server_url: &str,
+) -> Result<File> {
+    user_credential_lock_mode(paths, server_url, false).await
+}
+
+async fn user_credential_lock_mode(
+    paths: &AppPaths,
+    server_url: &str,
+    create: bool,
+) -> Result<File> {
+    if create {
+        paths.ensure_base_dirs()?;
+    }
     let name = format!(
         "user-session-{:x}.lock",
         Sha256::digest(server_url.as_bytes())
     );
     let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
+    options
+        .read(true)
+        .write(true)
+        .create(create)
+        .truncate(false);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -136,23 +157,30 @@ async fn load_locked(store: &SecretStore, server_url: &str) -> Result<Option<Str
     Ok(Some(result))
 }
 
-pub async fn logout_user(paths: &AppPaths, server_url: &str, revoke: bool) -> Result<()> {
+pub(super) async fn logout_with_status(
+    paths: &AppPaths,
+    server_url: &str,
+    revoke: bool,
+) -> Result<super::logout::CredentialLogout> {
+    use super::logout::{CredentialLogout, Revocation};
     let _lock = user_credential_lock(paths, server_url).await?;
     let store = SecretStore::new(paths.clone());
-    let result = if revoke {
+    let remote = if revoke {
         match load_locked(&store, server_url).await {
-            Ok(Some(token)) => ApiClient::new(server_url.to_owned())?
-                .logout(&token)
-                .await
-                .map_err(anyhow::Error::from),
-            Ok(None) => Ok(()),
-            Err(error) => Err(error),
+            Ok(Some(token)) => match super::logout::revoke_token(server_url, &token).await {
+                Ok(()) => Revocation::Confirmed,
+                Err(_) => Revocation::Unconfirmed,
+            },
+            Ok(None) => Revocation::NotPresent,
+            Err(_) => Revocation::Unconfirmed,
         }
     } else {
-        Ok(())
+        Revocation::NotRequested
     };
-    store.delete_secret(&user_token_key(server_url))?;
-    result
+    Ok(CredentialLogout {
+        local_removed: store.delete_secret_confirmed(&user_token_key(server_url)),
+        remote,
+    })
 }
 
 fn refresh_error(error: ApiError) -> anyhow::Error {
