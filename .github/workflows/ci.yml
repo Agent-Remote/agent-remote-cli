@@ -66,13 +66,19 @@ jobs:
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
+        include:
+          - os: ubuntu-latest
+            test-threads: "6"
+          - os: macos-14
+            test-threads: "4"
+          - os: windows-latest
+            test-threads: "4"
     steps:
       - uses: actions/checkout@v7.0.0
       - uses: dtolnay/rust-toolchain@stable
@@ -81,6 +87,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.2
         with:
           key: ci-${{ matrix.os }}
+          cache-all-crates: true
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.146
@@ -95,11 +102,14 @@ jobs:
       - name: Install cargo-llvm-cov
         if: matrix.os == 'ubuntu-latest'
         uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Generate coverage report
+      - name: Generate coverage report and test
         if: matrix.os == 'ubuntu-latest'
         run: |
-          cargo llvm-cov nextest --workspace --fail-under-lines 45 --lcov --output-path lcov.info --test-threads 8 --no-fail-fast
-          cargo test --workspace --doc
+          cargo llvm-cov nextest --workspace --fail-under-lines 45 --lcov --output-path lcov.info --test-threads ${{ matrix.test-threads }} --no-fail-fast
+          cargo test --workspace --doc --test-threads ${{ matrix.test-threads }}
+      - name: Run tests (non-ubuntu)
+        if: matrix.os != 'ubuntu-latest'
+        run: cargo nextest run --workspace --test-threads ${{ matrix.test-threads }} --no-fail-fast
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v7.0.0
