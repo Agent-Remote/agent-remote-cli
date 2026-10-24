@@ -77,7 +77,7 @@ async fn cancellation_drops_the_whole_process_group() {
     command
         .args([
             "-c",
-            "touch \"$1\"; (sleep 0.5; touch \"$2\") & wait",
+            "(touch \"$1\"; sleep 0.5; touch \"$2\") & wait",
             "fixture",
         ])
         .arg(&ready)
