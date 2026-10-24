@@ -273,7 +273,7 @@ fn validate_device_archive(path: &Path) -> Result<()> {
             .enclosed_name()
             .context("device archive contains an unsafe member path")?;
         if entry
-            .name()
+            .name()?
             .split('/')
             .any(|component| component == "." || component == "..")
             || !enclosed_name.starts_with(app_root)

@@ -7,7 +7,7 @@ use std::sync::{
 };
 
 use serde::{Deserialize, Serialize};
-#[cfg(any(unix, windows, test))]
+#[cfg(any(unix, test))]
 use sha2::{Digest, Sha256};
 
 use super::{configuration::ConfigError, status};

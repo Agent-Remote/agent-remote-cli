@@ -279,7 +279,7 @@ impl Connection {
             if entry.is_dir() {
                 continue;
             }
-            let raw_name = entry.name().replace('\\', "-");
+            let raw_name = entry.name()?.replace('\\', "-");
             let leaf = raw_name.rsplit('/').next().unwrap_or_default();
             let name = format!("{count}-{leaf}");
             if leaf.is_empty() || name.len() > 255 || name.chars().any(char::is_control) {

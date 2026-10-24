@@ -56,7 +56,7 @@ unicode-normalization = "0.1"
 uuid = { version = "1.18", features = ["v4"] }
 zeroize = "1"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 cap-std = "3.4.5"
 cap-fs-ext = "3.4.5"
 yaml-rust2 = { version = "0.10", default-features = false }

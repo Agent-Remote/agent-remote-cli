@@ -239,8 +239,9 @@ pub mod service {
             }
 
             let _guard = self.claim_request(&request.request_id)?;
-            let config = ExecutionConfig::from_transfer(request.config_bytes, &request.config)
-                .map_err(|error| denied(error.0))?;
+            let config =
+                ExecutionConfig::from_transfer(request.config_bytes.clone(), &request.config)
+                    .map_err(|error| denied(error.0))?;
             let before = target::observe_native_for_broker(&request.logical_name);
             let expected = match request.action.as_str() {
                 "up" if before.state == TargetState::Absent => TargetState::Present,
@@ -373,7 +374,7 @@ pub mod service {
         connection: &Connection,
         peer: &DbusPeerObservation,
     ) -> Result<PolkitAuthorizationObservation, &'static str> {
-        use zbus::zvariant::{OwnedValue, Value};
+        use zbus::zvariant::{OwnedVariant, Variant};
         let authority = Proxy::new(
             connection,
             "org.freedesktop.PolicyKit1",
@@ -385,12 +386,12 @@ pub mod service {
         let mut subject_props = HashMap::new();
         subject_props.insert(
             "pid".to_owned(),
-            OwnedValue::try_from(Value::from(peer.pid))
+            OwnedVariant::try_from(Variant::from(peer.pid))
                 .map_err(|_| "wireguard_linux_broker_polkit_invalid")?,
         );
         subject_props.insert(
             "start-time".to_owned(),
-            OwnedValue::try_from(Value::from(peer.start_time_ticks))
+            OwnedVariant::try_from(Variant::from(peer.start_time_ticks))
                 .map_err(|_| "wireguard_linux_broker_polkit_invalid")?,
         );
         let subject = ("unix-process".to_owned(), subject_props);
