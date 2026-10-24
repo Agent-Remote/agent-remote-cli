@@ -17,11 +17,11 @@ use windows_sys::Win32::Security::{
     PSID, TOKEN_QUERY, TOKEN_USER, WELL_KNOWN_SID_TYPE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, ReOpenFile,
-    BY_HANDLE_FILE_INFORMATION, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_GENERIC_READ, FILE_ID_INFO,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL, WRITE_DAC,
-    WRITE_OWNER,
+    CreateFileW, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+    GetFinalPathNameByHandleW, ReOpenFile, BY_HANDLE_FILE_INFORMATION, FILE_ALL_ACCESS,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_GENERIC_READ, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING, READ_CONTROL, VOLUME_NAME_DOS, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -81,6 +81,16 @@ fn user_sid(buffer: &[usize]) -> PSID {
 
 pub(super) fn restrict(file: &File, system_read: bool) -> Result<()> {
     // Request ACL rights on the same kernel file object, never a mutable path.
+    // ReOpenFile is the ideal path, but Windows refuses to widen a read-only
+    // fixture handle on some runner filesystems. In that case reopen the
+    // kernel-resolved name and compare the native file identity before using
+    // the ACL handle. This keeps the fallback tied to the object the caller
+    // supplied instead of trusting an arbitrary mutable path.
+    let acl_file = acl_handle(file)?;
+    restrict_handle(&acl_file, system_read)
+}
+
+fn acl_handle(file: &File) -> Result<File> {
     let raw = unsafe {
         ReOpenFile(
             file.as_raw_handle(),
@@ -89,8 +99,56 @@ pub(super) fn restrict(file: &File, system_read: bool) -> Result<()> {
             0,
         )
     };
+    if raw != INVALID_HANDLE_VALUE {
+        return Ok(unsafe { File::from_raw_handle(raw) });
+    }
+
+    let original = identity(file)?;
+    let mut capacity = 512usize;
+    let mut path = Vec::<u16>::with_capacity(capacity);
+    loop {
+        path.resize(capacity, 0);
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                path.as_mut_ptr(),
+                path.len() as u32,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+            )
+        } as usize;
+        ensure!(length != 0, "cannot resolve file ACL identity");
+        if length < path.len() {
+            path.truncate(length);
+            break;
+        }
+        capacity = length.saturating_add(1);
+        ensure!(capacity <= 32768, "file ACL identity is too long");
+    }
+    let raw = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            null_mut(),
+        )
+    };
     ensure!(raw != INVALID_HANDLE_VALUE, "cannot obtain file ACL rights");
-    let acl_file = unsafe { File::from_raw_handle(raw) };
+    let reopened = unsafe { File::from_raw_handle(raw) };
+    ensure!(
+        identity(&reopened)? == original,
+        "file changed while opening ACL"
+    );
+    Ok(reopened)
+}
+
+// A directory handle opened with FILE_FLAG_BACKUP_SEMANTICS already carries
+// WRITE_DAC/WRITE_OWNER. ReOpenFile drops that directory flag on Windows and
+// fails with ERROR_INVALID_PARAMETER, so path-based directory preparation
+// applies the ACL directly to the original handle.
+fn restrict_handle(acl_file: &File, system_read: bool) -> Result<()> {
     let user = current_user()?;
     let mut system = [0usize; 16];
     let mut system_size = std::mem::size_of_val(&system) as u32;
@@ -173,7 +231,7 @@ pub(super) fn restrict_path(path: &Path, directory: bool, system_read: bool) -> 
     };
     ensure!(raw != INVALID_HANDLE_VALUE, "cannot open private path ACL");
     let file = unsafe { File::from_raw_handle(raw) };
-    restrict(&file, system_read)
+    restrict_handle(&file, system_read)
 }
 
 pub(super) fn identity(file: &File) -> Result<String> {
