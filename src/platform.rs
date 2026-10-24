@@ -233,10 +233,13 @@ pub fn replace_private_file(
     destination: &std::path::Path,
 ) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        FileRenameInfoEx, MoveFileExW, ReplaceFileW, SetFileInformationByHandle, FILE_RENAME_INFO,
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, REPLACEFILE_WRITE_THROUGH,
+        FileRenameInfoEx, MoveFileExW, ReplaceFileW, SetFileInformationByHandle, DELETE,
+        FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_RENAME_INFO, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        REPLACEFILE_WRITE_THROUGH,
     };
 
     let destination = std::path::absolute(destination)?;
@@ -245,18 +248,25 @@ pub fn replace_private_file(
         + name.len() * std::mem::size_of::<u16>();
     let mut info = vec![0u8; size];
     let rename = info.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    let rename_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE)
+        .open(staged.path())?;
     unsafe {
         (*rename).Anonymous.Flags = 0x0000_0003; // REPLACE_IF_EXISTS | POSIX_SEMANTICS
         (*rename).RootDirectory = std::ptr::null_mut();
         (*rename).FileNameLength = (name.len() * std::mem::size_of::<u16>()) as u32;
         std::ptr::copy_nonoverlapping(name.as_ptr(), (*rename).FileName.as_mut_ptr(), name.len());
         if SetFileInformationByHandle(
-            staged.as_file().as_raw_handle() as _,
+            rename_file.as_raw_handle() as _,
             FileRenameInfoEx,
             rename.cast(),
             size as u32,
         ) == 0
         {
+            drop(rename_file);
             let source: Vec<u16> = staged.path().as_os_str().encode_wide().chain([0]).collect();
             let target: Vec<u16> = destination.as_os_str().encode_wide().chain([0]).collect();
             let replaced = if destination.exists() {
