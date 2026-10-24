@@ -113,10 +113,7 @@ fn check_is_local_passive_and_returns_only_the_documented_snapshot() {
     let missing = fixture.check(None);
     assert_eq!(missing["home"], fixture.home.to_str().unwrap());
     assert_eq!(missing["config"]["state"], "missing");
-    let expected_path = std::path::PathBuf::from(format!(
-        "{}/wireguard/agent-remote.conf",
-        fixture.home.display()
-    ));
+    let expected_path = fixture.home.join("wireguard").join("agent-remote.conf");
     assert_eq!(missing["config"]["path"], expected_path.to_str().unwrap());
     assert!(missing["config"]["mtu"].is_null());
     assert!(missing["config"]["peer_count"].is_null());

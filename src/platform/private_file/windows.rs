@@ -13,8 +13,9 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     CreateWellKnownSid, EqualSid, GetAce, GetTokenInformation, IsValidAcl, IsValidSid, TokenUser,
     WinBuiltinAdministratorsSid, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
-    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    PSID, TOKEN_QUERY, TOKEN_USER, WELL_KNOWN_SID_TYPE,
+    CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
+    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID, TOKEN_QUERY, TOKEN_USER,
+    WELL_KNOWN_SID_TYPE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
@@ -87,7 +88,7 @@ pub(super) fn restrict(file: &File, system_read: bool) -> Result<()> {
     // the ACL handle. This keeps the fallback tied to the object the caller
     // supplied instead of trusting an arbitrary mutable path.
     let acl_file = acl_handle(file)?;
-    restrict_handle(&acl_file, system_read)
+    restrict_handle(&acl_file, system_read, false)
 }
 
 fn acl_handle(file: &File) -> Result<File> {
@@ -148,7 +149,7 @@ fn acl_handle(file: &File) -> Result<File> {
 // WRITE_DAC/WRITE_OWNER. ReOpenFile drops that directory flag on Windows and
 // fails with ERROR_INVALID_PARAMETER, so path-based directory preparation
 // applies the ACL directly to the original handle.
-fn restrict_handle(acl_file: &File, system_read: bool) -> Result<()> {
+fn restrict_handle(acl_file: &File, system_read: bool, directory: bool) -> Result<()> {
     let user = current_user()?;
     let mut system = [0usize; 16];
     let mut system_size = std::mem::size_of_val(&system) as u32;
@@ -163,10 +164,15 @@ fn restrict_handle(acl_file: &File, system_read: bool) -> Result<()> {
         } != 0,
         "cannot obtain LocalSystem identity"
     );
+    let inheritance = if directory {
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+    } else {
+        0
+    };
     let entry = |sid: PSID, rights| EXPLICIT_ACCESS_W {
         grfAccessPermissions: rights,
         grfAccessMode: SET_ACCESS,
-        grfInheritance: 0,
+        grfInheritance: inheritance,
         Trustee: TRUSTEE_W {
             TrusteeForm: TRUSTEE_IS_SID,
             TrusteeType: TRUSTEE_IS_USER,
@@ -231,7 +237,7 @@ pub(super) fn restrict_path(path: &Path, directory: bool, system_read: bool) -> 
     };
     ensure!(raw != INVALID_HANDLE_VALUE, "cannot open private path ACL");
     let file = unsafe { File::from_raw_handle(raw) };
-    restrict_handle(&file, system_read)
+    restrict_handle(&file, system_read, directory)
 }
 
 pub(super) fn identity(file: &File) -> Result<String> {
