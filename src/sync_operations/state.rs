@@ -14,13 +14,46 @@ pub(crate) fn identify(path: &str) -> Result<workspace::WorkspaceIdentity> {
     {
         return Err(Error::new("invalid_params"));
     }
-    // `identify_workspace` canonicalizes the directory and rejects links or
-    // non-directories. Compare the resulting object identity everywhere else
-    // in the sync flow; requiring the caller's lexical spelling to match the
-    // canonical string rejects equivalent Windows paths (`/` vs `\\`, drive
-    // casing, or the DOS path returned by a child process).
-    workspace::identify_workspace(Some(std::path::Path::new(path)))
-        .map_err(|_| Error::new("sync_target_changed"))
+    let mut identity = workspace::identify_workspace(Some(std::path::Path::new(path)))
+        .map_err(|_| Error::new("sync_target_changed"))?;
+    // Keep the caller's spelling in the protocol target so a reviewed request
+    // round-trips exactly. Windows has several equivalent spellings (slash
+    // direction, drive case, and the `\\?\` prefix), so compare filesystem
+    // identity rather than the display string before retaining it.
+    let canonical = identity
+        .local_path
+        .to_str()
+        .ok_or_else(|| Error::new("invalid_params"))?;
+    if !paths_equal(path, canonical) {
+        return Err(Error::new("sync_target_changed"));
+    }
+    identity.local_path = std::path::PathBuf::from(path);
+    Ok(identity)
+}
+pub(crate) fn paths_equal(left: &str, right: &str) -> bool {
+    #[cfg(windows)]
+    {
+        fn key(value: &str) -> String {
+            if let Ok(path) = dunce::canonicalize(std::path::Path::new(value)) {
+                return path
+                    .to_string_lossy()
+                    .replace('/', "\\")
+                    .to_ascii_lowercase();
+            }
+            let mut value = value.replace('/', "\\");
+            if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+                value = format!(r"\\{rest}");
+            } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+                value = rest.to_string();
+            }
+            value.to_ascii_lowercase()
+        }
+        key(left) == key(right)
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
 }
 pub(crate) fn snapshot(paths: &AppPaths, server: &str, key: &str) -> Result<SyncSnapshot> {
     LocalState::sync_snapshot(paths, server, key).map_err(|_| Error::new("state_unavailable"))
@@ -35,7 +68,7 @@ pub(crate) fn target(
         .ok_or_else(|| Error::new("invalid_params"))?
         .to_string();
     if let Some(workspace) = &snapshot.workspace {
-        if workspace.local_path != local_path || !valid_id(&workspace.id) {
+        if !paths_equal(&workspace.local_path, &local_path) || !valid_id(&workspace.id) {
             return Err(Error::new("sync_target_changed"));
         }
     }
@@ -68,7 +101,7 @@ pub(crate) fn validate_sync(sync: &SyncSessionData, target: &Target) -> Result<(
         || !valid_id(&sync.workspace_id)
         || sync.node_id.as_deref().is_some_and(|s| !valid_id(s))
         || target.workspace_id.as_ref() != Some(&sync.workspace_id)
-        || sync.local_path != target.local_path
+        || !paths_equal(&sync.local_path, &target.local_path)
         || target
             .sync_session_id
             .as_ref()

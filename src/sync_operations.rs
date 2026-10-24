@@ -348,7 +348,7 @@ async fn ensure(
     let valid = state::valid_id(&workspace.id)
         && workspace.device_id == a.token.device_id
         && workspace.project_key == r.target.project_key
-        && workspace.local_start_path == r.target.local_path
+        && state::paths_equal(&workspace.local_start_path, &r.target.local_path)
         && r.target
             .workspace_id
             .as_ref()

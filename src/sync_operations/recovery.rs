@@ -56,7 +56,7 @@ async fn missing(a: &Authority, target: &Target) -> Result<&'static str> {
             if w.id != *id
                 || w.device_id != a.token.device_id
                 || w.project_key != target.project_key
-                || w.local_start_path != target.local_path
+                || !state::paths_equal(&w.local_start_path, &target.local_path)
             {
                 return Err(Error::new("sync_target_changed"));
             }
