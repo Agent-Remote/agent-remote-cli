@@ -284,15 +284,22 @@ pub fn replace_private_file(
                     std::ptr::null(),
                 ) != 0
             } else {
-                MoveFileExW(
+                false
+            };
+            // ReplaceFileW has stricter requirements than MoveFileExW (for
+            // example, it can reject a destination with an unusual sharing
+            // mode). Keep the atomic replace fallback available in either
+            // case so a transient existence check cannot turn publication
+            // into a credential-unavailable failure.
+            let replaced = replaced
+                || MoveFileExW(
                     source.as_ptr(),
                     target.as_ptr(),
                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-                ) != 0
-            };
+                ) != 0;
             if !replaced {
                 return Err(std::io::Error::last_os_error().into());
-            }
+            };
         }
     }
     let _ = staged.keep();
