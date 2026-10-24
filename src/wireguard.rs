@@ -44,6 +44,7 @@ pub mod tools;
 pub mod tunnel;
 mod validation;
 #[cfg(windows)]
+#[allow(dead_code)] // Broker entry point is linked only by the native broker binary.
 pub mod windows_broker;
 
 #[cfg(target_os = "macos")]
