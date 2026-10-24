@@ -89,7 +89,11 @@ pub(super) fn normalize(path: &Path) -> Result<PathBuf> {
 pub(super) fn open_root(path: &Path) -> Result<Dir> {
     let file = std::fs::OpenOptions::new()
         .read(true)
-        .access_mode(GENERIC_READ | READ_CONTROL)
+        // Test roots are narrowed in `prepare_test_root` immediately after
+        // opening.  Request WRITE_DAC on that original handle instead of
+        // reopening it: Windows runners can reject `ReOpenFile` for a
+        // temporary directory even when the current user owns the object.
+        .access_mode(GENERIC_READ | READ_CONTROL | TEST_ROOT_ACCESS)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
     reject_reparse(&file)?;
@@ -99,6 +103,11 @@ pub(super) fn open_root(path: &Path) -> Result<Dir> {
     );
     Ok(Dir::from_std_file(file))
 }
+
+#[cfg(test)]
+const TEST_ROOT_ACCESS: u32 = WRITE_DAC;
+#[cfg(not(test))]
+const TEST_ROOT_ACCESS: u32 = 0;
 
 fn reject_reparse(file: &File) -> Result<()> {
     ensure!(
@@ -439,23 +448,10 @@ pub(super) fn prepare_test_root(directory: &Dir) -> Result<()> {
             && present != 0,
         "invalid test descriptor"
     );
-    // Open test TempDir with WRITE_DAC separately on the same kernel object.
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::Storage::FileSystem::{ReOpenFile, FILE_FLAG_BACKUP_SEMANTICS};
-    let raw = unsafe {
-        ReOpenFile(
-            file.as_raw_handle(),
-            READ_CONTROL | WRITE_DAC,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            FILE_FLAG_BACKUP_SEMANTICS,
-        )
-    };
-    ensure!(raw != INVALID_HANDLE_VALUE, "cannot protect test root");
-    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
     ensure!(
         unsafe {
             SetSecurityInfo(
-                handle.as_raw_handle(),
+                file.as_raw_handle(),
                 SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                 null_mut(),

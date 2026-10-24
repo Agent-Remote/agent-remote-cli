@@ -1,6 +1,6 @@
 //! Local SCM observation only. No service mutation, shell, installer or elevation.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::AtomicBool;
 
@@ -204,6 +204,12 @@ fn command_paths(command: &str) -> Result<(PathBuf, PathBuf), TargetReason> {
     let parse = |text: &str| {
         let path = Path::new(text);
         if !path.is_absolute() {
+            return Err(TargetReason::ServiceInvalid);
+        }
+        if path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+        {
             return Err(TargetReason::ServiceInvalid);
         }
         publication::absolute(path).map_err(|_| TargetReason::ServiceInvalid)
