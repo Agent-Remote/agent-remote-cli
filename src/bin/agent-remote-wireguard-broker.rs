@@ -30,7 +30,7 @@ mod windows_service {
     use std::env;
     use std::fs::{self, OpenOptions};
     use std::io::Write;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -48,7 +48,7 @@ mod windows_service {
 
     use agent_remote_cli::config::AppPaths;
     use agent_remote_cli::wireguard::replay::ReplayJournal;
-    use agent_remote_cli::wireguard::target::TargetState;
+    use agent_remote_cli::wireguard::target::{TargetObservation, TargetReason, TargetState};
     use agent_remote_cli::wireguard::windows_broker::{
         now_unix_ms, BrokerWorkerHandshake, PipeWorker, WorkerAction, WorkerLifetime,
         WorkerResponse, MAX_WORKER_LIFETIME, PROTOCOL_VERSION,
@@ -274,23 +274,32 @@ mod windows_service {
         observation.identity.as_ref()
     }
 
-    fn observe_target(name: &str) -> TargetState {
+    fn observe_target(name: &str) -> TargetObservation {
         let Ok(paths) = AppPaths::new(None) else {
-            return TargetState::Unknown;
+            return unknown_target(name);
         };
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         else {
-            return TargetState::Unknown;
+            return unknown_target(name);
         };
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         runtime
             .block_on(agent_remote_cli::wireguard::target::observe(
                 &paths, name, cancel,
             ))
-            .map(|observation| observation.state)
-            .unwrap_or(TargetState::Unknown)
+            .unwrap_or_else(|_| unknown_target(name))
+    }
+
+    fn unknown_target(name: &str) -> TargetObservation {
+        TargetObservation {
+            logical_name: name.to_owned(),
+            state: TargetState::Unknown,
+            reason: Some(TargetReason::NativeQueryFailed),
+            status_state: "unavailable".into(),
+            identity: None,
+        }
     }
 
     fn operation_id(handshake: &BrokerWorkerHandshake, now: u64) -> String {

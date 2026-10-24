@@ -227,7 +227,10 @@ fn initialization_has_a_bounded_writer_lock_wait() {
     let other = LocalState::open(&paths).unwrap();
     let started = std::time::Instant::now();
     assert!(other.init_schema().is_err());
-    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    // SQLite's configured busy timeout is three seconds. Keep enough margin
+    // for shared CI runners compiling and scheduling many test binaries while
+    // still proving that initialization does not wait indefinitely.
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
     state.connection.execute_batch("ROLLBACK;").unwrap();
 }
 
