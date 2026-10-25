@@ -4,6 +4,8 @@ All notable changes to this repository are recorded here.
 
 ## v0.2.59 - 2026-10-25
 
+- fix(release): pin CLI to Node v0.2.50 (009b08c)
+- chore: release v0.2.59 (c590310)
 - fix: compile windows test fixture ownership (2534721)
 - test: normalize windows protected fixture ownership (857b365)
 - fix: compare Windows sync paths by filesystem identity (3432f8a)
