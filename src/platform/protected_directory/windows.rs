@@ -29,10 +29,12 @@ use windows_sys::Win32::Security::{
 };
 #[cfg(test)]
 use windows_sys::Win32::Security::{TokenUser, PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_USER};
+#[cfg(test)]
+use windows_sys::Win32::Storage::FileSystem::WRITE_OWNER;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_APPEND_DATA, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, SYNCHRONIZE, WRITE_DAC, WRITE_OWNER,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, SYNCHRONIZE, WRITE_DAC,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
@@ -450,7 +452,6 @@ pub(super) fn prepare_test_root(directory: &Dir) -> Result<()> {
                     null_mut(),
                     null_mut(),
                     null_mut(),
-                    null(),
                 )
             } == 0,
             "cannot assign test root owner"
