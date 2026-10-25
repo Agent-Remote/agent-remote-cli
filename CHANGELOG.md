@@ -2,6 +2,36 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.59 - 2026-10-25
+
+- fix: compile windows test fixture ownership (2534721)
+- test: normalize windows protected fixture ownership (857b365)
+- fix: compare Windows sync paths by filesystem identity (3432f8a)
+- fix: stabilize Windows CLI execution and sync targets (045db70)
+- test: normalize Windows WireGuard inspection path (13c5841)
+- fix: apply Windows directory ACLs on original handles (91cedbe)
+- test: fix Windows path and credential fixtures (7001a19)
+- fix: apply strict Windows private ACLs by handle (7c3845c)
+- test: synchronize process-group cancellation fixture (fe8e31e)
+- fix: broaden Windows private file replacement fallback (ba7b853)
+- fix: stabilize cross-platform CLI checks (e2e79e8)
+- ci: rerun quality checks (59c5ddf)
+- ci: optimize cross-platform test performance (12067b5)
+- fix: open Windows replacement handle with delete access (c27bfd5)
+- fix: fall back for Windows private file replacement (c8b4693)
+- fix: harden Windows private file publication (32f2281)
+- fix: stabilize Windows CLI quality checks (7b7fb41)
+- fix: stabilize Windows protected test roots (e732d4c)
+- fix: satisfy Windows broker clippy (ecf3a54)
+- fix: satisfy Windows service status clippy (d246e52)
+- fix: scope Windows broker dead-code allowance (12b1a27)
+- fix: return observed target state from Windows broker (70c2337)
+- fix: make CLI checks pass on Linux and Windows (c814dd0)
+- fix: stabilize windows broker build and lock timing test (50f7191)
+- fix: satisfy latest rust clippy checks (3898702)
+- fix: restore cross-platform wireguard CI and refresh dependencies (6c4c7e6)
+- feat: complete desktop control and remote lifecycle contracts (0e372ed)
+
 ## v0.2.58 - 2026-10-09
 
 - perf(ssh): reduce terminal input and scroll forwarding overhead (2dd60ef)
