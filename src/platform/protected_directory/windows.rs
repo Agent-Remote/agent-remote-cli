@@ -32,7 +32,7 @@ use windows_sys::Win32::Security::{TokenUser, PROTECTED_DACL_SECURITY_INFORMATIO
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_APPEND_DATA, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, SYNCHRONIZE, WRITE_DAC,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, SYNCHRONIZE, WRITE_DAC, WRITE_OWNER,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
@@ -105,7 +105,7 @@ pub(super) fn open_root(path: &Path) -> Result<Dir> {
 }
 
 #[cfg(test)]
-const TEST_ROOT_ACCESS: u32 = WRITE_DAC;
+const TEST_ROOT_ACCESS: u32 = WRITE_DAC | WRITE_OWNER;
 #[cfg(not(test))]
 const TEST_ROOT_ACCESS: u32 = 0;
 
@@ -433,10 +433,29 @@ pub(super) fn prepare_test_root(directory: &Dir) -> Result<()> {
         "cannot inspect test root owner"
     );
     let _allocation = Local(original);
-    ensure!(
-        unsafe { EqualSid(owner, user_sid(&user)) } != 0,
-        "test root must belong to current user"
-    );
+    // Hosted Windows runners may create TempDir roots with an inherited
+    // Administrators owner even though the test process runs as that user.
+    // Transfer ownership to the token user on the test-only handle before
+    // installing the private descriptor. Production roots never use this
+    // helper, so the production ownership checks remain unchanged.
+    let current = user_sid(&user);
+    if unsafe { EqualSid(owner, current) } == 0 {
+        ensure!(
+            unsafe {
+                SetSecurityInfo(
+                    file.as_raw_handle(),
+                    SE_FILE_OBJECT,
+                    OWNER_SECURITY_INFORMATION,
+                    current,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    null(),
+                )
+            } == 0,
+            "cannot assign test root owner"
+        );
+    }
     let authority = Authority::Test {
         anchor: PathBuf::new(),
         identity: String::new(),
