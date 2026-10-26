@@ -1,5 +1,6 @@
 // Tests for src/local_state.rs.
 
+use serde_json::json;
 use tempfile::tempdir;
 
 use crate::config::AppPaths;
@@ -30,6 +31,62 @@ fn local_initialization_is_idempotent_and_preserves_records() {
         super::StateInitialization::Applied
     );
     assert_eq!(state.get_kv("existing").unwrap().as_deref(), Some("keep"));
+}
+
+#[test]
+fn legacy_session_delete_record_defaults_reason_without_relaxing_unknown_fields() {
+    let dir = tempdir().unwrap();
+    let paths = AppPaths::from_home(dir.path().to_owned());
+    let state = LocalState::open(&paths).unwrap();
+    state.init_schema().unwrap();
+    let request_id = "00000000-0000-4000-8000-000000000020";
+    let record = json!({
+        "home": dir.path(),
+        "server_url": "https://example.test",
+        "user_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "request_id": request_id,
+        "tool_type": "claude",
+        "session_ids": ["00000000-0000-4000-8000-000000000021"],
+        "selection": {
+            "tool_type": "claude",
+            "statuses": ["failed", "interrupted", "stopped"],
+            "project_key": null
+        },
+        "selection_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "intent_fingerprint": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "phase": "prepared",
+        "delete_task_id": null,
+        "delete_task_record_id": null,
+        "task_status": null,
+        "deleted_session_ids": [],
+        "session_statuses": {},
+        "session_contexts": [],
+        "session_deleted": false,
+        "result_status": null,
+        "last_observation": null
+    });
+    state
+        .set_kv(
+            &format!("session_delete_request:{request_id}"),
+            &record.to_string(),
+        )
+        .unwrap();
+
+    let records = LocalState::session_delete_records(&paths).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].reason, "user_requested");
+
+    let mut unknown = record;
+    let unknown_request_id = "00000000-0000-4000-8000-000000000022";
+    unknown["request_id"] = json!(unknown_request_id);
+    unknown["unexpected"] = json!(true);
+    state
+        .set_kv(
+            &format!("session_delete_request:{unknown_request_id}"),
+            &unknown.to_string(),
+        )
+        .unwrap();
+    assert!(LocalState::session_delete_records(&paths).is_err());
 }
 
 #[test]

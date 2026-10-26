@@ -57,6 +57,14 @@ fn freeze_selection_rejects_running_rows_and_ambiguous_prefixes() {
 }
 
 #[test]
+fn freeze_selection_accepts_the_short_id_shown_by_fclaude_list() {
+    let rows = vec![session("d338e86e-0398-4d2f-8a7c-000000000001", "stopped")];
+
+    let selected = freeze_selection(rows, "claude", Some("d338e86e0398")).unwrap();
+    assert_eq!(selected[0].id, "d338e86e-0398-4d2f-8a7c-000000000001");
+}
+
+#[test]
 fn digest_fixture_includes_schema_and_explicit_null_project_key() {
     let selection = SessionDeleteSelection {
         tool_type: "claude".into(),
@@ -75,4 +83,27 @@ fn digest_fixture_includes_schema_and_explicit_null_project_key() {
         intent_fingerprint("claude", &ids, &selection, "user_requested"),
         "sha256:4f2a56adbe032af6b0a43bae4279a1fdbb2f2868966c98b21bcafa2886fcdb71"
     );
+}
+
+#[test]
+fn receipt_decodes_server_reason_field() {
+    let receipt: SessionDeleteReceipt = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "request_id": "00000000-0000-4000-8000-000000000020",
+        "tool_type": "claude",
+        "session_ids": ["00000000-0000-4000-8000-000000000021"],
+        "selection": {
+            "tool_type": "claude",
+            "statuses": ["failed", "interrupted", "stopped"],
+            "project_key": null
+        },
+        "selection_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "intent_fingerprint": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "reason": "user_requested",
+        "phase": "deleted",
+        "session_deleted": true
+    }))
+    .expect("Server deletion receipt should decode");
+
+    assert_eq!(receipt.reason, "user_requested");
 }

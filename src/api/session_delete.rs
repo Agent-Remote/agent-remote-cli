@@ -58,6 +58,8 @@ pub struct SessionDeleteReceipt {
     pub selection: SessionDeleteSelection,
     pub selection_digest: String,
     pub intent_fingerprint: String,
+    /// Deletion reason echoed by the Server's immutable receipt.
+    pub reason: String,
     #[serde(default)]
     pub delete_task_id: Option<String>,
     #[serde(default)]
@@ -170,6 +172,7 @@ fn validate_receipt(
         || receipt.selection != request.selection
         || receipt.selection_digest != request.selection_digest
         || receipt.intent_fingerprint != request.intent_fingerprint
+        || receipt.reason != request.reason
         || receipt
             .deleted_session_ids
             .iter()
@@ -205,6 +208,7 @@ fn valid_receipt_shape(receipt: &SessionDeleteReceipt) -> bool {
         })
         && valid_digest(&receipt.selection_digest)
         && valid_digest(&receipt.intent_fingerprint)
+        && valid_reason(&receipt.reason)
         && receipt
             .deleted_session_ids
             .iter()
@@ -249,6 +253,10 @@ fn valid_digest(value: &str) -> bool {
     value.len() == 71
         && value.starts_with("sha256:")
         && value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_reason(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 64 && !value.chars().any(char::is_control)
 }
 
 fn invalid_request() -> ApiError {

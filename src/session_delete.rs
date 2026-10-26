@@ -8,6 +8,7 @@
 use crate::api::session_delete::CallerKeySessionDeleteRequest;
 use crate::api::{ApiClient, SessionData};
 use crate::config::AppPaths;
+use crate::identifiers::IdMatch;
 use crate::local_state::{LocalState, SessionDeleteRecord};
 use crate::terminal::{self, Details};
 use anyhow::{bail, Result};
@@ -306,6 +307,7 @@ pub fn receipt_from_record(record: &SessionDeleteRecord) -> SessionDeleteReceipt
         selection: record.selection.clone(),
         selection_digest: record.selection_digest.clone(),
         intent_fingerprint: record.intent_fingerprint.clone(),
+        reason: record.reason.clone(),
         delete_task_id: record.delete_task_id.clone(),
         delete_task_record_id: record.delete_task_record_id.clone(),
         task_status: record.task_status.clone(),
@@ -370,6 +372,7 @@ fn validate_record_binding(
         || receipt.selection != record.selection
         || receipt.selection_digest != record.selection_digest
         || receipt.intent_fingerprint != record.intent_fingerprint
+        || receipt.reason != record.reason
         || receipt
             .deleted_session_ids
             .iter()
@@ -417,14 +420,10 @@ fn resolve_id<'a, I>(reference: &str, ids: I) -> Result<String>
 where
     I: IntoIterator<Item = &'a str>,
 {
-    let matches: Vec<&str> = ids
-        .into_iter()
-        .filter(|id| id.starts_with(reference))
-        .collect();
-    match matches.as_slice() {
-        [id] => Ok((*id).to_string()),
-        [] => bail!("no Claude session matches `{reference}`"),
-        _ => bail!("Claude session reference `{reference}` is ambiguous"),
+    match crate::identifiers::match_id(reference, "Claude session", ids.into_iter())? {
+        IdMatch::Unique(id) => Ok(id.to_string()),
+        IdMatch::NotFound => bail!("no Claude session matches `{reference}`"),
+        IdMatch::Ambiguous => bail!("Claude session reference `{reference}` is ambiguous"),
     }
 }
 

@@ -5,7 +5,8 @@
 //! they must never parse that output or infer local installation from the
 //! control-plane device list.
 
-use std::path::{Component, Path};
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -115,20 +116,79 @@ async fn status(input: Context) -> Result<Value, Failure> {
 }
 
 fn local_projection(paths: &AppPaths) -> Value {
-    let managed_binary = paths.home().join("bin/ego-browser-device");
-    let managed_installer = paths.home().join("bin/ego-browser-install");
-    let store = paths.home().join(".config/agent-remote-ego-browser");
-    let legacy_store = paths.home().join(".config/agent-remote/ego-browser-device");
-    let installed = [managed_binary, managed_installer].iter().any(|path| {
-        std::fs::symlink_metadata(path)
-            .map(|m| m.is_file() && !m.file_type().is_symlink())
-            .unwrap_or(false)
-    });
+    let installed = local_bridge_installation_exists(paths);
     json!({
         "installation": if installed { "installed" } else { "missing" },
-        "store": if store.is_dir() { "present" } else if legacy_store.is_dir() { "legacy" } else { "missing" },
+        "store": local_device_store_status(paths),
         "admission": "unknown",
     })
+}
+
+fn local_bridge_installation_exists(paths: &AppPaths) -> bool {
+    let mut candidates = vec![
+        paths.home().join("bin/ego-browser-device"),
+        paths.home().join("bin/ego-browser-install"),
+    ];
+    let is_default_home = crate::platform::default_app_home()
+        .ok()
+        .is_some_and(|default| default == paths.home());
+    if is_default_home {
+        if let Some(path) = std::env::var_os("AGENT_REMOTE_EGO_BROWSER_DEVICE") {
+            candidates.push(PathBuf::from(path));
+        }
+        if let Some(root) = std::env::var_os("EGO_BROWSER_INSTALL_ROOT") {
+            candidates.push(PathBuf::from(root).join("current/bin/ego-browser-device"));
+        }
+        if let Some(home) = crate::platform::user_home_dir() {
+            candidates.push(home.join(
+                "Library/Application Support/Agent Remote Ego Browser/current/bin/ego-browser-device",
+            ));
+        }
+    }
+    candidates
+        .iter()
+        .any(|path| private_regular_file_exists(path))
+}
+
+fn local_device_store_status(paths: &AppPaths) -> &'static str {
+    let is_default_home = crate::platform::default_app_home()
+        .ok()
+        .is_some_and(|default| default == paths.home());
+    let canonical = std::env::var_os("AGENT_REMOTE_EGO_BROWSER_DEVICE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            is_default_home
+                .then(|| {
+                    crate::platform::user_home_dir()
+                        .map(|home| home.join(".config/agent-remote-ego-browser"))
+                })
+                .flatten()
+        })
+        .unwrap_or_else(|| paths.home().join("ego-browser-device"));
+    if private_directory_exists(&canonical) {
+        return "present";
+    }
+    if is_default_home {
+        if let Some(home) = crate::platform::user_home_dir() {
+            let legacy = home.join(".config/agent-remote/ego-browser-device");
+            if private_directory_exists(&legacy) {
+                return "legacy";
+            }
+        }
+    }
+    "missing"
+}
+
+fn private_regular_file_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+fn private_directory_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        .unwrap_or(false)
 }
 
 fn policy_projection(policy: &EgoBrowserPolicyData) -> Value {
@@ -220,4 +280,23 @@ fn valid_home(path: &Path) -> bool {
         && !path
             .components()
             .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn local_projection_uses_the_selected_custom_home() {
+        let temp = tempdir().unwrap();
+        let paths = AppPaths::from_home(temp.path().join("agent-remote"));
+        std::fs::create_dir_all(paths.home().join("bin")).unwrap();
+        std::fs::write(paths.home().join("bin/ego-browser-device"), b"device").unwrap();
+        std::fs::create_dir_all(paths.home().join("ego-browser-device")).unwrap();
+        let projection = local_projection(&paths);
+        assert_eq!(projection["installation"], "installed");
+        assert_eq!(projection["store"], "present");
+    }
 }

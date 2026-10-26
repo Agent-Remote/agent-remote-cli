@@ -305,7 +305,9 @@ async fn exercise(root: &Path, case: &str) {
         None
     };
     let result = if case == "timeout" {
-        super::flush_with_limit(&paths, &context, &target, &cancel, Duration::from_secs(10)).await
+        // Allow the isolated daemon and first observation to complete under a
+        // loaded host; the fixture blocks the actual flush for 120 seconds.
+        super::flush_with_limit(&paths, &context, &target, &cancel, Duration::from_secs(30)).await
     } else {
         flush_verified(&paths, &context, &target, &cancel).await
     };

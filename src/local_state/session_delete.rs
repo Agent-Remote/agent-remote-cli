@@ -31,6 +31,7 @@ pub struct SessionDeleteRecord {
     pub selection: SessionDeleteSelection,
     pub selection_digest: String,
     pub intent_fingerprint: String,
+    #[serde(default = "default_reason")]
     pub reason: String,
     pub phase: String,
     pub delete_task_id: Option<String>,
@@ -285,4 +286,8 @@ fn valid_uuid(value: &str) -> bool {
 
 fn valid_context_text(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
+}
+
+fn default_reason() -> String {
+    "user_requested".to_owned()
 }

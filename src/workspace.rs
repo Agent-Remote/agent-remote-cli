@@ -126,7 +126,13 @@ fn collect_git_locks(root: &Path, current: &Path, output: &mut Vec<PathBuf>) -> 
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            if path == root.join("hooks") || path == root.join("worktrees") {
+            // Cursor keeps its Crepe index/build locks under .git/cursor.
+            // These are editor metadata locks, not Git transaction locks, and
+            // must not prevent a workspace from starting a remote session.
+            if path == root.join("hooks")
+                || path == root.join("worktrees")
+                || path == root.join("cursor")
+            {
                 continue;
             }
             collect_git_locks(root, &path, output)?;
