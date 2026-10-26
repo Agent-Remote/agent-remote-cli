@@ -2,6 +2,10 @@
 
 All notable changes to this repository are recorded here.
 
+## v0.2.60 - 2026-10-26
+
+- fix: align desktop control and session contracts (c628c4e)
+
 ## v0.2.59 - 2026-10-25
 
 - fix(release): pin CLI to Node v0.2.50 (009b08c)
